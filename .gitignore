@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# 环境与 IDE
+.env
+.zcode/
+.idea/
+.vscode/
+
+# 运行态数据目录（外置，由 PORTAL_DATA_ROOT 指向；防御性忽略项目内重建）
+/data/
+/uploads/
+/logs/
+
+# primary_market_pricing 运行态产物
+primary_market_pricing/cache.db
+primary_market_pricing/cache.db-shm
+primary_market_pricing/cache.db-wal
+primary_market_pricing/cache.db.backup_*
+primary_market_pricing/发行人平均偏离幅度底稿_*.xlsx
+primary_market_pricing/reference_bond_selection_logic.csv
+
+# 参考资料 xlsx（不纳入版本控制；映射表随代码发布并纳入版本控制）
+primary_market_pricing/大智慧财汇元数据表结构 (1).xlsx
+
+# 杂项
+*.log
+*.tmp

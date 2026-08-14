@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>机构行为 × 收益率利差监测</title>
+<script src="https://cdn.jsdelivr.net/npm/echarts@6.0.0/dist/echarts.min.js"></script>
+<script>window.echarts || document.write('<script src="https://unpkg.com/echarts@6.0.0/dist/echarts.min.js"><\/script>')</script>
+<script>window.echarts || document.write('<script src="https://cdnjs.cloudflare.com/ajax/libs/echarts/5.5.0/echarts.min.js"><\/script>')</script>
+<style>
+:root{
+  --bg:#f5f7fa; --card:#fff; --border:#e4e7ed; --text:#303133; --muted:#909399;
+  --accent:#409eff; --accent-hover:#66b1ff; --soft:#ecf5ff; --soft-border:#b3d8ff;
+  --buy:#f56c6c; --sell:#67c23a; --grid:#ebeef5;
+}
+*{box-sizing:border-box}
+body{margin:0;font-family:"PingFang SC","Microsoft YaHei",-apple-system,sans-serif;background:var(--bg);color:var(--text);font-size:14px}
+.page{max-width:1560px;margin:0 auto;padding:18px 20px 30px}
+
+/* 顶栏 */
+.header{display:flex;align-items:center;gap:14px;margin-bottom:14px;flex-wrap:wrap}
+.header h1{margin:0;font-size:20px;font-weight:600}
+.header .date-badge{padding:4px 12px;background:var(--soft);color:var(--accent);border:1px solid var(--soft-border);border-radius:14px;font-size:12px}
+.header .spacer{flex:1}
+.btn{padding:7px 16px;background:var(--accent);color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:13px}
+.btn:hover{background:var(--accent-hover)}
+.btn.ghost{background:#fff;color:var(--text);border:1px solid var(--border)}
+.btn.ghost:hover{color:var(--accent);border-color:var(--accent)}
+.btn:disabled{opacity:.5;cursor:default}
+
+/* 筛选卡 */
+.filter-card{background:var(--card);border:1px solid var(--border);border-radius:6px;padding:14px 16px;margin-bottom:14px}
+.filter-row{display:flex;align-items:flex-start;gap:10px;padding:7px 0;border-bottom:1px dashed #f0f2f5}
+.filter-row:last-child{border-bottom:none}
+.dim-label{flex-shrink:0;width:52px;padding-top:5px;font-size:13px;color:var(--muted);font-weight:600}
+.dim-body{flex:1;display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.group-tag{flex-shrink:0;padding:4px 10px;font-size:12px;color:#606266;background:#f4f6fb;border:1px solid #e2e8f5;border-radius:4px;cursor:pointer;user-select:none}
+.group-tag:hover{color:var(--accent);border-color:var(--accent)}
+.group-tag.on{background:var(--soft);color:var(--accent);border-color:var(--soft-border);font-weight:600}
+.chip{padding:4px 12px;font-size:12px;border:1px solid var(--border);background:#fff;color:var(--text);border-radius:14px;cursor:pointer;user-select:none;transition:all .12s}
+.chip:hover{border-color:var(--accent);color:var(--accent)}
+.chip.on{background:var(--accent);border-color:var(--accent);color:#fff}
+.chip-sep{width:1px;height:18px;background:var(--border);margin:0 4px}
+.all-hint{font-size:12px;color:var(--muted);padding:4px 2px}
+
+/* 日期 + 摘要行 */
+.date-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding-top:10px}
+.quick-btn{padding:5px 12px;font-size:12px;border:1px solid var(--border);background:#fff;border-radius:4px;cursor:pointer;color:var(--text)}
+.quick-btn:hover{border-color:var(--accent);color:var(--accent)}
+.quick-btn.on{background:var(--accent);border-color:var(--accent);color:#fff}
+.date-row input[type=date]{padding:5px 8px;border:1px solid var(--border);border-radius:4px;font-size:13px;color:var(--text)}
+.summary-row{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:10px;padding-top:10px;border-top:1px solid #f0f2f5}
+.summary-row .s-label{font-size:12px;color:var(--muted)}
+.s-chip{display:inline-flex;align-items:center;gap:5px;padding:3px 8px;background:var(--soft);color:var(--accent);border-radius:4px;font-size:12px}
+.s-chip .x{cursor:pointer;opacity:.75;font-style:normal}
+.s-chip .x:hover{opacity:1;font-weight:700}
+.clear-all{font-size:12px;color:var(--muted);cursor:pointer;margin-left:auto}
+.clear-all:hover{color:var(--buy)}
+
+/* Tab */
+.tabs{display:flex;border-bottom:1px solid var(--border);margin-bottom:14px}
+.tabs .tab{padding:10px 22px;cursor:pointer;color:var(--muted);border-bottom:2px solid transparent;margin-bottom:-1px;font-size:14px}
+.tabs .tab.active{color:var(--accent);font-weight:600;border-bottom-color:var(--accent)}
+
+/* 卡片与图 */
+.card{background:var(--card);border:1px solid var(--border);border-radius:6px;padding:14px 16px;margin-bottom:14px}
+.card-title{font-size:14px;font-weight:600;margin-bottom:10px}
+.card-title .sub{font-weight:400;color:var(--muted);font-size:12px;margin-left:8px}
+.toolbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px}
+.seg{display:inline-flex;border:1px solid var(--border);border-radius:6px;overflow:hidden}
+.seg button{border:none;background:#fff;color:var(--muted);padding:6px 13px;font-size:12px;cursor:pointer}
+.seg button.active{background:var(--accent);color:#fff}
+.seg-label{font-size:12px;color:var(--muted)}
+.toolbar .right{margin-left:auto;display:inline-flex;gap:8px;align-items:center}
+select.sel{padding:5px 8px;border:1px solid var(--border);border-radius:4px;font-size:12px;color:var(--text);background:#fff}
+#mainChart{width:100%;height:460px}
+#sideChart{width:100%;height:460px}
+.charts-grid{display:grid;grid-template-columns:1fr 400px;gap:14px}
+.side-hint{font-size:12px;color:var(--muted);margin-bottom:6px}
+
+/* KPI */
+.kpi-row{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:14px}
+.kpi{background:var(--card);border:1px solid var(--border);border-radius:6px;padding:12px 14px}
+.kpi .k-label{font-size:12px;color:var(--muted);margin-bottom:6px}
+.kpi .k-value{font-size:20px;font-weight:700;font-variant-numeric:tabular-nums}
+.kpi .k-sub{font-size:12px;color:var(--muted);margin-top:4px}
+.pos{color:var(--buy)} .neg{color:var(--sell)} .zero{color:var(--muted)}
+
+/* 季节性 */
+.seas-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+#seasFlowChart,#seasYtdChart{width:100%;height:380px}
+
+/* 主力矩阵 */
+.dom-wrap{overflow:auto;border:1px solid var(--border);border-radius:6px;max-height:520px}
+table.dom{border-collapse:separate;border-spacing:0;font-size:12px;min-width:1080px;width:100%}
+table.dom th,table.dom td{border-right:1px solid var(--border);border-bottom:1px solid var(--border);padding:7px 9px;text-align:center;vertical-align:top}
+table.dom thead th{position:sticky;top:0;background:#123b80;color:#fff;font-weight:600;z-index:2}
+table.dom tbody th{position:sticky;left:0;background:#f4f7fb;font-weight:600;white-space:nowrap;z-index:1;text-align:left}
+table.dom tr td:last-child,table.dom tr th:last-child{border-right:none}
+.dom-line{line-height:1.6;white-space:nowrap}
+.dom-inst{color:#1f2d3d}
+.dom-ratio{border-radius:8px;padding:0 6px;margin-left:4px;font-size:11px}
+.dom-empty{color:#c0c4cc}
+
+/* 叠加曲线 */
+#ovlTenorChips{display:inline-flex;gap:4px;flex-wrap:wrap}
+#ovlTenorChips .t-chip{padding:3px 9px;font-size:11px;border:1px solid var(--border);background:#fff;border-radius:12px;cursor:pointer;user-select:none;color:var(--text)}
+#ovlTenorChips .t-chip:hover{border-color:var(--accent);color:var(--accent)}
+#ovlTenorChips .t-chip.on{background:var(--accent);border-color:var(--accent);color:#fff}
+#ovlTenorChips .t-chip.off{opacity:.35;cursor:not-allowed}
+.ovl-snapshot{font-size:12px;color:var(--muted);margin-bottom:6px;line-height:1.7}
+.ovl-snapshot b{color:var(--text)}
+.ovl-snapshot .up{color:var(--buy)} .ovl-snapshot .down{color:var(--sell)}
+.ovl-proxy{color:#e6a23c}
+#overlayChart{width:100%;height:250px;margin-top:14px;border-top:1px solid var(--border);padding-top:6px}
+#mainChart.split-mode{height:330px}
+#ovlToolbar{border-top:1px dashed #f0f2f5;padding-top:10px;margin-top:2px}
+.color-dot{width:18px;height:18px;padding:0;border:1px solid var(--border);border-radius:3px;background:none;cursor:pointer;vertical-align:middle}
+.footer{text-align:center;color:#c0c4cc;font-size:11px;margin-top:26px;letter-spacing:1px}
+#seasYieldChart{width:100%;height:320px}
+
+.status{font-size:12px;color:var(--muted);margin-top:4px}
+.err-box{padding:14px;background:#fef0f0;border:1px solid #fde2e2;color:var(--buy);border-radius:6px;font-size:13px;margin-bottom:14px;display:none}
+.loading-mask{position:relative}
+.loading-mask::after{content:"加载中…";position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,.65);color:var(--muted);font-size:13px;z-index:5}
+.hidden{display:none}
+
+@media (max-width:1100px){
+  .charts-grid,.seas-grid{grid-template-columns:1fr}
+  .kpi-row{grid-template-columns:repeat(2,1fr)}
+  #mainChart,#sideChart{height:340px}
+}
+
+/* 单日机构行为 */
+#dailyMatrixChart,#dailySankeyChart{width:100%;height:520px}
+.daily-kpi-row{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:14px}
+.daily-nav{display:inline-flex;align-items:center;gap:6px}
+.daily-nav .quick-btn{padding:5px 10px}
+table.daily-tbl{border-collapse:separate;border-spacing:0;font-size:12px;min-width:880px;width:100%}
+table.daily-tbl th,table.daily-tbl td{border-right:1px solid var(--border);border-bottom:1px solid var(--border);padding:6px 8px;text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
+table.daily-tbl thead th{position:sticky;top:0;background:#123b80;color:#fff;font-weight:600;z-index:2;text-align:center}
+table.daily-tbl tbody th{position:sticky;left:0;background:#f4f7fb;font-weight:600;text-align:left;z-index:1}
+table.daily-tbl tfoot th{background:#f4f7fb;font-weight:700}
+table.daily-tbl tfoot td{background:#f4f7fb;font-weight:700}
+table.daily-tbl tr td:last-child,table.daily-tbl tr th:last-child{border-right:none}
+.dl-empty{color:#c0c4cc}
+/* 券种展开：可点击表头 */
+table.daily-tbl thead th.dl-toggle{cursor:pointer;user-select:none}
+table.daily-tbl thead th.dl-toggle:hover{background:#0c2e66}
+table.daily-tbl thead th.dl-toggle.expanded::before{content:"▼ ";font-size:9px;color:#9ec5ff}
+table.daily-tbl thead th.dl-toggle.collapsed::before{content:"▶ ";font-size:9px;color:#9ec5ff}
+/* 期限明细子行 */
+table.daily-tbl tr.dl-tenor-row td{background:#fafbfc;color:#606266;font-size:11px}
+table.daily-tbl tr.dl-tenor-row td.dl-tenor-label{font-weight:600;color:#909399;text-align:left}
+table.daily-tbl tr.dl-tenor-row + tr.dl-tenor-row td{border-top:1px dashed #f0f2f5}
+@media (max-width:1100px){.daily-kpi-row{grid-template-columns:repeat(2,1fr)}#dailyMatrixChart,#dailySankeyChart{height:380px}}
+</style>
+</head>
+<body>
+<div class="page">
+
+  <div class="header">
+    <h1>机构行为 × 收益率利差监测</h1>
+    <span class="date-badge" id="latestDateBadge">数据日期 —</span>
+    <div class="spacer"></div>
+    <button class="btn ghost" id="refreshBtn">刷新当前页</button>
+  </div>
+
+  <div class="err-box" id="errBox"></div>
+
+  <!-- 全局筛选 -->
+  <div class="filter-card">
+    <div class="filter-row">
+      <div class="dim-label">机构</div>
+      <div class="dim-body" id="instFilter"></div>
+    </div>
+    <div class="filter-row">
+      <div class="dim-label">券种</div>
+      <div class="dim-body" id="bondFilter"></div>
+    </div>
+    <div class="filter-row">
+      <div class="dim-label">期限</div>
+      <div class="dim-body" id="tenorFilter"></div>
+    </div>
+    <div class="date-row">
+      <span class="seg-label">区间</span>
+      <button class="quick-btn" data-range="1M">近1月</button>
+      <button class="quick-btn" data-range="3M">近3月</button>
+      <button class="quick-btn" data-range="6M">近6月</button>
+      <button class="quick-btn on" data-range="1Y">近1年</button>
+      <button class="quick-btn" data-range="YTD">今年</button>
+      <button class="quick-btn" data-range="ALL">全部</button>
+      <input type="date" id="startDate"><span style="color:var(--muted)">至</span><input type="date" id="endDate">
+      <button class="btn ghost" id="applyDateBtn" style="padding:6px 14px">应用</button>
+    </div>
+    <div class="summary-row" id="summaryRow">
+      <span class="s-label">当前筛选</span>
+      <span id="summaryChips" style="display:inline-flex;gap:6px;flex-wrap:wrap"></span>
+      <span class="clear-all" id="clearAllBtn">清空全部条件</span>
+    </div>
+  </div>
+
+  <!-- Tab -->
+  <div class="tabs">
+    <span class="tab active" data-tab="ts">时序总览</span>
+    <span class="tab" data-tab="seas">季节性分析</span>
+    <span class="tab" data-tab="dom">主力机构矩阵</span>
+    <span class="tab" data-tab="daily">单日机构行为</span>
+  </div>
+
+  <!-- Tab1 时序总览 -->
+  <div id="tab-ts">
+    <div class="kpi-row" id="kpiRow">
+      <div class="kpi"><div class="k-label" id="kpi1Label">最新日合计净买入</div><div class="k-value" id="kpi1">—</div><div class="k-sub" id="kpi1Sub"></div></div>
+      <div class="kpi"><div class="k-label">最大净买入机构</div><div class="k-value pos" id="kpi2">—</div><div class="k-sub" id="kpi2Sub"></div></div>
+      <div class="kpi"><div class="k-label">最大净卖出机构</div><div class="k-value neg" id="kpi3">—</div><div class="k-sub" id="kpi3Sub"></div></div>
+      <div class="kpi"><div class="k-label">近5日累计 / 近20日累计</div><div class="k-value" id="kpi4" style="font-size:17px">—</div><div class="k-sub" id="kpi4Sub"></div></div>
+      <div class="kpi"><div class="k-label">配置盘−交易盘分歧(近5日)</div><div class="k-value" id="kpi5">—</div><div class="k-sub" id="kpi5Sub"></div></div>
+    </div>
+
+    <div class="charts-grid">
+      <div class="card" style="margin-bottom:0">
+        <div class="toolbar">
+          <span class="seg-label">维度</span>
+          <span class="seg" id="dimSeg">
+            <button data-value="institution" class="active">按机构</button><button data-value="bond_type">按券种</button><button data-value="tenor">按期限</button>
+          </span>
+          <span class="seg hidden" id="groupSeg">
+            <button data-value="detail" class="active">机构明细</button><button data-value="alloc_trade">配置盘/交易盘</button>
+          </span>
+          <span class="seg" id="granSeg">
+            <button data-value="day" class="active">日</button><button data-value="week">周</button><button data-value="month">月</button><button data-value="quarter">季</button><button data-value="year">年</button>
+          </span>
+          <span class="seg" id="typeSeg">
+            <button data-value="bar" class="active">柱状</button><button data-value="line">折线</button>
+          </span>
+          <span class="right">
+            <span class="seg-label">极值处理</span>
+            <select class="sel" id="extremeSel">
+              <option value="clip" selected>截断标记</option>
+              <option value="winsor">缩尾(P1-P99)</option>
+              <option value="raw">原始</option>
+            </select>
+            <button class="btn ghost" id="dlMainBtn" style="padding:6px 12px">下载CSV</button>
+          </span>
+        </div>
+        <div class="toolbar" id="ovlToolbar">
+          <span class="seg-label">叠加曲线</span>
+          <span class="seg" id="ovlModeSeg">
+            <button data-value="none">无</button><button data-value="yield" class="active">收益率</button><button data-value="spread">利差</button><button data-value="both">收益率+利差</button>
+          </span>
+          <span class="seg-label">品种</span>
+          <select class="sel" id="ovlCurveSel"></select>
+          <span class="seg-label">期限</span>
+          <span id="ovlTenorChips"></span>
+          <label style="font-size:12px;color:var(--muted);display:inline-flex;align-items:center;gap:4px" title="开启后，品种/期限自动跟随上方券种/期限筛选">
+            <input type="checkbox" id="ovlFollowChk" checked> 跟随筛选
+          </label>
+          <label style="font-size:12px;color:var(--muted);display:inline-flex;align-items:center;gap:4px" title="利差 MA30 ± 2 倍标准差区间（两倍标准差口径）">
+            <input type="checkbox" id="ovlBandChk"> ±2σ区间
+          </label>
+          <label style="font-size:12px;color:var(--muted);display:inline-flex;align-items:center;gap:3px" title="收益率曲线颜色">
+            <input type="color" id="ovlYieldColor" value="#1565c0" class="color-dot">收益率色
+          </label>
+          <label style="font-size:12px;color:var(--muted);display:inline-flex;align-items:center;gap:3px" title="利差曲线颜色">
+            <input type="color" id="ovlSpreadColor" value="#8e24aa" class="color-dot">利差色
+          </label>
+          <span class="seg" id="ovlLayoutSeg">
+            <button data-value="overlay" class="active">叠加</button><button data-value="split">分屏</button>
+          </span>
+        </div>
+        <div class="side-hint" id="mainHint">堆叠柱为各主体净买入，折线为合计；点击柱子可在右侧查看当日明细</div>
+        <div class="ovl-snapshot" id="ovlSnapshot"></div>
+        <div id="mainChart"></div>
+        <div id="overlayChart" class="hidden"></div>
+        <div class="status" id="mainStatus"></div>
+      </div>
+      <div class="card" style="margin-bottom:0">
+        <div class="toolbar" style="margin-bottom:4px">
+          <span class="seg" id="sideModeSeg">
+            <button data-value="single" class="active">当期净买入</button><button data-value="cum">区间累计</button>
+          </span>
+          <span class="right"><button class="btn ghost" id="dlSideBtn" style="padding:6px 12px">下载CSV</button></span>
+        </div>
+        <div class="card-title" id="sideTitle" style="margin-bottom:2px">—</div>
+        <div class="side-hint">按数值排序，红=净买入，绿=净卖出</div>
+        <div id="sideChart"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Tab2 季节性 -->
+  <div id="tab-seas" class="hidden">
+    <div class="card">
+      <div class="toolbar">
+        <span class="seg-label">聚合</span>
+        <span class="seg" id="seasGranSeg">
+          <button data-value="day">日</button><button data-value="week" class="active">周</button><button data-value="month">月</button>
+        </span>
+        <span class="seg-label">平滑</span>
+        <select class="sel" id="seasMaSel"><option value="none">原始值</option><option value="5">MA5</option><option value="10">MA10</option></select>
+        <span class="seg-label">年份</span>
+        <select class="sel" id="seasYearSel"><option value="5" selected>近5年</option><option value="all">全部年份</option></select>
+        <label style="font-size:12px;color:var(--muted);display:inline-flex;align-items:center;gap:4px">
+          <input type="checkbox" id="seasWinsorChk" checked> 极值缩尾
+        </label>
+        <label style="font-size:12px;color:var(--muted);display:inline-flex;align-items:center;gap:4px" title="在下方展示收益率曲线的年内季节性对比">
+          <input type="checkbox" id="seasYieldChk" checked> 收益率季节性
+        </label>
+        <span class="right"><button class="btn ghost" id="seasRefreshBtn" style="padding:6px 12px">刷新</button></span>
+      </div>
+      <div class="seas-grid">
+        <div>
+          <div class="card-title">净买入季节性对比<span class="sub" id="seasFlowSub"></span></div>
+          <div id="seasFlowChart"></div>
+        </div>
+        <div>
+          <div class="card-title">年内累计净买入对比<span class="sub" id="seasYtdSub"></span></div>
+          <div id="seasYtdChart"></div>
+        </div>
+      </div>
+      <div class="status" id="seasStatus"></div>
+    </div>
+    <div class="card" id="seasYieldCard" style="margin-top:0">
+      <div class="toolbar" style="margin-bottom:4px">
+        <span class="card-title" style="margin-bottom:0">收益率季节性对比<span class="sub" id="seasYieldSub"></span></span>
+        <span class="seg-label">类型</span>
+        <span class="seg" id="syTypeSeg">
+          <button data-value="yield" class="active">收益率</button><button data-value="spread">利差</button>
+        </span>
+        <span class="seg-label">品种</span>
+        <select class="sel" id="syCurveSel"></select>
+        <span class="seg-label">期限</span>
+        <select class="sel" id="syTenorSel"></select>
+        <label style="font-size:12px;color:var(--muted);display:inline-flex;align-items:center;gap:4px" title="勾选后跟随主图「叠加曲线」的品种/期限（含跟随筛选联动）">
+          <input type="checkbox" id="syFollowChk" checked> 跟随主图
+        </label>
+        <label style="font-size:12px;color:var(--muted);display:inline-flex;align-items:center;gap:4px" title="各年曲线减去自身年均值，仅保留季节性波动形态，便于对比年内节奏">
+          <input type="checkbox" id="syAnomalyChk"> 去均值
+        </label>
+        <button class="btn ghost" id="syAddBtn" style="padding:6px 12px" title="将当前选中序列加入下方对比区（小图矩阵，最多6条）">+ 加入对比</button>
+        <span class="right"><button class="btn ghost" id="seasYieldRefreshBtn" style="padding:6px 12px">刷新</button></span>
+      </div>
+      <div id="syCompareChips" style="display:inline-flex;gap:6px;flex-wrap:wrap;align-items:center"></div>
+      <div class="side-hint">取消「跟随主图」可自选类型（收益率/利差）、品种与期限；「加入对比」以小图矩阵并列展示；红实线=当年；聚合/平滑/年份与本页上方设置一致</div>
+      <div id="seasYieldChart"></div>
+      <div id="syCompareGrid" class="hidden" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:8px"></div>
+      <div class="status" id="seasYieldStatus"></div>
+    </div>
+  </div>
+
+  <!-- Tab3 主力机构 -->
+  <div id="tab-dom" class="hidden">
+    <div class="card">
+      <div class="toolbar">
+        <span class="seg-label">统计区间</span>
+        <input type="date" id="domStart" class="sel" style="padding:5px 8px"><span style="color:var(--muted)">至</span>
+        <input type="date" id="domEnd" class="sel" style="padding:5px 8px">
+        <span class="seg-label">Top</span>
+        <select class="sel" id="domTopN"><option value="1">Top1</option><option value="2">Top2</option><option value="3" selected>Top3</option></select>
+        <span class="right"><button class="btn ghost" id="domRefreshBtn" style="padding:6px 12px">刷新</button></span>
+      </div>
+      <div class="card-title">净买入主力机构<span class="sub">单元格按最大占比着色，颜色越深集中度越高</span></div>
+      <div class="dom-wrap" id="domBuyWrap" style="margin-bottom:16px"></div>
+      <div class="card-title">净卖出主力机构</div>
+      <div class="dom-wrap" id="domSellWrap"></div>
+      <div class="status" id="domStatus"></div>
+    </div>
+  </div>
+
+  <!-- Tab4 单日机构行为 -->
+  <div id="tab-daily" class="hidden">
+    <div class="card">
+      <div class="toolbar">
+        <span class="seg-label">日期</span>
+        <div class="daily-nav">
+          <button class="quick-btn" id="dailyPrevBtn" title="上一交易日">‹ 上一日</button>
+          <input type="date" id="dailyDate" class="sel" style="padding:5px 8px">
+          <button class="quick-btn" id="dailyNextBtn" title="下一交易日">下一日 ›</button>
+          <button class="quick-btn on" id="dailyLatestBtn">最新日</button>
+        </div>
+        <span class="seg-label">视图</span>
+        <span class="seg" id="dailyRowSeg">
+          <button data-value="detail" class="active">机构明细</button><button data-value="inst_group">按机构组</button><button data-value="market">全市场</button>
+        </span>
+        <span class="seg" id="dailyColSeg">
+          <button data-value="detail" class="active">券种明细</button><button data-value="bond_group">按券种组</button>
+        </span>
+        <span class="seg-label">图表</span>
+        <span class="seg" id="dailyChartSeg">
+          <button data-value="matrix" class="active">双向柱矩阵</button><button data-value="sankey">桑基流向图</button>
+        </span>
+        <span class="right"><button class="btn ghost" id="dailyRefreshBtn" style="padding:6px 12px">刷新</button></span>
+      </div>
+      <div class="kpi-row daily-kpi-row" id="dailyKpiRow">
+        <div class="kpi"><div class="k-label">单日全市场总净买入</div><div class="k-value" id="dkpi1">—</div><div class="k-sub" id="dkpi1Sub"></div></div>
+        <div class="kpi"><div class="k-label">最大净买入(机构×券种)</div><div class="k-value pos" id="dkpi2" style="font-size:15px">—</div><div class="k-sub" id="dkpi2Sub"></div></div>
+        <div class="kpi"><div class="k-label">最大净卖出(机构×券种)</div><div class="k-value neg" id="dkpi3" style="font-size:15px">—</div><div class="k-sub" id="dkpi3Sub"></div></div>
+        <div class="kpi"><div class="k-label">配置盘 − 交易盘 净买入</div><div class="k-value" id="dkpi4">—</div><div class="k-sub" id="dkpi4Sub"></div></div>
+      </div>
+      <div class="card-title">机构 × 券种 净买入矩阵<span class="sub" id="dailyTblSub"></span></div>
+      <div class="side-hint" id="dailyHint">行为机构，列为券种，红买绿卖；点击券种列表头可展开各期限明细，再次点击收起</div>
+      <div class="dom-wrap" id="dailyTableWrap" style="max-height:520px;margin-bottom:14px"></div>
+      <div class="card-title" style="margin-top:6px">图表可视化<span class="sub" id="dailyChartSub"></span></div>
+      <div id="dailyMatrixWrap">
+        <div class="side-hint">行=机构，列=券种；红=净买入，绿=净卖出；柱长=净买入规模。可切换「按机构组/全市场」行视图与「按券种组」列视图进行汇总</div>
+        <div id="dailyMatrixChart"></div>
+      </div>
+      <div id="dailySankeyWrap" class="hidden">
+        <div class="side-hint">左=机构，右=券种；连线宽度=净买入绝对值，红=净买入，绿=净卖出；hover 高亮某机构/券种的所有连线</div>
+        <div id="dailySankeyChart"></div>
+      </div>
+      <div class="status" id="dailyStatus"></div>
+    </div>
+  </div>
+
+</div>
+<div class="footer">华夏久盈固收信用小组</div>
+<script>window.INSTITUTION_FLOW_BASE_URL = "{{ url_for('institution_flow') }}";</script>
+<script src="{{ url_for('static', filename='institution_flow/dashboard.js') }}?v=20260807"></script>
+</body>
+</html>

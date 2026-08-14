@@ -1,0 +1,741 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>一级发行研究</title>
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+    <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
+    <style>
+        :root {
+            --bg: #f4f6f8; --surface: #fff; --line: #dfe3e8; --line-soft: #edf0f2;
+            --text: #17212b; --muted: #65717e; --blue: #1769aa; --blue-soft: #eaf3fa;
+            --red: #c93434; --orange: #c76a16; --green: #23835a; --shadow: 0 1px 2px rgba(20, 32, 44, .06);
+        }
+        * { box-sizing: border-box; }
+        html { background: var(--bg); }
+        body { margin: 0; color: var(--text); background: var(--bg); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif; font-size: 14px; letter-spacing: 0; }
+        button, input, select { font: inherit; letter-spacing: 0; }
+        button { cursor: pointer; }
+        .mono { font-variant-numeric: tabular-nums; font-feature-settings: "tnum"; }
+        .app-header { position: sticky; top: 44px; z-index: 80; background: rgba(255,255,255,.97); border-bottom: 1px solid var(--line); }
+        .header-main { min-height: 58px; padding: 8px 28px; display: flex; align-items: center; gap: 24px; }
+        .brand { min-width: 220px; }
+        .brand h1 { margin: 0; font-size: 17px; line-height: 1.3; font-weight: 700; }
+        .brand-meta { margin-top: 3px; color: var(--muted); font-size: 11px; }
+        .global-search { position: relative; width: min(480px, 42vw); margin-left: auto; }
+        .search-shell { height: 38px; display: flex; align-items: center; gap: 8px; padding: 0 10px; background: #f7f9fa; border: 1px solid var(--line); border-radius: 5px; }
+        .search-shell:focus-within { background: #fff; border-color: #69a1ca; box-shadow: 0 0 0 3px rgba(23,105,170,.1); }
+        .search-shell svg { width: 17px; color: var(--muted); }
+        .search-shell input { min-width: 0; flex: 1; border: 0; outline: 0; background: transparent; }
+        .suggestions { display: none; position: absolute; top: 43px; left: 0; right: 0; max-height: 280px; overflow: auto; background: #fff; border: 1px solid var(--line); border-radius: 5px; box-shadow: 0 10px 25px rgba(20,32,44,.14); }
+        .suggestions.show { display: block; }
+        .suggestion { width: 100%; display: flex; align-items: center; gap: 8px; border: 0; background: #fff; padding: 10px 12px; text-align: left; color: var(--text); }
+        .suggestion:hover { background: var(--blue-soft); color: var(--blue); }
+        .suggestion-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+        .suggestion-meta { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 11px; }
+        .suggestion-type { flex: 0 0 auto; padding: 2px 5px; border-radius: 3px; background: #eef1f3; color: #64707a; font-size: 10px; }
+        .tabs { padding: 0 28px; display: flex; gap: 26px; height: 42px; }
+        .tab { position: relative; border: 0; background: none; color: var(--muted); padding: 0 2px; font-weight: 600; }
+        .tab.active { color: var(--blue); }
+        .tab.active::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: var(--blue); }
+        main { max-width: 1580px; margin: 0 auto; padding: 18px 28px 36px; }
+        .view { display: none; }
+        .view.active { display: block; }
+        .view-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; margin-bottom: 14px; }
+        .view-title h2 { margin: 0 0 4px; font-size: 20px; line-height: 1.25; }
+        .view-title p { margin: 0; color: var(--muted); font-size: 12px; }
+        .toolbar { min-height: 48px; display: flex; align-items: center; flex-wrap: wrap; gap: 10px; padding: 9px 12px; background: var(--surface); border: 1px solid var(--line); border-radius: 5px; box-shadow: var(--shadow); margin-bottom: 14px; }
+        .field { display: flex; align-items: center; gap: 7px; }
+        .field label { color: var(--muted); font-size: 12px; white-space: nowrap; }
+        input[type="date"], input[type="number"], input.summary-filter, select { height: 32px; padding: 0 8px; border: 1px solid #ccd2d8; border-radius: 4px; background: #fff; color: var(--text); outline: none; }
+        input:focus, select:focus { border-color: #69a1ca; box-shadow: 0 0 0 2px rgba(23,105,170,.09); }
+        input[type="number"] { width: 74px; }
+        .divider { width: 1px; height: 24px; background: var(--line); margin: 0 2px; }
+        .btn { height: 32px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 0 12px; border-radius: 4px; border: 1px solid #cbd2d8; color: #31404d; background: #fff; white-space: nowrap; }
+        .btn:hover { background: #f3f6f8; border-color: #aeb8c1; }
+        .btn.primary { color: #fff; background: var(--blue); border-color: var(--blue); }
+        .btn.primary:hover { background: #12598f; }
+        .btn svg { width: 15px; height: 15px; }
+        .presets { display: inline-flex; border: 1px solid #cbd2d8; border-radius: 4px; overflow: hidden; }
+        .preset { height: 30px; border: 0; border-right: 1px solid #d7dde2; background: #fff; padding: 0 10px; color: var(--muted); font-size: 12px; }
+        .preset:last-child { border-right: 0; }
+        .preset.active { background: var(--blue-soft); color: var(--blue); font-weight: 600; }
+        .more-filter { position: relative; margin-left: auto; }
+        .more-filter summary { list-style: none; }
+        .more-filter summary::-webkit-details-marker { display: none; }
+        .filter-popover { position: absolute; top: 38px; right: 0; z-index: 60; width: 310px; padding: 14px; background: #fff; border: 1px solid var(--line); border-radius: 5px; box-shadow: 0 12px 28px rgba(20,32,44,.16); }
+        .check-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+        .check { display: flex; align-items: center; gap: 7px; color: #3e4b57; font-size: 12px; }
+        .term-row { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; padding-top: 4px; }
+        .metric-strip { display: grid; grid-template-columns: repeat(6, minmax(125px, 1fr)); background: var(--surface); border: 1px solid var(--line); border-radius: 5px; margin-bottom: 14px; box-shadow: var(--shadow); }
+        .metric { min-width: 0; padding: 14px 16px 12px; border-right: 1px solid var(--line-soft); }
+        .metric:last-child { border-right: 0; }
+        .metric-label { color: var(--muted); font-size: 11px; line-height: 1.4; }
+        .metric-value { margin-top: 5px; font-size: 21px; line-height: 1.15; font-weight: 700; white-space: nowrap; }
+        .metric.range .metric-value { font-size: 18px; white-space: normal; overflow-wrap: anywhere; }
+        .metric-sub { min-height: 16px; margin-top: 4px; color: var(--muted); font-size: 11px; }
+        .metric.red .metric-value { color: var(--red); }
+        .metric.orange .metric-value { color: var(--orange); }
+        .charts { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 14px; }
+        .panel { background: var(--surface); border: 1px solid var(--line); border-radius: 5px; box-shadow: var(--shadow); }
+        .panel-head { min-height: 44px; padding: 11px 14px; border-bottom: 1px solid var(--line-soft); display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+        .panel-head h3 { margin: 0; font-size: 14px; }
+        .panel-note { color: var(--muted); font-size: 11px; }
+        .chart { height: 330px; }
+        .table-wrap { overflow: auto; max-height: 620px; }
+        table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 12px; }
+        th { position: sticky; top: 0; z-index: 2; padding: 9px 10px; text-align: left; color: #53606c; background: #f6f8f9; border-bottom: 1px solid var(--line); white-space: nowrap; font-weight: 600; }
+        th.sortable { cursor: pointer; }
+        th.sortable:hover { color: var(--blue); }
+        td { padding: 9px 10px; border-bottom: 1px solid var(--line-soft); vertical-align: middle; }
+        tbody tr:hover td { background: #f7fafc; }
+        td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+        .link-btn { border: 0; background: none; padding: 0; color: var(--blue); text-align: left; font-weight: 600; }
+        .link-btn:hover { text-decoration: underline; }
+        .tag { display: inline-flex; align-items: center; min-height: 20px; padding: 2px 6px; border-radius: 3px; background: #eef1f3; color: #64707a; font-size: 11px; white-space: nowrap; }
+        .tag.red { background: #faeaea; color: var(--red); }
+        .tag.orange { background: #fff0e1; color: var(--orange); }
+        .tag.green { background: #e8f5ef; color: var(--green); }
+        .tag.blue { background: var(--blue-soft); color: var(--blue); }
+        .deviation-list { display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
+        .page-footer { max-width: 1580px; margin: 0 auto; padding: 0 28px 24px; color: var(--muted); font-size: 12px; text-align: center; }
+        .breadcrumb { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 12px; margin-bottom: 7px; }
+        .breadcrumb button { border: 0; padding: 0; background: none; color: var(--blue); }
+        .context-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+        .issuer-switch { max-width: 300px; }
+        .status { display: none; min-height: 44px; align-items: center; gap: 10px; padding: 10px 12px; margin-bottom: 14px; border: 1px solid var(--line); border-radius: 5px; background: #fff; color: var(--muted); }
+        .status.show { display: flex; }
+        .status.error { color: #9f2929; border-color: #efc9c9; background: #fff7f7; }
+        .spinner { width: 17px; height: 17px; flex: 0 0 auto; border: 2px solid #d7e0e7; border-top-color: var(--blue); border-radius: 50%; animation: spin .75s linear infinite; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .empty { padding: 52px 20px; color: var(--muted); text-align: center; }
+        .empty strong { display: block; margin-bottom: 6px; color: #46535f; }
+        @media (max-width: 1100px) {
+            .charts { grid-template-columns: 1fr; }
+            .metric-strip { grid-template-columns: repeat(3, 1fr); }
+            .metric:nth-child(3) { border-right: 0; }
+            .metric:nth-child(-n+3) { border-bottom: 1px solid var(--line-soft); }
+        }
+        @media (max-width: 720px) {
+            .header-main { padding: 9px 14px; gap: 10px; flex-wrap: wrap; }
+            .brand { min-width: 0; flex: 1; }
+            .global-search { order: 3; width: 100%; }
+            .tabs { padding: 0 14px; gap: 20px; overflow-x: auto; }
+            main { padding: 14px 12px 28px; }
+            .view-head { align-items: stretch; flex-direction: column; }
+            .toolbar { align-items: flex-start; }
+            .field { width: 100%; justify-content: space-between; }
+            .field input[type="date"], .field select { flex: 1; min-width: 0; }
+            .presets { width: 100%; }
+            .preset { flex: 1; padding: 0 5px; }
+            .divider { display: none; }
+            .more-filter { margin-left: 0; width: 100%; }
+            .more-filter summary { width: 100%; }
+            .filter-popover { position: static; width: 100%; margin-top: 8px; box-shadow: none; }
+            .metric-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+            .metric { border-bottom: 1px solid var(--line-soft); }
+            .metric:nth-child(odd) { border-right: 1px solid var(--line-soft); }
+            .metric:nth-child(even) { border-right: 0; }
+            .metric:nth-last-child(-n+2) { border-bottom: 0; }
+            .metric-value { font-size: 18px; }
+            .chart { height: 285px; }
+            .panel-head { align-items: flex-start; flex-direction: column; }
+            .context-actions { width: 100%; }
+            .issuer-switch { flex: 1; min-width: 0; }
+        }
+    </style>
+</head>
+<body>
+    <header class="app-header">
+        <div class="header-main">
+            <div class="brand">
+                <h1>一级发行研究</h1>
+                <div class="brand-meta" id="coverageMeta">正在读取数据覆盖范围</div>
+            </div>
+            <div class="global-search">
+                <div class="search-shell"><i data-lucide="search"></i><input id="globalIssuerSearch" autocomplete="off" placeholder="查询发行人或债券简称历史定价"></div>
+                <div class="suggestions" id="suggestions"></div>
+            </div>
+        </div>
+        <nav class="tabs" aria-label="主要视图">
+            <button class="tab active" data-view="market">市场总览</button>
+            <button class="tab" data-view="date">单日发行</button>
+            <button class="tab" data-view="issuer">发行人分析</button>
+            <button class="tab" data-view="issuerSummary">发行人汇总</button>
+        </nav>
+    </header>
+
+    <main>
+        <div class="status" id="status"><span class="spinner"></span><span id="statusText"></span></div>
+
+        <section class="view active" id="marketView">
+            <div class="view-head"><div class="view-title"><h2>市场总览</h2><p>观察一级发行活跃度、定价覆盖与异常分布</p></div></div>
+            <div class="toolbar">
+                <div class="field"><label for="marketStart">起始日期</label><input type="date" id="marketStart"></div>
+                <div class="field"><label for="marketEnd">截止日期</label><input type="date" id="marketEnd"></div>
+                <div class="presets" id="marketPresets">
+                    <button class="preset" data-months="1">1月</button><button class="preset active" data-months="3">3月</button>
+                    <button class="preset" data-months="6">6月</button><button class="preset" data-preset="ytd">年初至今</button><button class="preset" data-preset="all">全部</button>
+                </div>
+                <button class="btn primary" id="marketQuery"><i data-lucide="refresh-cw"></i>更新</button>
+                <details class="more-filter"><summary class="btn"><i data-lucide="sliders-horizontal"></i>更多筛选</summary><div class="filter-popover" id="marketFilters"></div></details>
+            </div>
+            <div class="metric-strip" id="marketMetrics"></div>
+            <div class="charts">
+                <div class="panel"><div class="panel-head"><h3>每日发行概况</h3><span class="panel-note">发行只数与发行规模</span></div><div class="chart" id="marketIssueChart"></div></div>
+                <div class="panel"><div class="panel-head"><h3>每日定价表现</h3><span class="panel-note">比例为20个发行日滚动口径</span></div><div class="chart" id="marketPricingChart"></div></div>
+            </div>
+            <div class="panel"><div class="panel-head"><h3>日期汇总</h3><span class="panel-note">点击日期查看当日发行</span></div><div class="table-wrap"><table><thead><tr>
+                <th>发行日期</th><th class="num">债券数</th><th class="num">发行规模(亿元)</th><th class="num">发行人数</th><th class="num">非市场化</th><th class="num">发飞</th><th class="num">平均偏离(BP)</th><th class="num">中位偏离(BP)</th>
+            </tr></thead><tbody id="marketTable"></tbody></table></div></div>
+        </section>
+
+        <section class="view" id="dateView">
+            <div class="view-head"><div class="view-title"><h2>单日发行</h2><p>先看当日逐券定价，再进入发行人历史画像</p></div></div>
+            <div class="toolbar">
+                <div class="field"><label for="issueDate">发行日期</label><input type="date" id="issueDate"></div>
+                <button class="btn primary" id="dateQuery"><i data-lucide="search"></i>查询当日发行</button>
+                <details class="more-filter"><summary class="btn"><i data-lucide="sliders-horizontal"></i>更多筛选</summary><div class="filter-popover" id="dateFilters"></div></details>
+            </div>
+            <div class="metric-strip" id="dateMetrics"></div>
+            <div class="panel" style="margin-bottom:14px"><div class="panel-head"><h3>当日发行债券</h3><span class="panel-note" id="dateBondCount"></span></div><div class="table-wrap"><table><thead id="dateBondHead"></thead><tbody id="dateBondBody"></tbody></table></div></div>
+            <div class="panel" style="margin-bottom:14px"><div class="panel-head"><h3>发行人汇总</h3><span class="panel-note">历史指标截止查询日前一日</span></div><div class="table-wrap"><table id="issuerSummaryTable"><thead><tr>
+                <th class="sortable" data-table="issuers" data-key="issuer">发行人</th><th>内部评级</th><th class="sortable num" data-table="issuers" data-key="total_bonds" data-type="number">当日债券数</th><th class="sortable num" data-table="issuers" data-key="issue_amount_yi" data-type="number">发行规模(亿元)</th><th class="num">当日偏离概览</th><th class="sortable num" data-table="issuers" data-key="history_calculated_bonds" data-type="number">历史样本数</th><th class="sortable num" data-table="issuers" data-key="history_non_market_ratio" data-type="number">历史非市场化</th><th class="sortable num" data-table="issuers" data-key="history_overpriced_ratio" data-type="number">历史发飞</th><th class="sortable num" data-table="issuers" data-key="history_avg_deviation_bp" data-type="number">历史平均偏离</th>
+            </tr></thead><tbody id="issuerSummaryBody"></tbody></table></div></div>
+        </section>
+
+        <section class="view" id="issuerView">
+            <div class="breadcrumb" id="issuerBreadcrumb"></div>
+            <div class="view-head">
+                <div class="view-title"><h2 id="issuerTitle">发行人分析</h2><p id="issuerSubtitle">从顶部搜索发行人开始分析</p></div>
+                <div class="context-actions" id="issuerContext"></div>
+            </div>
+            <div class="toolbar">
+                <div class="field"><label for="issuerStart">起始日期</label><input type="date" id="issuerStart"></div>
+                <div class="field"><label for="issuerEnd">截止日期</label><input type="date" id="issuerEnd"></div>
+                <button class="btn primary" id="issuerQuery"><i data-lucide="refresh-cw"></i>更新分析</button>
+                <details class="more-filter"><summary class="btn"><i data-lucide="sliders-horizontal"></i>更多筛选</summary><div class="filter-popover" id="issuerFilters"></div></details>
+            </div>
+            <div id="issuerContent">
+                <div class="empty"><strong>尚未选择发行人</strong>使用顶部搜索框查询发行人或债券简称</div>
+            </div>
+        </section>
+        <section class="view" id="issuerSummaryView">
+            <div class="view-head"><div class="view-title"><h2>发行人汇总</h2><p>按发行人汇总一级发行定价表现，比例均以可计算债券为分母</p></div></div>
+            <div class="toolbar">
+                <div class="field"><label for="issuerSummaryStart">起始日期</label><input type="date" id="issuerSummaryStart"></div>
+                <div class="field"><label for="issuerSummaryEnd">截止日期</label><input type="date" id="issuerSummaryEnd"></div>
+                <div class="field"><label for="issuerSummarySearch">发行人</label><input class="summary-filter" type="text" id="issuerSummarySearch" placeholder="筛选发行人名称"></div>
+                <div class="field"><label for="issuerSummaryMinSample">最少样本</label><input type="number" id="issuerSummaryMinSample" min="0" step="1" placeholder="不限"></div>
+                <button class="btn primary" id="issuerSummaryQuery"><i data-lucide="refresh-cw"></i>更新汇总</button>
+                <button class="btn" id="issuerSummaryExport" type="button" disabled title="导出当前汇总为 CSV"><i data-lucide="download"></i>导出 CSV</button>
+                <details class="more-filter"><summary class="btn"><i data-lucide="sliders-horizontal"></i>更多筛选</summary><div class="filter-popover" id="issuerSummaryFilters"></div></details>
+            </div>
+            <div class="metric-strip" id="issuerSummaryMetrics"></div>
+            <div class="panel"><div class="panel-head"><h3>发行人定价汇总</h3><span class="panel-note" id="issuerSummaryCount">加载后显示全部发行人</span></div><div class="table-wrap"><table><thead><tr>
+                <th class="sortable" data-table="issuer-summary" data-key="issuer">发行人</th><th>内部评级</th><th class="sortable num" data-table="issuer-summary" data-key="total_bonds" data-type="number">发行债券数</th><th class="sortable num" data-table="issuer-summary" data-key="issue_amount_yi" data-type="number">发行规模(亿元)</th><th class="sortable num" data-table="issuer-summary" data-key="calculated_bonds" data-type="number">可计算样本</th><th class="sortable num" data-table="issuer-summary" data-key="calculable_ratio" data-type="number">可计算占比</th><th class="sortable num" data-table="issuer-summary" data-key="non_market_count" data-type="number">非市场化数</th><th class="sortable num" data-table="issuer-summary" data-key="non_market_ratio" data-type="number">非市场化占比</th><th class="sortable num" data-table="issuer-summary" data-key="overpriced_count" data-type="number">高于合理估值数</th><th class="sortable num" data-table="issuer-summary" data-key="overpriced_ratio" data-type="number">高于合理估值占比</th><th class="sortable num" data-table="issuer-summary" data-key="avg_deviation_bp" data-type="number">平均偏离(BP)</th><th class="sortable num" data-table="issuer-summary" data-key="last_issue_date">最近发行日</th>
+            </tr></thead><tbody id="issuerSummaryAllBody"></tbody></table></div></div>
+        </section>
+    </main>
+    <footer class="page-footer">华夏久盈固收信用小组</footer>
+
+    <template id="filterTemplate"><div class="check-grid">
+        <label class="check"><input type="checkbox" data-filter="exclude_short">剔除1Y以内</label>
+        <label class="check"><input type="checkbox" data-filter="only_public">只看公募</label>
+        <label class="check"><input type="checkbox" data-filter="exclude_perpetual">剔除永续债</label>
+        <div></div>
+        <div class="term-row"><span>期限区间(Y)</span><input type="number" min="0" step="0.5" placeholder="最小" data-filter="term_min"><span>至</span><input type="number" min="0" step="0.5" placeholder="最大" data-filter="term_max"></div>
+    </div></template>
+
+    <script>
+        const API_BASE = '{{ url_for("primary_market_pricing.index") }}'.replace(/\/$/, '');
+        const nativeFetch = window.fetch.bind(window);
+        window.fetch = (input, init) => nativeFetch(
+            typeof input === 'string' && input.startsWith('/api/') ? API_BASE + input : input,
+            init,
+        );
+
+        const appState = {
+            view: 'market', meta: null, issuer: '', sourceDate: '', sourceIssuers: [],
+            marketData: null, dateData: null, issuerData: null, issuerSummaryData: null, requestId: 0,
+            filters: { exclude_short: false, only_public: false, exclude_perpetual: false, term_min: '', term_max: '' }
+        };
+        const charts = {};
+        const sortState = {
+            issuers: { key: 'history_non_market_ratio', direction: 'desc', type: 'number' },
+            issuerSummary: { key: 'avg_deviation_bp', direction: 'desc', type: 'number' }
+        };
+        const $ = id => document.getElementById(id);
+
+        function initFilters() {
+            ['marketFilters', 'dateFilters', 'issuerFilters', 'issuerSummaryFilters'].forEach(id => {
+                $(id).appendChild($('filterTemplate').content.cloneNode(true));
+                $(id).querySelectorAll('[data-filter]').forEach(el => el.addEventListener('change', () => {
+                    syncFiltersFrom(el);
+                }));
+            });
+        }
+
+        function syncFiltersFrom(source) {
+            const key = source.dataset.filter;
+            appState.filters[key] = source.type === 'checkbox' ? source.checked : source.value;
+            document.querySelectorAll(`[data-filter="${key}"]`).forEach(el => {
+                if (el === source) return;
+                if (el.type === 'checkbox') el.checked = appState.filters[key]; else el.value = appState.filters[key];
+            });
+        }
+
+        function queryFilters() {
+            const f = appState.filters;
+            return new URLSearchParams({
+                exclude_short: f.exclude_short ? '1' : '0', only_public: f.only_public ? '1' : '0',
+                exclude_perpetual: f.exclude_perpetual ? '1' : '0', term_min: f.term_min, term_max: f.term_max
+            });
+        }
+
+        function loadFiltersFromUrl(params) {
+            ['exclude_short', 'only_public', 'exclude_perpetual'].forEach(k => appState.filters[k] = params.get(k) === '1');
+            appState.filters.term_min = params.get('term_min') || '';
+            appState.filters.term_max = params.get('term_max') || '';
+            Object.entries(appState.filters).forEach(([key, value]) => document.querySelectorAll(`[data-filter="${key}"]`).forEach(el => {
+                if (el.type === 'checkbox') el.checked = value; else el.value = value;
+            }));
+        }
+
+        function compact(value) { return (value || '').replaceAll('-', ''); }
+        function inputDate(value) { return value && value.length === 8 ? `${value.slice(0,4)}-${value.slice(4,6)}-${value.slice(6,8)}` : ''; }
+        function displayDate(value) { return inputDate(value) || '-'; }
+        function offsetMonths(value, months) { const d = new Date(`${value}T12:00:00`); d.setMonth(d.getMonth() - months); return d.toISOString().slice(0,10); }
+        function pct(value) { return value == null ? '-' : `${(Number(value) * 100).toFixed(1)}%`; }
+        function num(value, digits = 1) { return value == null || Number.isNaN(Number(value)) ? '-' : Number(value).toFixed(digits); }
+        function amountYi(value) { return value == null || Number.isNaN(Number(value)) ? '-' : Number(value).toFixed(2); }
+        function amountYiText(value) { return value == null || Number.isNaN(Number(value)) ? '-' : `${Number(value).toFixed(2)} 亿元`; }
+        function integer(value) { return Number(value || 0).toLocaleString('zh-CN'); }
+        function esc(value) { return String(value ?? '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
+        function iconRefresh() { if (window.lucide) window.lucide.createIcons(); }
+
+        function setStatus(message = '', error = false) {
+            const el = $('status');
+            el.className = `status${message ? ' show' : ''}${error ? ' error' : ''}`;
+            el.querySelector('.spinner').style.display = error ? 'none' : '';
+            $('statusText').textContent = message;
+        }
+
+        async function fetchJson(url, loadingText) {
+            const requestId = ++appState.requestId;
+            setStatus(loadingText);
+            try {
+                const response = await fetch(url);
+                const data = await response.json();
+                if (!response.ok || data.error) throw new Error(data.error || `请求失败 (${response.status})`);
+                if (requestId !== appState.requestId) return null;
+                setStatus();
+                return data;
+            } catch (error) {
+                if (requestId === appState.requestId) setStatus(error.message, true);
+                return null;
+            }
+        }
+
+        function currentUrl(view = appState.view) {
+            const p = queryFilters();
+            p.set('view', view);
+            if (view === 'market') { p.set('start', compact($('marketStart').value)); p.set('end', compact($('marketEnd').value)); }
+            if (view === 'date') p.set('date', compact($('issueDate').value));
+            if (view === 'issuer' && appState.issuer) {
+                p.set('issuer', appState.issuer); p.set('start', compact($('issuerStart').value)); p.set('end', compact($('issuerEnd').value));
+                if (appState.sourceDate) p.set('source_date', appState.sourceDate);
+            }
+            if (view === 'issuerSummary') { p.set('start', compact($('issuerSummaryStart').value)); p.set('end', compact($('issuerSummaryEnd').value)); }
+            return `${location.pathname}?${p.toString()}`;
+        }
+
+        function setView(view, push = true) {
+            appState.view = view;
+            document.querySelectorAll('.view').forEach(el => el.classList.toggle('active', el.id === `${view}View`));
+            document.querySelectorAll('.tab').forEach(el => el.classList.toggle('active', el.dataset.view === view));
+            if (push) history.pushState({}, '', currentUrl(view));
+            if (view === 'market') loadMarket();
+            if (view === 'date') loadDate();
+            if (view === 'issuer') loadIssuer();
+            if (view === 'issuerSummary') loadIssuerSummary();
+        }
+
+        function metric(label, value, sub = '', tone = '') {
+            return `<div class="metric ${tone}"><div class="metric-label">${label}</div><div class="metric-value mono">${value}</div><div class="metric-sub">${sub}</div></div>`;
+        }
+
+        async function loadMarket() {
+            const start = compact($('marketStart').value), end = compact($('marketEnd').value);
+            const q = queryFilters(); q.set('start_date', start); q.set('end_date', end);
+            const data = await fetchJson(`/api/market?${q}`, '正在汇总市场发行与定价数据');
+            if (!data) return;
+            appState.marketData = data; renderMarket(data);
+            history.replaceState({}, '', currentUrl('market'));
+        }
+
+        function renderMarket(data) {
+            const s = data.summary;
+            $('marketMetrics').innerHTML = [
+                metric('发行债券数', integer(s.total_bonds), `${integer(s.issuer_count)} 家发行人`),
+                metric('发行规模', amountYiText(s.issue_amount_yi), s.issue_amount_yi == null ? '规模缓存待回填' : `${integer(s.issue_amount_bond_count)} 只已统计`),
+                metric('非市场化', integer(s.non_market_count), `占可计算样本 ${pct(s.non_market_ratio)}`, 'red'),
+                metric('发飞', integer(s.overpriced_count), `占可计算样本 ${pct(s.overpriced_ratio)}`, 'orange'),
+                metric('平均偏离', `${num(s.avg_deviation_bp)} BP`, '可计算样本均值'),
+                metric('中位偏离', `${num(s.median_deviation_bp)} BP`, '降低极端值影响')
+            ].join('');
+            renderMarketCharts(data.daily);
+            $('marketTable').innerHTML = [...data.daily].reverse().map(r => `<tr>
+                <td><button class="link-btn" data-date="${r.issue_date}">${displayDate(r.issue_date)}</button></td>
+                <td class="num mono">${integer(r.total_bonds)}</td><td class="num mono">${amountYi(r.issue_amount_yi)}</td><td class="num mono">${integer(r.issuer_count)}</td>
+                <td class="num mono">${integer(r.non_market_count)}</td><td class="num mono">${integer(r.overpriced_count)}</td>
+                <td class="num mono">${num(r.avg_deviation_bp)}</td><td class="num mono">${num(r.median_deviation_bp)}</td></tr>`).join('') || emptyRow(8, '所选区间内没有发行记录');
+            showBackgroundState(data);
+        }
+
+        async function loadIssuerSummary() {
+            const start = compact($('issuerSummaryStart').value), end = compact($('issuerSummaryEnd').value);
+            if (!start || !end) return;
+            const q = queryFilters(); q.set('start_date', start); q.set('end_date', end);
+            const data = await fetchJson(`/api/issuer-summary?${q}`, '正在汇总全部发行人定价表现');
+            if (!data) return;
+            appState.issuerSummaryData = data;
+            renderIssuerSummary(data);
+            history.replaceState({}, '', currentUrl('issuerSummary'));
+        }
+
+        function issuerSummaryRows() {
+            const keyword = $('issuerSummarySearch').value.trim().toLowerCase();
+            const minSample = Number($('issuerSummaryMinSample').value || 0);
+            const rows = (appState.issuerSummaryData?.issuers || []).filter(row =>
+                (!keyword || row.issuer.toLowerCase().includes(keyword)) && row.calculated_bonds >= minSample
+            );
+            return sortRows(rows, sortState.issuerSummary);
+        }
+
+        function renderIssuerSummary(data) {
+            const s = data.summary;
+            $('issuerSummaryMetrics').innerHTML = [
+                metric('发行人数量', integer(s.issuer_count), `${integer(s.total_bonds)} 只发行债券`),
+                metric('可计算样本', integer(s.calculated_bonds), `覆盖率 ${pct(s.calculable_ratio)}`),
+                metric('非市场化占比', pct(s.non_market_ratio), `${integer(s.non_market_count)} 只`, 'red'),
+                metric('高于合理估值占比', pct(s.overpriced_ratio), `${integer(s.overpriced_count)} 只`, 'orange'),
+                metric('平均偏离', `${num(s.avg_deviation_bp)} BP`, '可计算样本均值'),
+                metric('统计区间', `${displayDate(data.start_date)} 至 ${displayDate(data.end_date)}`, '当前筛选口径', 'range')
+            ].join('');
+            $('issuerSummaryExport').disabled = false;
+            renderIssuerSummaryRows();
+            showBackgroundState(data);
+        }
+
+        function renderIssuerSummaryRows() {
+            const rows = issuerSummaryRows();
+            const total = appState.issuerSummaryData?.issuers?.length || 0;
+            $('issuerSummaryCount').textContent = `显示 ${integer(rows.length)} / ${integer(total)} 家发行人`;
+            $('issuerSummaryAllBody').innerHTML = rows.map(row => `<tr>
+                <td><button class="link-btn" data-issuer="${encodeURIComponent(row.issuer)}">${esc(row.issuer)}</button></td>
+                <td>${esc(row.internal_rating || '-')}</td>
+                <td class="num mono">${integer(row.total_bonds)}</td><td class="num mono">${amountYi(row.issue_amount_yi)}</td><td class="num mono">${integer(row.calculated_bonds)}</td><td class="num mono">${pct(row.calculable_ratio)}</td>
+                <td class="num mono">${integer(row.non_market_count)}</td><td class="num mono" style="color:var(--red);font-weight:600">${pct(row.non_market_ratio)}</td><td class="num mono">${integer(row.overpriced_count)}</td><td class="num mono" style="color:var(--orange);font-weight:600">${pct(row.overpriced_ratio)}</td>
+                <td class="num mono">${num(row.avg_deviation_bp)}</td><td class="num mono">${displayDate(row.last_issue_date)}</td></tr>`).join('') || emptyRow(12, '没有符合筛选条件的发行人');
+            updateIssuerSummarySortHeaders();
+        }
+
+        function csvCell(value) {
+            return `"${String(value ?? '').replaceAll('"', '""')}"`;
+        }
+
+        function exportIssuerSummaryCsv() {
+            const data = appState.issuerSummaryData;
+            if (!data) return;
+            const header = ['发行人', '内部评级', '发行债券数', '发行规模(亿元)', '可计算样本', '可计算占比', '非市场化数', '非市场化占比', '高于合理估值数', '高于合理估值占比', '平均偏离(BP)', '最近发行日'];
+            const rows = issuerSummaryRows().map(row => [
+                row.issuer, row.internal_rating || '-', integer(row.total_bonds), amountYi(row.issue_amount_yi), integer(row.calculated_bonds), pct(row.calculable_ratio),
+                integer(row.non_market_count), pct(row.non_market_ratio), integer(row.overpriced_count), pct(row.overpriced_ratio),
+                num(row.avg_deviation_bp), displayDate(row.last_issue_date)
+            ]);
+            const csv = '\ufeff' + [header, ...rows].map(row => row.map(csvCell).join(',')).join('\r\n');
+            const file = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+            const link = document.createElement('a');
+            const objectUrl = URL.createObjectURL(file);
+            link.href = objectUrl;
+            link.download = `发行人汇总_${displayDate(data.start_date)}至${displayDate(data.end_date)}.csv`;
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+            setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
+        }
+
+        function chartFor(id) {
+            if (charts[id]) charts[id].dispose();
+            charts[id] = echarts.init($(id));
+            return charts[id];
+        }
+
+        function renderMarketCharts(rows) {
+            const dates = rows.map(r => displayDate(r.issue_date).slice(5));
+            chartFor('marketIssueChart').setOption({
+                color: ['#4b88b5', '#2d4d63'], tooltip: { trigger: 'axis' }, legend: { top: 10 },
+                grid: { top: 50, left: 54, right: 52, bottom: 48 },
+                xAxis: { type: 'category', data: dates, axisLabel: { rotate: rows.length > 35 ? 45 : 0, fontSize: 10 } },
+                yAxis: [{ type: 'value', name: '债券数' }, { type: 'value', name: '亿元' }],
+                dataZoom: rows.length > 70 ? [{ type: 'inside' }, { type: 'slider', height: 16, bottom: 4 }] : [],
+                series: [{ name: '发行债券数', type: 'bar', data: rows.map(r => r.total_bonds), barMaxWidth: 16 }, { name: '发行规模(亿元)', type: 'line', yAxisIndex: 1, symbol: 'none', data: rows.map(r => r.issue_amount_yi) }]
+            });
+            chartFor('marketPricingChart').setOption({
+                color: ['#1769aa', '#546674', '#c93434', '#c76a16'], tooltip: { trigger: 'axis' }, legend: { top: 8, textStyle: { fontSize: 10 } },
+                grid: { top: 58, left: 54, right: 54, bottom: 48 },
+                xAxis: { type: 'category', data: dates, axisLabel: { rotate: rows.length > 35 ? 45 : 0, fontSize: 10 } },
+                yAxis: [{ type: 'value', name: 'BP' }, { type: 'value', name: '比例', min: 0, max: 1, axisLabel: { formatter: v => `${Math.round(v*100)}%` } }],
+                dataZoom: rows.length > 70 ? [{ type: 'inside' }, { type: 'slider', height: 16, bottom: 4 }] : [],
+                series: [
+                    { name: '平均偏离', type: 'line', symbol: 'none', data: rows.map(r => r.avg_deviation_bp) },
+                    { name: '中位偏离', type: 'line', symbol: 'none', lineStyle: { type: 'dashed' }, data: rows.map(r => r.median_deviation_bp) },
+                    { name: '滚动非市场化', type: 'line', yAxisIndex: 1, symbol: 'none', data: rows.map(r => r.rolling_non_market_ratio) },
+                    { name: '滚动发飞', type: 'line', yAxisIndex: 1, symbol: 'none', data: rows.map(r => r.rolling_overpriced_ratio) }
+                ]
+            });
+        }
+
+        async function loadDate() {
+            const date = compact($('issueDate').value); if (!date) return;
+            const q = queryFilters();
+            const data = await fetchJson(`/api/date/${date}?${q}`, `正在读取 ${displayDate(date)} 的发行数据`);
+            if (!data) return;
+            appState.dateData = data; appState.sourceIssuers = (data.issuers || []).map(r => r.issuer); renderDate(data);
+            history.replaceState({}, '', currentUrl('date'));
+        }
+
+        function renderDate(data) {
+            const s = data;
+            $('dateMetrics').innerHTML = [
+                metric('发行债券数', integer(s.total_bonds), `${integer(s.issuer_count)} 家发行人`), metric('发行规模', amountYiText(s.issue_amount_yi), s.issue_amount_yi == null ? '规模缓存待回填' : '当日首次发行规模'),
+                metric('非市场化债券', integer(s.non_market_count), '当日数量', 'red'), metric('发飞债券', integer(s.overpriced_count), '当日数量', 'orange'),
+                metric('平均偏离', `${num(s.avg_deviation_bp)} BP`, '可计算样本'), metric('中位偏离', `${num(s.median_deviation_bp)} BP`, '可计算样本')
+            ].join('');
+            renderIssuerRows();
+            $('dateBondCount').textContent = `共 ${integer(s.bonds.length)} 只`;
+            renderBondTable('dateBondHead', 'dateBondBody', s.bonds, true);
+            showBackgroundState(data);
+        }
+
+        function renderIssuerRows() {
+            const rows = sortRows(appState.dateData?.issuers || [], sortState.issuers);
+            $('issuerSummaryBody').innerHTML = rows.map(r => `<tr>
+                <td><button class="link-btn" data-issuer="${encodeURIComponent(r.issuer)}">${esc(r.issuer)}</button></td>
+                <td>${esc(r.internal_rating || '-')}</td>
+                <td class="num mono">${integer(r.total_bonds)}</td><td class="num mono">${amountYi(r.issue_amount_yi)}</td>
+                <td class="num"><div class="deviation-list">${deviationTags(r.deviation_overview)}</div></td>
+                <td class="num mono">${r.history_calculated_bonds == null ? '-' : integer(r.history_calculated_bonds)}</td>
+                <td class="num mono">${pct(r.history_non_market_ratio)}</td><td class="num mono">${pct(r.history_overpriced_ratio)}</td>
+                <td class="num mono">${num(r.history_avg_deviation_bp)}</td></tr>`).join('') || emptyRow(9, '当日没有符合筛选条件的发行人');
+            updateSortHeaders();
+        }
+
+        function deviationTags(values) {
+            if (!values?.length) return '<span class="tag">无判断</span>';
+            return values.map(v => `<span class="tag ${v < -3 ? 'red' : v > 3 ? 'orange' : 'green'} mono">${num(v)} BP</span>`).join('');
+        }
+
+        function openIssuer(name, sourceDate = '') {
+            appState.issuer = name; appState.sourceDate = sourceDate;
+            $('globalIssuerSearch').value = name;
+            $('issuerStart').value = inputDate(appState.meta.start_date);
+            $('issuerEnd').value = inputDate(sourceDate || appState.meta.default_end_date);
+            setView('issuer', true);
+        }
+
+        async function loadIssuer() {
+            renderIssuerContext();
+            if (!appState.issuer) {
+                $('issuerContent').innerHTML = '<div class="empty"><strong>尚未选择发行人</strong>使用顶部搜索框查询发行人或债券简称</div>';
+                return;
+            }
+            const q = queryFilters(); q.set('start_date', compact($('issuerStart').value)); q.set('end_date', compact($('issuerEnd').value));
+            const data = await fetchJson(`/api/issuer/${encodeURIComponent(appState.issuer)}?${q}`, `正在分析 ${appState.issuer}`);
+            if (!data) return;
+            appState.issuerData = data; renderIssuer(data); history.replaceState({}, '', currentUrl('issuer'));
+            if (appState.sourceDate && !appState.sourceIssuers.length) loadSourceIssuers();
+        }
+
+        async function loadSourceIssuers() {
+            const q = queryFilters();
+            const response = await fetch(`/api/date/${appState.sourceDate}?${q}`);
+            if (!response.ok) return;
+            const data = await response.json(); appState.sourceIssuers = (data.issuers || []).map(r => r.issuer); renderIssuerContext();
+        }
+
+        function renderIssuerContext() {
+            $('issuerTitle').textContent = appState.issuer || '发行人分析';
+            $('issuerSubtitle').textContent = appState.issuer ? `${$('issuerStart').value} 至 ${$('issuerEnd').value} 的一级发行定价表现` : '从顶部搜索发行人开始分析';
+            $('issuerBreadcrumb').innerHTML = appState.sourceDate
+                ? `<button data-back-date="${appState.sourceDate}">单日发行</button><span>/</span><button data-back-date="${appState.sourceDate}">${displayDate(appState.sourceDate)}</button><span>/</span><span>${esc(appState.issuer)}</span>`
+                : `<button data-view-link="market">市场总览</button><span>/</span><span>${esc(appState.issuer || '发行人分析')}</span>`;
+            $('issuerContext').innerHTML = appState.sourceDate ? `<button class="btn" data-back-date="${appState.sourceDate}"><i data-lucide="arrow-left"></i>返回 ${displayDate(appState.sourceDate)}</button><select class="issuer-switch" id="issuerSwitch" aria-label="切换当日发行人"><option value="">切换当日发行人</option>${appState.sourceIssuers.map(name => `<option value="${esc(name)}" ${name === appState.issuer ? 'selected' : ''}>${esc(name)}</option>`).join('')}</select>` : '';
+            const switcher = $('issuerSwitch'); if (switcher) switcher.addEventListener('change', e => { if (e.target.value) openIssuer(e.target.value, appState.sourceDate); });
+            iconRefresh();
+        }
+
+        function renderIssuer(data) {
+            const s = data;
+            $('issuerContent').innerHTML = `<div class="metric-strip" id="issuerMetrics"></div><div class="charts">
+                <div class="panel"><div class="panel-head"><h3>偏离度时间序列</h3><span class="panel-note">虚线为 ±3BP 判定阈值</span></div><div class="chart" id="issuerDeviationChart"></div></div>
+                <div class="panel"><div class="panel-head"><h3>偏离区间分布</h3><span class="panel-note">仅统计可计算债券</span></div><div class="chart" id="issuerDistributionChart"></div></div>
+            </div><div class="panel"><div class="panel-head"><h3>发行偏离明细</h3><span class="panel-note">共 ${integer(s.total_bonds)} 只</span></div><div class="table-wrap"><table><thead id="issuerBondHead"></thead><tbody id="issuerBondBody"></tbody></table></div></div>`;
+            $('issuerMetrics').innerHTML = [
+                metric('发行债券数', integer(s.total_bonds), '所选历史区间'), metric('发行规模', amountYiText(s.issue_amount_yi), s.issue_amount_yi == null ? '规模缓存待回填' : '首次发行规模合计'),
+                metric('非市场化比例', pct(s.non_market_ratio), `${integer(s.non_market_count)} 只`, 'red'), metric('发飞比例', pct(s.overpriced_ratio), `${integer(s.overpriced_count)} 只`, 'orange'),
+                metric('平均偏离', `${num(s.avg_deviation_bp)} BP`, '可计算样本'), metric('中位偏离', `${num(s.median_deviation_bp)} BP`, '可计算样本')
+            ].join('');
+            renderIssuerCharts(s.bonds); renderBondTable('issuerBondHead', 'issuerBondBody', s.bonds, false);
+            showBackgroundState(data);
+        }
+
+        function renderIssuerCharts(bonds) {
+            const valid = bonds.filter(b => !b.is_no_judgement && b.deviation_bp != null);
+            chartFor('issuerDeviationChart').setOption({
+                tooltip: {
+                    trigger: 'item',
+                    formatter: p => {
+                        const bond = valid[p.dataIndex];
+                        return `${esc(bond?.bond_name || '-')}<br>${displayDate(bond?.issue_date)}<br>${num(bond?.deviation_bp)} BP`;
+                    }
+                },
+                grid: { top: 28, left: 54, right: 24, bottom: 48 }, xAxis: { type: 'category', data: valid.map(b => displayDate(b.issue_date)), axisLabel: { rotate: 40, fontSize: 10 } }, yAxis: { type: 'value', name: 'BP' },
+                dataZoom: valid.length > 40 ? [{ type: 'inside' }, { type: 'slider', height: 16, bottom: 3 }] : [],
+                series: [{ type: 'bar', barMaxWidth: 14, data: valid.map(b => ({ value: b.deviation_bp, itemStyle: { color: b.is_non_market ? '#c93434' : b.is_overpriced ? '#c76a16' : '#4387b4' } })), markLine: { silent: true, symbol: 'none', data: [{ yAxis: -3, lineStyle: { color: '#c93434', type: 'dashed' } }, { yAxis: 3, lineStyle: { color: '#c76a16', type: 'dashed' } }, { yAxis: 0, lineStyle: { color: '#a6afb7' } }] } }]
+            });
+            const buckets = [0,0,0,0,0]; valid.forEach(b => { const v=b.deviation_bp; buckets[v < -10 ? 0 : v < -3 ? 1 : v <= 3 ? 2 : v <= 10 ? 3 : 4]++; });
+            chartFor('issuerDistributionChart').setOption({
+                tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } }, grid: { top: 25, left: 75, right: 28, bottom: 32 },
+                xAxis: { type: 'value', minInterval: 1 }, yAxis: { type: 'category', data: ['<-10BP','-10~-3BP','-3~3BP','3~10BP','>10BP'] },
+                series: [{ type: 'bar', data: buckets.map((v,i) => ({ value:v, itemStyle:{ color:['#b92d2d','#d35e5e','#4387b4','#d28a45','#bc6111'][i] } })), barMaxWidth: 24, label: { show: true, position: 'right' } }]
+            });
+        }
+
+        function bondHead(showIssuer) {
+            return `<tr><th>债券名称</th>${showIssuer ? '<th>发行人</th>' : ''}<th>内部评级</th><th>发行日期</th><th class="num">发行规模(亿元)</th><th>发行方式</th><th class="num">期限</th><th class="num">票面利率(%)</th><th class="num">合理价格(%)</th><th class="num">偏离(BP)</th><th>参考债券</th><th>判定</th></tr>`;
+        }
+
+        function renderBondTable(headId, bodyId, bonds, showIssuer) {
+            $(headId).innerHTML = bondHead(showIssuer);
+            $(bodyId).innerHTML = [...bonds].sort((a,b) => String(b.issue_date).localeCompare(String(a.issue_date))).map(b => `<tr>
+                <td>${esc(b.bond_name)} ${isPerpetual(b) ? '<span class="tag blue">永续</span>' : ''}</td>
+                ${showIssuer ? `<td><button class="link-btn" data-issuer="${encodeURIComponent(b.issuer || '')}">${esc(b.issuer || '-')}</button></td>` : ''}
+                <td>${esc(b.internal_rating || '-')}</td>
+                <td class="mono">${displayDate(b.issue_date)}</td><td class="num mono">${amountYi(b.issue_amount_wan == null ? null : b.issue_amount_wan / 10000)}</td><td>${raiseMode(b.raise_mode)}</td><td class="num mono">${esc(termDisplay(b))}</td>
+                <td class="num mono">${num(b.coupon_rate,4)}</td><td class="num mono">${num(b.fair_price,4)}</td><td class="num mono" style="color:${b.is_non_market?'var(--red)':b.is_overpriced?'var(--orange)':'inherit'};font-weight:600">${num(b.deviation_bp)}</td>
+                <td>${esc(b.ref_bond_name || '-')}</td><td>${statusTag(b)}</td></tr>`).join('') || emptyRow(showIssuer ? 12 : 11, '没有符合筛选条件的债券');
+        }
+
+        function showBackgroundState(data) {
+            if (data._background_refresh) {
+                setStatus('当前区间尚无缓存，页面已保持可用；后台正在读取数据库，请稍后点击更新');
+            } else if (data._amount_pending) {
+                setStatus('发行规模缓存正在后台回填，当前空值显示为“—”；请稍后点击更新');
+            }
+        }
+
+        function isPerpetual(b) { return b.bond_type === 'perpetual' || String(b.cvtbd_expire||'').toUpperCase().endsWith('+N') || String(b.bond_name||'').includes('永续'); }
+        function termDisplay(b) { if (b.cvtbd_expire) return b.cvtbd_expire; const n=Number(b.maturity_year); const base=Number.isInteger(n)?n:(Number.isNaN(n)?'-':Math.round(n*100)/100); return isPerpetual(b)?`${base}+N`:String(base); }
+        function raiseMode(v) { return String(v).trim()==='1'?'公募':String(v).trim()==='2'?'私募':'-'; }
+        function statusTag(b) { if (b.is_no_judgement) return '<span class="tag">无判断</span>'; if (b.is_non_market) return '<span class="tag red">非市场化</span>'; if (b.is_overpriced) return '<span class="tag orange">发飞</span>'; return '<span class="tag green">市场化</span>'; }
+        function emptyRow(cols, text) { return `<tr><td colspan="${cols}"><div class="empty">${text}</div></td></tr>`; }
+        function sortRows(rows, state) { const dir=state.direction==='asc'?1:-1; return [...rows].sort((a,b) => { let av=a[state.key], bv=b[state.key]; if (state.type==='number') { av=av==null?-Infinity:Number(av); bv=bv==null?-Infinity:Number(bv); } else { av=String(av??''); bv=String(bv??''); } return av<bv?-dir:av>bv?dir:0; }); }
+        function updateSortHeaders() { document.querySelectorAll('th[data-table="issuers"]').forEach(th => { th.textContent=th.textContent.replace(/[▲▼]/g,'').trim()+(th.dataset.key===sortState.issuers.key?(sortState.issuers.direction==='asc'?' ▲':' ▼'):''); }); }
+        function updateIssuerSummarySortHeaders() { document.querySelectorAll('th[data-table="issuer-summary"]').forEach(th => { th.textContent=th.textContent.replace(/[▲▼]/g,'').trim()+(th.dataset.key===sortState.issuerSummary.key?(sortState.issuerSummary.direction==='asc'?' ▲':' ▼'):''); }); }
+
+        let suggestionTimer;
+        let suggestionRequestId = 0;
+
+        function normalizeSearchResult(result) {
+            if (!result || typeof result !== 'object') return null;
+            return {
+                issuer: String(result.issuer || '').trim(),
+                label: String(result.label || '').trim(),
+                match_type: result.match_type === 'bond' ? 'bond' : 'issuer',
+            };
+        }
+
+        async function searchIssuers(query) {
+            const response = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
+            if (!response.ok) return [];
+            const data = await response.json();
+            return (data.results || []).map(normalizeSearchResult).filter(result => result?.issuer && result?.label);
+        }
+
+        function selectSearchResult(results, query) {
+            return results.find(result => result.match_type === 'bond' && result.label === query)
+                || results.find(result => result.match_type === 'issuer' && result.label === query)
+                || (results.length === 1 ? results[0] : null);
+        }
+
+        function renderSuggestions(results) {
+            $('suggestions').innerHTML = results.map(result => {
+                const isBond = result.match_type === 'bond';
+                return `<button class="suggestion" data-suggestion="${encodeURIComponent(result.issuer)}">
+                    <span class="suggestion-label">${esc(result.label)}</span>
+                    ${isBond ? `<span class="suggestion-meta">${esc(result.issuer)}</span>` : ''}
+                    <span class="suggestion-type">${isBond ? '债券' : '发行人'}</span>
+                </button>`;
+            }).join('');
+            $('suggestions').classList.toggle('show', results.length > 0);
+        }
+
+        $('globalIssuerSearch').addEventListener('input', e => {
+            clearTimeout(suggestionTimer); const q=e.target.value.trim(); const requestId=++suggestionRequestId;
+            if ($('status').classList.contains('error')) setStatus();
+            if(q.length<2){$('suggestions').classList.remove('show');return;}
+            suggestionTimer=setTimeout(async()=>{
+                const results=await searchIssuers(q);
+                if(requestId===suggestionRequestId) renderSuggestions(results);
+            },220);
+        });
+        $('globalIssuerSearch').addEventListener('keydown', async e => {
+            if(e.key!=='Enter'||!e.target.value.trim()) return;
+            e.preventDefault();
+            const query=e.target.value.trim();
+            const results=await searchIssuers(query);
+            const matchedResult=selectSearchResult(results,query);
+            if(matchedResult){ $('suggestions').classList.remove('show'); openIssuer(matchedResult.issuer); return; }
+            if(results.length){ renderSuggestions(results); return; }
+            $('suggestions').classList.remove('show'); setStatus('未找到匹配的发行人或债券简称', true);
+        });
+        document.addEventListener('click', e => {
+            const suggestion=e.target.closest('[data-suggestion]'); if(suggestion){$('suggestions').classList.remove('show');openIssuer(decodeURIComponent(suggestion.dataset.suggestion));return;}
+            if(!e.target.closest('.global-search')) $('suggestions').classList.remove('show');
+            const date=e.target.closest('[data-date]'); if(date){$('issueDate').value=inputDate(date.dataset.date);setView('date',true);return;}
+            const issuer=e.target.closest('[data-issuer]'); if(issuer){openIssuer(decodeURIComponent(issuer.dataset.issuer),appState.view==='date'?compact($('issueDate').value):appState.sourceDate);return;}
+            const back=e.target.closest('[data-back-date]'); if(back){$('issueDate').value=inputDate(back.dataset.backDate);setView('date',true);return;}
+            const viewLink=e.target.closest('[data-view-link]'); if(viewLink){setView(viewLink.dataset.viewLink,true);return;}
+        });
+        document.querySelectorAll('.tab').forEach(tab => tab.addEventListener('click', () => setView(tab.dataset.view, true)));
+        document.querySelectorAll('th[data-table="issuers"]').forEach(th => th.addEventListener('click', () => { const s=sortState.issuers; s.direction=s.key===th.dataset.key&&s.direction==='asc'?'desc':'asc';s.key=th.dataset.key;s.type=th.dataset.type||'string';renderIssuerRows(); }));
+        document.querySelectorAll('th[data-table="issuer-summary"]').forEach(th => th.addEventListener('click', () => { const s=sortState.issuerSummary; s.direction=s.key===th.dataset.key&&s.direction==='asc'?'desc':'asc';s.key=th.dataset.key;s.type=th.dataset.type||'string';renderIssuerSummaryRows(); }));
+        $('marketQuery').addEventListener('click', loadMarket); $('dateQuery').addEventListener('click', loadDate); $('issuerQuery').addEventListener('click', loadIssuer); $('issuerSummaryQuery').addEventListener('click', loadIssuerSummary); $('issuerSummaryExport').addEventListener('click', exportIssuerSummaryCsv);
+        ['issuerSummarySearch', 'issuerSummaryMinSample'].forEach(id => $(id).addEventListener('input', () => { if (appState.issuerSummaryData) renderIssuerSummaryRows(); }));
+        $('marketPresets').addEventListener('click', e => { const b=e.target.closest('.preset');if(!b)return;document.querySelectorAll('.preset').forEach(x=>x.classList.toggle('active',x===b));const end=$('marketEnd').value;if(b.dataset.months)$('marketStart').value=offsetMonths(end,Number(b.dataset.months));if(b.dataset.preset==='ytd')$('marketStart').value=`${end.slice(0,4)}-01-01`;if(b.dataset.preset==='all')$('marketStart').value=inputDate(appState.meta.start_date);loadMarket(); });
+        window.addEventListener('resize', () => Object.values(charts).forEach(chart => chart && !chart.isDisposed() && chart.resize()));
+        window.addEventListener('popstate', () => restoreFromUrl(false));
+
+        async function restoreFromUrl(initial = false) {
+            const p=new URLSearchParams(location.search);loadFiltersFromUrl(p);const view=['market','date','issuer','issuerSummary'].includes(p.get('view'))?p.get('view'):'market';
+            if(p.get('date'))$('issueDate').value=inputDate(p.get('date'));
+            if(view==='market'&&p.get('start'))$('marketStart').value=inputDate(p.get('start'));if(view==='market'&&p.get('end'))$('marketEnd').value=inputDate(p.get('end'));
+            appState.issuer=p.get('issuer')||'';appState.sourceDate=p.get('source_date')||'';if(view==='issuer'){if(p.get('start'))$('issuerStart').value=inputDate(p.get('start'));if(p.get('end'))$('issuerEnd').value=inputDate(p.get('end'));$('globalIssuerSearch').value=appState.issuer;}
+            if(view==='issuerSummary'){if(p.get('start'))$('issuerSummaryStart').value=inputDate(p.get('start'));if(p.get('end'))$('issuerSummaryEnd').value=inputDate(p.get('end'));}
+            setView(view,!initial&&false);
+        }
+
+        async function init() {
+            initFilters(); iconRefresh();
+            const response=await fetch('/api/cache/meta');appState.meta=await response.json();
+            $('coverageMeta').textContent=`发行数据至 ${displayDate(appState.meta.max_end_date)} · 完整定价截至 ${displayDate(appState.meta.default_end_date)} · ${integer(appState.meta.issuer_count)} 家发行人`;
+            const end=inputDate(appState.meta.default_end_date);$('marketEnd').value=end;$('marketStart').value=offsetMonths(end,3);$('issueDate').value=end;$('issuerStart').value=inputDate(appState.meta.start_date);$('issuerEnd').value=end;$('issuerSummaryStart').value=inputDate(appState.meta.start_date);$('issuerSummaryEnd').value=end;
+            await restoreFromUrl(true);
+        }
+        init();
+    </script>
+</body>
+</html>

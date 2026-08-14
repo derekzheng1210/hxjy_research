@@ -1,0 +1,519 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>债券信用利差监控系统</title>
+<style>
+/* ===== Reset & Base ===== */
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;
+  background:#f0f2f5;color:#1a1a2e;font-size:13px;line-height:1.4}
+/* ===== Header ===== */
+.header{background:#fff;color:#1e293b;
+  padding:14px 24px;display:flex;justify-content:space-between;align-items:center;
+  border-bottom:1px solid #e2e8f0}
+.header h1{font-size:18px;font-weight:600;letter-spacing:1px}
+.header .meta{font-size:12px;opacity:.8}
+/* ===== Tabs ===== */
+.tabs{display:flex;background:#fff;border-bottom:2px solid #e8e8e8;padding:0 24px;position:sticky;top:48px;z-index:90}
+.tab{padding:10px 24px;cursor:pointer;font-size:14px;font-weight:500;color:#666;
+  border-bottom:3px solid transparent;transition:all .2s}
+.tab:hover{color:#1a1a2e}
+.tab.active{color:#1a1a2e;border-bottom-color:#4361ee}
+.tab .badge{background:#4361ee;color:#fff;font-size:11px;padding:1px 7px;
+  border-radius:10px;margin-left:6px}
+/* ===== Filter Bar ===== */
+.filter-bar{background:#fff;padding:12px 24px;display:flex;flex-wrap:wrap;gap:10px;
+  align-items:center;border-bottom:1px solid #e8e8e8}
+.filter-group{display:flex;align-items:center;gap:4px}
+.filter-group label{font-size:12px;color:#666;white-space:nowrap}
+.filter-group select,.filter-group input{height:30px;border:1px solid #d0d0d0;
+  border-radius:4px;padding:0 8px;font-size:12px;background:#fff}
+.filter-group select{min-width:90px}
+.filter-group input[type="text"]{width:160px}
+.filter-group input[type="number"]{width:60px}
+.btn{height:30px;padding:0 14px;border:none;border-radius:4px;cursor:pointer;
+  font-size:12px;font-weight:500;transition:all .15s}
+.btn-primary{background:#4361ee;color:#fff}
+.btn-primary:hover{background:#3651d4}
+.btn-outline{background:#fff;color:#4361ee;border:1px solid #4361ee}
+.btn-outline:hover{background:#f0f3ff}
+.btn-export{background:#10b981;color:#fff}
+.btn-export:hover{background:#059669}
+/* ===== Stats ===== */
+.stats{background:#fff;padding:8px 24px;display:flex;gap:24px;border-bottom:1px solid #e8e8e8;font-size:12px}
+.stat-item{display:flex;align-items:center;gap:4px}
+.stat-item .val{font-weight:700;font-size:13px}
+.stat-item .val.red{color:#e63946}
+.stat-item .val.green{color:#2d6a4f}
+/* ===== Table ===== */
+.table-wrap{overflow-x:auto;background:#fff;flex:1}
+table{width:100%;border-collapse:collapse;table-layout:fixed;min-width:1600px}
+thead{position:sticky;top:0;z-index:10}
+thead th{background:#f8f9fb;color:#444;font-weight:600;font-size:12px;
+  padding:8px 6px;text-align:center;border-bottom:2px solid #e0e0e0;
+  cursor:pointer;user-select:none;white-space:nowrap;position:relative}
+thead th:hover{background:#eef0f4}
+thead th .sort-arrow{font-size:10px;margin-left:2px;opacity:.4}
+thead th.sorted .sort-arrow{opacity:1;color:#4361ee}
+tbody tr{border-bottom:1px solid #f0f0f0;transition:background .1s}
+tbody tr:hover{background:#f5f7ff}
+tbody tr.holding{background:#fffde7}
+tbody tr.holding:hover{background:#fff9c4}
+td{padding:6px 6px;text-align:center;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+td.name{text-align:left;font-weight:500}
+td.code{text-align:left;font-family:"Consolas","Courier New",monospace;font-size:11px}
+/* Spread color */
+.sp-pos{color:#e63946;font-weight:600}
+.sp-neg{color:#2d6a4f;font-weight:600}
+.sp-pos-bg1{background:rgba(230,57,70,.06)}
+.sp-pos-bg2{background:rgba(230,57,70,.12)}
+.sp-pos-bg3{background:rgba(230,57,70,.20)}
+.sp-neg-bg1{background:rgba(45,106,79,.06)}
+.sp-neg-bg2{background:rgba(45,106,79,.12)}
+.sp-neg-bg3{background:rgba(45,106,79,.20)}
+/* Holding marker */
+.hold-marker{display:inline-block;width:4px;height:16px;background:#ffc107;
+  border-radius:2px;vertical-align:middle;margin-right:4px}
+/* ===== Pagination ===== */
+.pagination{background:#fff;padding:10px 24px;display:flex;justify-content:space-between;
+  align-items:center;border-top:1px solid #e8e8e8;font-size:12px}
+.page-info{color:#666}
+.page-btns{display:flex;gap:4px}
+.page-btn{width:30px;height:28px;display:flex;align-items:center;justify-content:center;
+  border:1px solid #d0d0d0;border-radius:4px;cursor:pointer;font-size:12px;background:#fff}
+.page-btn:hover{background:#f0f3ff;border-color:#4361ee}
+.page-btn.active{background:#4361ee;color:#fff;border-color:#4361ee}
+.page-btn.disabled{opacity:.4;cursor:default;pointer-events:none}
+.page-size{display:flex;align-items:center;gap:6px}
+.page-size select{height:28px;border:1px solid #d0d0d0;border-radius:4px;padding:0 6px;font-size:12px}
+/* ===== Layout ===== */
+.app{display:flex;flex-direction:column;height:100vh;overflow:hidden}
+/* ===== Loading ===== */
+.loading{display:flex;align-items:center;justify-content:center;height:300px;
+  color:#999;font-size:16px}
+.loading .spinner{width:24px;height:24px;border:3px solid #e0e0e0;border-top-color:#4361ee;
+  border-radius:50%;animation:spin .8s linear infinite;margin-right:10px}
+@keyframes spin{to{transform:rotate(360deg)}}
+/* ===== Column widths ===== */
+.col-hold{width:30px}
+.col-code{width:130px}
+.col-name{width:180px}
+.col-rating{width:60px}
+.col-term{width:65px}
+.col-yield{width:70px}
+.col-curve{width:80px}
+.col-cyield{width:70px}
+.col-spread{width:72px}
+.col-change{width:68px}
+</style>
+</head>
+<body>
+
+<script src="{{ url_for('spread_data_js') }}"></script>
+<div class="app" id="app">
+  <!-- Header -->
+  <div class="header">
+    <h1>债券信用利差监控系统</h1>
+    <div class="meta">
+      <span id="updateTime">--</span>
+      <span style="margin-left:16px" id="dateInfo"></span>
+    </div>
+  </div>
+
+  <!-- Tabs -->
+  <div class="tabs">
+    <div class="tab active" data-tab="all" onclick="switchTab('all')">
+      全市场 <span class="badge" id="badgeAll">0</span>
+    </div>
+    <div class="tab" data-tab="holding" onclick="switchTab('holding')">
+      持仓 <span class="badge" id="badgeHolding">0</span>
+    </div>
+  </div>
+
+  <!-- Filter Bar -->
+  <div class="filter-bar">
+    <div class="filter-group">
+      <label>评级</label>
+      <select id="filterRating"><option value="">全部</option></select>
+    </div>
+    <div class="filter-group">
+      <label>期限</label>
+      <input type="number" id="termMin" placeholder="最小" step="0.5" min="0">
+      <span>~</span>
+      <input type="number" id="termMax" placeholder="最大" step="0.5" min="0">
+      <label>年</label>
+    </div>
+    <div class="filter-group">
+      <label>搜索</label>
+      <input type="text" id="searchInput" placeholder="代码 / 名称">
+    </div>
+    <button class="btn btn-primary" onclick="applyFilter()">筛选</button>
+    <button class="btn btn-outline" onclick="resetFilter()">重置</button>
+    <div style="flex:1"></div>
+    <button class="btn btn-export" onclick="exportCSV()">导出 CSV</button>
+  </div>
+
+  <!-- Stats -->
+  <div class="stats">
+    <div class="stat-item">显示 <span class="val" id="statShown">0</span> 只</div>
+    <div class="stat-item">日利差走扩>5bp <span class="val red" id="statWiden">0</span></div>
+    <div class="stat-item">日利差收窄>5bp <span class="val green" id="statNarrow">0</span></div>
+    <div class="stat-item">平均利差 <span class="val" id="statAvgSpread">--</span> bp</div>
+  </div>
+
+  <!-- Table -->
+  <div class="table-wrap" id="tableWrap">
+    <table>
+      <thead id="thead">
+        <tr>
+          <th class="col-hold"></th>
+          <th class="col-code" data-key="code" onclick="sortBy('code')">证券代码 <span class="sort-arrow">▼</span></th>
+          <th class="col-name" data-key="name" onclick="sortBy('name')">证券名称 <span class="sort-arrow">▼</span></th>
+          <th class="col-rating" data-key="implied_rating" onclick="sortBy('implied_rating')">隐含评级 <span class="sort-arrow">▼</span></th>
+          <th class="col-term" data-key="term" onclick="sortBy('term')">期限(年) <span class="sort-arrow">▼</span></th>
+          <th class="col-yield" data-key="current_yield" onclick="sortBy('current_yield')">估值(%) <span class="sort-arrow">▼</span></th>
+          <th class="col-curve" data-key="curve_name">曲线</th>
+          <th class="col-cyield" data-key="current_curve_yield" onclick="sortBy('current_curve_yield')">曲线(%) <span class="sort-arrow">▼</span></th>
+          <th class="col-spread" data-key="spread_current" onclick="sortBy('spread_current')">当前利差 <span class="sort-arrow">▼</span></th>
+          <th class="col-spread" data-key="spread_yesterday" onclick="sortBy('spread_yesterday')">昨日利差 <span class="sort-arrow">▼</span></th>
+          <th class="col-spread" data-key="spread_week" onclick="sortBy('spread_week')">上周利差 <span class="sort-arrow">▼</span></th>
+          <th class="col-spread" data-key="spread_month" onclick="sortBy('spread_month')">上月利差 <span class="sort-arrow">▼</span></th>
+          <th class="col-spread" data-key="spread_year_start" onclick="sortBy('spread_year_start')">年初利差 <span class="sort-arrow">▼</span></th>
+          <th class="col-change" data-key="change_daily" onclick="sortBy('change_daily')">日变化 <span class="sort-arrow">▼</span></th>
+          <th class="col-change" data-key="change_weekly" onclick="sortBy('change_weekly')">周变化 <span class="sort-arrow">▼</span></th>
+          <th class="col-change" data-key="change_monthly" onclick="sortBy('change_monthly')">月变化 <span class="sort-arrow">▼</span></th>
+          <th class="col-change" data-key="change_ytd" onclick="sortBy('change_ytd')">年初至今 <span class="sort-arrow">▼</span></th>
+        </tr>
+      </thead>
+      <tbody id="tbody"></tbody>
+    </table>
+  </div>
+
+  <!-- Pagination -->
+  <div class="pagination">
+    <div class="page-info" id="pageInfo">第 0-0 条 / 共 0 条</div>
+    <div class="page-btns" id="pageBtns"></div>
+    <div class="page-size">
+      <label>每页</label>
+      <select id="pageSize" onchange="changePageSize()">
+        <option value="50">50</option>
+        <option value="100" selected>100</option>
+        <option value="200">200</option>
+        <option value="500">500</option>
+      </select>
+    </div>
+  </div>
+</div>
+
+<script>
+// ===== State =====
+let allData = [];
+let filteredData = [];
+let currentTab = 'all';
+let currentPage = 1;
+let pageSize = 100;
+let sortKey = 'change_daily';
+let sortAsc = false; // 默认降序（异动优先）
+let ratings = new Set();
+
+// ===== Init =====
+window.addEventListener('DOMContentLoaded', () => {
+  loadData();
+  document.getElementById('searchInput').addEventListener('keyup', e => {
+    if (e.key === 'Enter') applyFilter();
+  });
+});
+
+function loadData() {
+  const tbody = document.getElementById('tbody');
+  tbody.innerHTML = '<tr><td colspan="17"><div class="loading"><div class="spinner"></div>加载数据中...</div></td></tr>';
+
+  // 从 <script> 标签加载的全局变量读取数据（兼容 file:// 协议）
+  if (typeof SPREAD_DATA === 'undefined') {
+    tbody.innerHTML = '<tr><td colspan="17" style="padding:40px;text-align:center;color:#e63946;font-size:14px">' +
+      '加载失败: 数据文件不存在<br><br>请运行 run_mock.bat 生成测试数据</td></tr>';
+    return;
+  }
+
+  const json = SPREAD_DATA;
+  allData = json.data || [];
+  document.getElementById('updateTime').textContent = '更新: ' + (json.update_time || '--');
+  if (json.dates) {
+    const d = json.dates;
+    document.getElementById('dateInfo').textContent =
+      `当前:${d['当前']||''} | 昨日:${d['昨日']||''} | 周:${d['一周前']||''} | 月:${d['一月前']||''} | 年初:${d['年初']||''}`;
+  }
+
+  // 收集分类和评级选项
+  allData.forEach(d => {
+    if (d.implied_rating) ratings.add(d.implied_rating);
+  });
+  const ratingOrder = ['AAA+','AAA','AAA-','AA+','AA','AA-','A+','A','A-','BBB+','BBB'];
+  populateSelect('filterRating', [...ratings].sort((a,b) => {
+    const ia = ratingOrder.indexOf(a), ib = ratingOrder.indexOf(b);
+    return (ia===-1?99:ia) - (ib===-1?99:ib);
+  }));
+
+  document.getElementById('badgeAll').textContent = allData.length;
+  document.getElementById('badgeHolding').textContent = allData.filter(d=>d.is_holding).length;
+
+  applyFilter();
+}
+
+function populateSelect(id, options) {
+  const sel = document.getElementById(id);
+  const current = sel.value;
+  while (sel.options.length > 1) sel.remove(1);
+  options.forEach(opt => {
+    const o = document.createElement('option');
+    o.value = opt; o.textContent = opt;
+    sel.appendChild(o);
+  });
+  sel.value = current;
+}
+
+// ===== Tab =====
+function switchTab(tab) {
+  currentTab = tab;
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
+  currentPage = 1;
+  applyFilter();
+}
+
+// ===== Filter =====
+function applyFilter() {
+  const rating = document.getElementById('filterRating').value;
+  const termMin = parseFloat(document.getElementById('termMin').value) || 0;
+  const termMax = parseFloat(document.getElementById('termMax').value) || Infinity;
+  const search = document.getElementById('searchInput').value.trim().toLowerCase();
+
+  filteredData = allData.filter(d => {
+    if (currentTab === 'holding' && !d.is_holding) return false;
+    if (rating && d.implied_rating !== rating) return false;
+    if (d.term < termMin || d.term > termMax) return false;
+    if (search) {
+      const s = (d.code + ' ' + d.raw_code + ' ' + d.name).toLowerCase();
+      if (!s.includes(search)) return false;
+    }
+    return true;
+  });
+
+  // Sort
+  doSort();
+  currentPage = 1;
+  render();
+}
+
+function resetFilter() {
+  document.getElementById('filterRating').value = '';
+  document.getElementById('termMin').value = '';
+  document.getElementById('termMax').value = '';
+  document.getElementById('searchInput').value = '';
+  applyFilter();
+}
+
+// ===== Sort =====
+function sortBy(key) {
+  if (sortKey === key) {
+    sortAsc = !sortAsc;
+  } else {
+    sortKey = key;
+    sortAsc = false; // 默认降序
+  }
+  // 更新 UI
+  document.querySelectorAll('#thead th').forEach(th => {
+    th.classList.toggle('sorted', th.dataset.key === key);
+    const arrow = th.querySelector('.sort-arrow');
+    if (arrow) arrow.textContent = (th.dataset.key === key && sortAsc) ? '▲' : '▼';
+  });
+  doSort();
+  currentPage = 1;
+  render();
+}
+
+function doSort() {
+  filteredData.sort((a, b) => {
+    let va = a[sortKey], vb = b[sortKey];
+    // null 排最后
+    if (va == null && vb == null) return 0;
+    if (va == null) return 1;
+    if (vb == null) return -1;
+    // 对利差变化列按绝对值排序（可选）
+    if (typeof va === 'number' && typeof vb === 'number') {
+      return sortAsc ? va - vb : vb - va;
+    }
+    // 字符串
+    va = String(va); vb = String(vb);
+    return sortAsc ? va.localeCompare(vb, 'zh') : vb.localeCompare(va, 'zh');
+  });
+}
+
+// ===== Render =====
+function render() {
+  const tbody = document.getElementById('tbody');
+  const total = filteredData.length;
+  const start = (currentPage - 1) * pageSize;
+  const end = Math.min(start + pageSize, total);
+  const pageData = filteredData.slice(start, end);
+
+  // Stats
+  document.getElementById('statShown').textContent = total;
+  let widen = 0, narrow = 0, sumSpread = 0, countSpread = 0;
+  filteredData.forEach(d => {
+    if (d.change_daily != null && d.change_daily > 5) widen++;
+    if (d.change_daily != null && d.change_daily < -5) narrow++;
+    if (d.spread_current != null) { sumSpread += d.spread_current; countSpread++; }
+  });
+  document.getElementById('statWiden').textContent = widen;
+  document.getElementById('statNarrow').textContent = narrow;
+  document.getElementById('statAvgSpread').textContent = countSpread ? (sumSpread / countSpread).toFixed(1) : '--';
+
+  // Table body
+  let html = '';
+  for (const d of pageData) {
+    const holdCls = d.is_holding ? ' class="holding"' : '';
+    const holdMark = d.is_holding ? '<span class="hold-marker"></span>' : '';
+    html += `<tr${holdCls}>`;
+    html += `<td>${holdMark}</td>`;
+    html += `<td class="code">${esc(d.raw_code || d.code)}</td>`;
+    html += `<td class="name" title="${esc(d.name)}">${esc(d.name)}</td>`;
+    html += `<td>${esc(d.implied_rating)}</td>`;
+    html += `<td>${fmtNum(d.term, 2)}</td>`;
+    html += `<td>${fmtNum(d.current_yield, 4)}</td>`;
+    html += `<td title="${esc(d.curve_name)}">${esc(d.curve_name)}</td>`;
+    html += `<td>${fmtNum(d.current_curve_yield, 4)}</td>`;
+    html += `<td>${fmtSpread(d.spread_current)}</td>`;
+    html += `<td>${fmtSpread(d.spread_yesterday)}</td>`;
+    html += `<td>${fmtSpread(d.spread_week)}</td>`;
+    html += `<td>${fmtSpread(d.spread_month)}</td>`;
+    html += `<td>${fmtSpread(d.spread_year_start)}</td>`;
+    html += fmtChange(d.change_daily);
+    html += fmtChange(d.change_weekly);
+    html += fmtChange(d.change_monthly);
+    html += fmtChange(d.change_ytd);
+    html += '</tr>';
+  }
+  tbody.innerHTML = html || '<tr><td colspan="17" style="padding:30px;text-align:center;color:#999">无匹配数据</td></tr>';
+
+  // Pagination
+  renderPagination(total, start, end);
+}
+
+function fmtNum(v, dec) {
+  if (v == null) return '<span style="color:#ccc">--</span>';
+  return Number(v).toFixed(dec);
+}
+
+function fmtSpread(v) {
+  if (v == null) return '<span style="color:#ccc">--</span>';
+  return Number(v).toFixed(2);
+}
+
+function fmtChange(v) {
+  if (v == null) return '<td><span style="color:#ccc">--</span></td>';
+  const n = Number(v);
+  const abs = Math.abs(n);
+  let cls = '', bgCls = '';
+  if (n > 0) {
+    cls = 'sp-pos';
+    bgCls = abs >= 10 ? 'sp-pos-bg3' : abs >= 5 ? 'sp-pos-bg2' : abs >= 3 ? 'sp-pos-bg1' : '';
+  } else if (n < 0) {
+    cls = 'sp-neg';
+    bgCls = abs >= 10 ? 'sp-neg-bg3' : abs >= 5 ? 'sp-neg-bg2' : abs >= 3 ? 'sp-neg-bg1' : '';
+  }
+  const sign = n > 0 ? '+' : '';
+  return `<td class="${bgCls}"><span class="${cls}">${sign}${n.toFixed(2)}</span></td>`;
+}
+
+function esc(s) { return s ? String(s).replace(/</g,'<').replace(/>/g,'>') : ''; }
+
+// ===== Pagination =====
+function renderPagination(total, start, end) {
+  document.getElementById('pageInfo').textContent =
+    `第 ${total?start+1:0}-${end} 条 / 共 ${total} 条`;
+
+  const totalPages = Math.ceil(total / pageSize) || 1;
+  const btns = document.getElementById('pageBtns');
+  let html = '';
+
+  html += `<div class="page-btn ${currentPage<=1?'disabled':''}" onclick="goPage(${currentPage-1})">&laquo;</div>`;
+
+  // 显示页码（最多7个）
+  let pages = [];
+  if (totalPages <= 7) {
+    for (let i=1;i<=totalPages;i++) pages.push(i);
+  } else {
+    pages = [1];
+    let s = Math.max(2, currentPage - 2);
+    let e = Math.min(totalPages - 1, currentPage + 2);
+    if (s > 2) pages.push('...');
+    for (let i=s;i<=e;i++) pages.push(i);
+    if (e < totalPages-1) pages.push('...');
+    pages.push(totalPages);
+  }
+  for (const p of pages) {
+    if (p === '...') {
+      html += '<div class="page-btn disabled">...</div>';
+    } else {
+      html += `<div class="page-btn ${p===currentPage?'active':''}" onclick="goPage(${p})">${p}</div>`;
+    }
+  }
+
+  html += `<div class="page-btn ${currentPage>=totalPages?'disabled':''}" onclick="goPage(${currentPage+1})">&raquo;</div>`;
+  btns.innerHTML = html;
+}
+
+function goPage(p) {
+  const totalPages = Math.ceil(filteredData.length / pageSize) || 1;
+  if (p < 1 || p > totalPages) return;
+  currentPage = p;
+  render();
+  document.getElementById('tableWrap').scrollTop = 0;
+}
+
+function changePageSize() {
+  pageSize = parseInt(document.getElementById('pageSize').value) || 100;
+  currentPage = 1;
+  render();
+}
+
+// ===== Export =====
+function exportCSV() {
+  const headers = [
+    '证券代码','证券名称','隐含评级','期限(年)',
+    '估值(%)','对应曲线','曲线收益率(%)',
+    '当前利差(bp)','昨日利差(bp)','上周利差(bp)','上月利差(bp)','年初利差(bp)',
+    '日变化(bp)','周变化(bp)','月变化(bp)','年初至今(bp)','是否持仓'
+  ];
+  const keys = [
+    'raw_code','name','implied_rating','term',
+    'current_yield','curve_name','current_curve_yield',
+    'spread_current','spread_yesterday','spread_week','spread_month','spread_year_start',
+    'change_daily','change_weekly','change_monthly','change_ytd','is_holding'
+  ];
+
+  let csv = '\uFEFF' + headers.join(',') + '\n'; // BOM for Excel
+  filteredData.forEach(d => {
+    const row = keys.map(k => {
+      let v = d[k];
+      if (v == null) return '';
+      if (k === 'is_holding') return v ? '是' : '否';
+      if (typeof v === 'string' && v.includes(',')) return '"' + v + '"';
+      return v;
+    });
+    csv += row.join(',') + '\n';
+  });
+
+  const blob = new Blob([csv], {type:'text/csv;charset=utf-8'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `利差监控_${currentTab}_${new Date().toISOString().slice(0,10)}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+</script>
+</body>
+</html>

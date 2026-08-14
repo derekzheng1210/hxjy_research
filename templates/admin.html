@@ -1,0 +1,160 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>后台上传 - 信用债研究平台</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#f3f4f6;color:#111827;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif}
+
+/* ===== Main Content ===== */
+.main{max-width:980px;margin:0 auto;padding:24px}
+.msg{border-radius:6px;padding:10px 12px;font-size:13px;margin-bottom:14px}
+.ok{background:#ecfdf5;color:#047857;border:1px solid #a7f3d0}
+.err{background:#fef2f2;color:#b91c1c;border:1px solid #fecaca}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px}
+.card{background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:18px}
+.card h2{font-size:16px;margin:0 0 8px}
+.card p{font-size:13px;color:#4b5563;line-height:1.6;margin:0 0 14px}
+input[type=file],input[type=date]{width:100%;font-size:13px;border:1px solid #d1d5db;border-radius:6px;padding:8px;background:#fff}
+input[type=checkbox]{width:14px;height:14px;accent-color:#2563eb}
+button{height:34px;margin-top:12px;border:0;border-radius:6px;background:#2563eb;color:#fff;font-weight:700;padding:0 14px;cursor:pointer}
+button:disabled{background:#94a3b8;cursor:not-allowed}
+.meta{margin-top:14px;font-size:12px;color:#6b7280;background:#f9fafb;border-radius:6px;padding:8px 10px}
+.note{font-size:12px;color:#6b7280;margin-top:18px;line-height:1.6}
+.wide{grid-column:1/-1}
+.status{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:8px;margin-top:12px}
+.status div{background:#f9fafb;border:1px solid #eef2f7;border-radius:6px;padding:8px 10px;font-size:12px;color:#475569}
+.log{margin-top:12px;background:#0f172a;color:#e2e8f0;border-radius:6px;padding:10px;max-height:220px;overflow:auto;font-family:Consolas,monospace;font-size:12px;white-space:pre-wrap}
+.secondary{background:#475569}
+.progress{height:10px;background:#e5e7eb;border-radius:999px;overflow:hidden;margin-top:12px}
+.bar{height:100%;background:#2563eb;width:{{ update_status.percent or 0 }}%;transition:width .2s}
+.module-list{display:flex;flex-wrap:wrap;gap:10px;margin-top:12px}
+.module-list label{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:#334155;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:7px 10px}
+.field{max-width:260px;margin-top:12px}
+.field label{display:block;font-size:12px;font-weight:700;color:#334155;margin-bottom:6px}
+.admin-actions{display:flex;justify-content:flex-end;margin-bottom:12px}.admin-actions a{font-size:13px;color:#475569;text-decoration:none}.admin-actions a:hover{color:#2563eb}
+</style>
+</head>
+<body>
+
+<main class="main">
+  <div class="admin-actions"><a href="{{ url_for('admin_logout') }}">退出后台管理</a></div>
+  {% if message %}<div class="msg ok">{{ message }}</div>{% endif %}
+  {% if error %}<div class="msg err">{{ error }}</div>{% endif %}
+  <div class="grid">
+    <section class="card wide">
+      <h2>数据库一键更新</h2>
+      <p>从公司 Oracle 数据库生成两倍标准差最新曲线、策略仪表盘、存量债利差监控和机构行为曲线数据；策略仪表盘基金指数暂沿用冻结序列。任务异步运行，失败不会覆盖旧数据。</p>
+      <form id="dbUpdateForm" method="post" action="{{ url_for('admin_start_db_update') }}">
+        <div class="module-list">
+          <label><input type="checkbox" name="modules" value="bond_picker" checked>择券工具估值</label>
+          <label><input type="checkbox" name="modules" value="spread_monitor" checked>利差监控</label>
+          <label><input type="checkbox" name="modules" value="strategy_dashboard" checked>策略仪表盘</label>
+          <label><input type="checkbox" name="modules" value="credit_std_dev" checked>两倍标准差</label>
+          <label><input type="checkbox" name="modules" value="institution_flow_rates" checked>机构行为曲线</label>
+          <label><input type="checkbox" name="modules" value="primary_market_pricing" checked>一级发行定价缓存</label>
+        </div>
+        <button id="dbUpdateButton" type="submit">开始数据库更新</button>
+      </form>
+      <div id="updateMessage" class="msg" style="display:none;margin-top:12px;margin-bottom:0"></div>
+      <div class="status">
+        <div>状态：{% if update_status.running %}运行中{% elif update_status.ok == true %}成功{% elif update_status.ok == false %}失败{% else %}未运行{% endif %}</div>
+        <div>进度：{{ update_status.percent or 0 }}%</div>
+        <div>步骤：{{ update_status.step }}</div>
+        <div>开始：{{ update_status.started_at or '-' }}</div>
+        <div>结束：{{ update_status.finished_at or '-' }}</div>
+      </div>
+      <div class="progress"><div class="bar"></div></div>
+      {% if update_status.error %}<div class="msg err" style="margin-top:12px">{{ update_status.error }}</div>{% endif %}
+      <div class="log">{% for line in update_status.log[-20:] %}{{ line }}
+{% endfor %}</div>
+    </section>
+    <form class="card wide" method="post" action="{{ url_for('admin_update_settings') }}">
+      <h2>Excel 静态时间基准</h2>
+      <p>用于把统一 Excel 中的静态待偿年限重算到 Oracle 最近交易日；一键更新会先按这里的日期重算待偿期限。</p>
+      <div class="field">
+        <label for="excelTermBaseDate">Excel 待偿期限基准日</label>
+        <input id="excelTermBaseDate" type="date" name="excel_term_base_date" value="{{ status.settings.excel_term_base_date }}" required>
+      </div>
+      <button type="submit">保存基准日</button>
+      <div class="meta">当前基准日：{{ status.settings.excel_term_base_date }}</div>
+    </form>
+    <form class="card wide" method="post" enctype="multipart/form-data"><h2>统一数据 Excel</h2><p>上传数据最新版格式 Excel：Sheet3 更新择券工具和利差监控债券信息，Sheet1 更新策略仪表盘中长期纯债基金指数；估值数据由 Oracle 一键更新。</p><input type="hidden" name="target" value="unified_excel"><input type="file" name="file" accept=".xlsx,.xls" required><button type="submit">上传统一 Excel</button><div class="meta">当前文件：{{ status.unified_excel.updated }} / {{ status.unified_excel.size }}；债券：{{ status.unified_excel.total_bonds }} 条；基金指数：{{ status.unified_excel.fund_updated }}</div><div class="meta">择券工具当前估值缓存：{{ status.bond_picker.updated }} / {{ status.bond_picker.total }} 条；利差监控：{{ status.spread_monitor.updated }} / {{ status.spread_monitor.size }}</div></form>
+    <form class="card" method="post" enctype="multipart/form-data"><h2>行业景气度 HTML</h2><p>上传行业景气度跟踪静态 HTML，访问时由 Flask 注入统一顶部导航。</p><input type="hidden" name="target" value="industry_prosperity"><input type="file" name="file" accept=".html,.htm" required><button type="submit">上传 HTML</button><div class="meta">当前：{{ status.industry_prosperity.updated }} / {{ status.industry_prosperity.size }}</div></form>
+    <form class="card" method="post" enctype="multipart/form-data"><h2>两倍标准差数据</h2><p>页面随代码发布；数据库一键更新会从 Oracle 拉取最新曲线日并合并到现有 spread_data.js，历史序列继续沿用旧数据。</p><input type="hidden" name="target" value="credit_std_dev_js"><input type="file" name="file" accept=".js" required><button type="submit">上传 JS</button><div class="meta">当前：{{ status.credit_std_dev.data_updated }} / {{ status.credit_std_dev.data_size }}</div></form>
+  </div>
+  <div class="note">数据库更新依赖公司内网 Oracle。线上部署请设置 SITE_PASSWORD、ADMIN_PASSWORD、SECRET_KEY、JUYUAN_DB_USER、JUYUAN_DB_PASSWORD、JUYUAN_DB_DSN 和 JUYUAN_ORACLE_CLIENT 环境变量。机构行为数据通过现有上游接口代理。</div>
+</main>
+<script>
+const statusBox = document.querySelector('.status');
+const bar = document.querySelector('.bar');
+const log = document.querySelector('.log');
+const err = document.querySelector('.msg.err[style]');
+const dbUpdateForm = document.getElementById('dbUpdateForm');
+const dbUpdateButton = document.getElementById('dbUpdateButton');
+const updateMessage = document.getElementById('updateMessage');
+function statusText(s) {
+  if (s.running) return '运行中';
+  if (s.ok === true) return '成功';
+  if (s.ok === false) return '失败';
+  return '未运行';
+}
+function renderStatus(s) {
+  statusBox.innerHTML = [
+    '状态：' + statusText(s),
+    '进度：' + (s.percent || 0) + '%',
+    '步骤：' + (s.step || '-'),
+    '开始：' + (s.started_at || '-'),
+    '结束：' + (s.finished_at || '-')
+  ].map(x => '<div>' + x + '</div>').join('');
+  bar.style.width = (s.percent || 0) + '%';
+  log.textContent = (s.log || []).slice(-20).join('\n');
+  if (err && s.error) err.textContent = s.error;
+  if (dbUpdateButton) {
+    dbUpdateButton.disabled = !!s.running;
+    dbUpdateButton.textContent = s.running ? '更新中...' : '开始数据库更新';
+  }
+}
+function showUpdateMessage(text, ok) {
+  updateMessage.textContent = text;
+  updateMessage.className = 'msg ' + (ok ? 'ok' : 'err');
+  updateMessage.style.display = 'block';
+}
+dbUpdateForm.addEventListener('submit', (event) => {
+  event.preventDefault();
+  dbUpdateButton.disabled = true;
+  dbUpdateButton.textContent = '正在启动...';
+  showUpdateMessage('正在启动数据库更新...', true);
+  renderStatus({
+    running: true,
+    ok: null,
+    percent: 0,
+    step: '准备开始',
+    started_at: '-',
+    finished_at: '-',
+    log: []
+  });
+  fetch(dbUpdateForm.action, {
+    method: 'POST',
+    headers: {'X-Requested-With': 'XMLHttpRequest'},
+    body: new FormData(dbUpdateForm)
+  })
+    .then(r => r.json())
+    .then(data => {
+      showUpdateMessage(data.message || (data.ok ? '数据库更新任务已启动' : '启动失败'), !!data.ok);
+      if (data.status) renderStatus(data.status);
+    })
+    .catch(() => {
+      showUpdateMessage('启动失败：无法连接后台接口', false);
+      dbUpdateButton.disabled = false;
+      dbUpdateButton.textContent = '开始数据库更新';
+    });
+});
+setInterval(() => {
+  fetch('{{ url_for("api_update_status") }}').then(r => r.json()).then(renderStatus).catch(() => {});
+}, 2000);
+</script>
+</body>
+</html>

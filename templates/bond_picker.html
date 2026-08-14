@@ -1,0 +1,1136 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>信用债择券辅助工具</title>
+<style>
+/* ====== Reset & Base ====== */
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --pri:#2563eb;--pri-l:#dbeafe;--pri-d:#1d4ed8;
+  --red:#dc2626;--red-l:#fef2f2;--red-b:#fecaca;
+  --grn:#059669;--grn-l:#ecfdf5;--grn-b:#a7f3d0;
+  --org:#d97706;--org-l:#fffbeb;
+  --bg:#f1f5f9;--srf:#fff;--bdr:#e2e8f0;
+  --tx:#1e293b;--tx2:#64748b;--tx3:#94a3b8;
+  --font:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+  --radius:8px;--shadow:0 1px 3px rgba(0,0,0,.08),0 1px 2px rgba(0,0,0,.06);
+}
+html{font-size:13px}
+body{font-family:var(--font);color:var(--tx);background:var(--bg);line-height:1.6}
+a{color:var(--pri);text-decoration:none}
+
+/* ====== Layout ====== */
+.header{background:linear-gradient(135deg,#f8fafc,#eff6ff);color:#1e293b;padding:20px 28px;border-bottom:2px solid #e2e8f0;position:sticky;top:48px;z-index:100}
+.header h1{font-size:1.4rem;font-weight:700;letter-spacing:.5px;color:#1e293b}
+.header .sub{font-size:.85rem;color:#64748b;margin-top:2px}
+.main{max-width:1400px;margin:0 auto;padding:16px}
+
+/* ====== Cards ====== */
+.card{background:var(--srf);border-radius:var(--radius);box-shadow:var(--shadow);border:1px solid var(--bdr);margin-bottom:14px;overflow:visible}
+.card-title{font-size:.92rem;font-weight:600;padding:12px 16px;background:#f8fafc;border-bottom:1px solid var(--bdr);display:flex;align-items:center;gap:8px}
+.card-body{padding:14px 16px}
+
+/* ====== Controls ====== */
+.ctrl-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px 16px;align-items:end}
+.ctrl-group{display:flex;flex-direction:column;gap:3px}
+.ctrl-group label{font-size:.78rem;color:var(--tx2);font-weight:500}
+.ctrl-group input,.ctrl-group select{
+  height:34px;padding:0 10px;border:1px solid var(--bdr);border-radius:6px;
+  font-size:.85rem;background:#fff;color:var(--tx);transition:border .2s;outline:none;
+}
+.ctrl-group input:focus,.ctrl-group select:focus{border-color:var(--pri);box-shadow:0 0 0 3px var(--pri-l)}
+.btn{
+  height:34px;padding:0 20px;border:none;border-radius:6px;font-size:.85rem;font-weight:600;
+  cursor:pointer;transition:all .15s;display:inline-flex;align-items:center;justify-content:center;gap:6px;
+}
+.btn-pri{background:var(--pri);color:#fff}.btn-pri:hover{background:var(--pri-d)}
+.btn-out{background:#fff;color:var(--tx2);border:1px solid var(--bdr)}.btn-out:hover{background:#f8fafc}
+.btn-sm{height:28px;padding:0 12px;font-size:.78rem}
+.divider{border:none;border-top:1px dashed var(--bdr);margin:10px 0}
+
+/* ====== Summary Stats ====== */
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:14px}
+.stat-card{background:var(--srf);border:1px solid var(--bdr);border-radius:var(--radius);padding:14px 16px;text-align:center}
+.stat-val{font-size:1.5rem;font-weight:700;color:var(--pri);line-height:1.2}
+.stat-label{font-size:.75rem;color:var(--tx2);margin-top:2px}
+.stat-card.danger .stat-val{color:var(--red)}
+.stat-card.success .stat-val{color:var(--grn)}
+
+/* ====== Tabs ====== */
+.tabs{display:flex;gap:0;margin-bottom:14px;border-bottom:2px solid var(--bdr);position:sticky;top:62px;background:var(--bg);z-index:50;padding-top:4px}
+.tab-btn{
+  padding:8px 22px;font-size:.88rem;font-weight:500;color:var(--tx2);
+  border:none;background:none;cursor:pointer;border-bottom:2px solid transparent;
+  margin-bottom:-2px;transition:all .15s;
+}
+.tab-btn:hover{color:var(--tx)}
+.tab-btn.active{color:var(--pri);border-bottom-color:var(--pri);font-weight:600}
+.tab-pane{display:none}.tab-pane.active{display:block}
+
+/* ====== Top-level tabs (larger) ====== */
+.top-tabs{display:flex;gap:0;margin-bottom:14px;border-bottom:3px solid var(--bdr);position:sticky;top:62px;background:var(--bg);z-index:50;padding-top:4px}
+.top-tab-btn{
+  padding:10px 28px;font-size:1rem;font-weight:500;color:var(--tx2);
+  border:none;background:none;cursor:pointer;border-bottom:3px solid transparent;
+  margin-bottom:-3px;transition:all .15s;
+}
+.top-tab-btn:hover{color:var(--tx)}
+.top-tab-btn.active{color:var(--pri);border-bottom-color:var(--pri);font-weight:700}
+
+/* ====== Accordion ====== */
+.acc-item{background:var(--srf);border:1px solid var(--bdr);border-radius:var(--radius);margin-bottom:8px;overflow:hidden}
+.acc-head{
+  padding:10px 16px;cursor:pointer;display:flex;align-items:center;gap:10px;
+  user-select:none;transition:background .15s;
+}
+.acc-head:hover{background:#f8fafc}
+.acc-arrow{font-size:.7rem;color:var(--tx3);transition:transform .2s;width:12px;flex-shrink:0}
+.acc-arrow.open{transform:rotate(90deg)}
+.acc-issuer{font-weight:600;font-size:.88rem;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.acc-badges{display:flex;gap:6px;flex-shrink:0;flex-wrap:wrap}
+.badge{
+  display:inline-flex;align-items:center;padding:2px 8px;border-radius:10px;font-size:.72rem;font-weight:600;white-space:nowrap;
+}
+.badge-red{background:var(--red-l);color:var(--red);border:1px solid var(--red-b)}
+.badge-blue{background:var(--pri-l);color:var(--pri);border:1px solid #bfdbfe}
+.badge-gray{background:#f1f5f9;color:var(--tx2);border:1px solid var(--bdr)}
+.badge-green{background:var(--grn-l);color:var(--grn);border:1px solid var(--grn-b)}
+.badge-orange{background:var(--org-l);color:var(--org);border:1px solid #fde68a}
+.acc-detail{display:none;border-top:1px solid var(--bdr);padding:14px 16px;background:#fafbfc}
+.acc-detail.open{display:block}
+
+/* ====== Tables ====== */
+.tbl-wrap{overflow-x:auto;margin:6px 0}
+table{width:100%;border-collapse:collapse;font-size:.8rem}
+th{background:#f1f5f9;font-weight:600;color:var(--tx2);text-align:left;padding:7px 10px;white-space:nowrap;border-bottom:2px solid var(--bdr);position:sticky;top:0}
+td{padding:6px 10px;border-bottom:1px solid #f1f5f9;white-space:nowrap}
+tr:hover td{background:#f8fafc}
+.num{text-align:right;font-variant-numeric:tabular-nums}
+.highlight-row td{background:var(--red-l) !important}
+
+/* Yield bar */
+.yield-cell{display:flex;align-items:center;gap:8px}
+.yield-bar{width:60px;height:14px;background:#f1f5f9;border-radius:2px;overflow:hidden;flex-shrink:0}
+.yield-fill{height:100%;border-radius:2px;transition:width .3s}
+.fill-normal{background:linear-gradient(90deg,#93c5fd,#3b82f6)}
+.fill-high{background:linear-gradient(90deg,#fca5a5,#dc2626)}
+.fill-low{background:linear-gradient(90deg,#86efac,#059669)}
+
+/* Section labels */
+.sec-label{font-size:.78rem;font-weight:600;color:var(--tx2);margin:10px 0 4px;padding-bottom:3px;border-bottom:1px solid var(--bdr)}
+
+/* ====== Convex table ====== */
+.convex-table tr.dip td{background:var(--grn-l)}
+
+/* ====== Empty state ====== */
+.empty{text-align:center;padding:40px;color:var(--tx3)}
+.empty-icon{font-size:2.5rem;margin-bottom:8px}
+.empty-text{font-size:.9rem}
+
+/* ====== Multi-select ====== */
+.ms-wrap{position:relative}
+.ms-display{
+  min-height:34px;padding:4px 28px 4px 8px;border:1px solid var(--bdr);border-radius:6px;
+  background:#fff;cursor:pointer;display:flex;flex-wrap:wrap;gap:3px;align-items:center;
+  transition:border .2s;position:relative;
+}
+.ms-display:hover{border-color:var(--pri)}
+.ms-display::after{content:'\25BE';position:absolute;right:10px;top:50%;transform:translateY(-50%);color:var(--tx3);font-size:.7rem;pointer-events:none}
+.ms-placeholder{color:var(--tx3);font-size:.85rem;line-height:24px}
+.ms-tag{
+  display:inline-flex;align-items:center;gap:3px;padding:1px 7px;border-radius:4px;
+  font-size:.73rem;background:var(--pri-l);color:var(--pri);border:1px solid #bfdbfe;
+  white-space:nowrap;line-height:1.5;
+}
+.ms-tag-x{cursor:pointer;font-size:.85rem;opacity:.6;line-height:1}.ms-tag-x:hover{opacity:1}
+.ms-drop{
+  display:none;position:absolute;top:calc(100% + 2px);left:0;right:0;z-index:200;
+  background:#fff;border:1px solid var(--bdr);border-radius:6px;box-shadow:0 4px 12px rgba(0,0,0,.12);
+  max-height:220px;overflow-y:auto;
+}
+.ms-drop.open{display:block}
+.ms-opt{
+  display:flex;align-items:center;gap:6px;padding:6px 12px;cursor:pointer;font-size:.82rem;
+  transition:background .1s;
+}
+.ms-opt:hover{background:#f8fafc}
+.ms-opt input{width:14px;height:14px;accent-color:var(--pri);cursor:pointer;flex-shrink:0}
+
+/* ====== Loading ====== */
+.loading{text-align:center;padding:40px;color:var(--tx2)}
+
+/* ====== Tooltip ====== */
+.tip{position:relative;cursor:help;border-bottom:1px dashed var(--tx3)}
+.tip:hover::after{
+  content:attr(data-tip);position:absolute;bottom:100%;left:50%;transform:translateX(-50%);
+  background:#1e293b;color:#fff;padding:4px 10px;border-radius:4px;font-size:.72rem;white-space:nowrap;z-index:999;
+}
+
+/* ====== Export bar ====== */
+.export-bar{display:flex;gap:8px;justify-content:flex-end;margin-bottom:8px}
+
+/* ====== Nearby bonds ====== */
+.nearby-row{display:none;background:#f8fafc}
+.nearby-row.open{display:table-row}
+.nearby-cell{padding:0 16px 10px}
+.nearby-tbl{width:100%;font-size:.75rem;margin-top:6px;border:1px solid var(--bdr);border-radius:4px}
+.nearby-tbl td{padding:4px 8px;background:#fff}
+.nearby-tbl th{background:#eef2ff;font-size:.73rem}
+.expand-btn{cursor:pointer;color:var(--pri);font-size:.8rem;user-select:none;border:none;background:none;padding:2px 6px;border-radius:4px}
+.expand-btn:hover{background:var(--pri-l)}
+.match-highlight td{background:#fef3c7 !important}
+
+/* ====== Responsive ====== */
+@media(max-width:768px){
+  .ctrl-grid{grid-template-columns:1fr 1fr}
+  .stats{grid-template-columns:repeat(3,1fr)}
+  .acc-issuer{font-size:.82rem}
+  html{font-size:12px}
+}
+@media(max-width:480px){
+  .ctrl-grid{grid-template-columns:1fr}
+  .stats{grid-template-columns:1fr 1fr}
+}
+
+/* ====== Pagination ====== */
+.pagination{display:flex;justify-content:center;align-items:center;gap:8px;margin-top:12px;flex-wrap:wrap}
+.pagination button{
+  min-width:32px;height:30px;padding:0 10px;border:1px solid var(--bdr);border-radius:4px;
+  background:#fff;cursor:pointer;font-size:.78rem;color:var(--tx2);transition:all .15s;
+}
+.pagination button:hover{background:var(--pri-l);color:var(--pri)}
+.pagination button.active{background:var(--pri);color:#fff;border-color:var(--pri)}
+.pagination button:disabled{opacity:.4;cursor:not-allowed}
+.page-info{font-size:.78rem;color:var(--tx2)}
+</style>
+</head>
+<body>
+
+
+  <div class="header">
+  <h1>信用债择券辅助工具</h1>
+  <div class="sub">数据来源: 中债估值 | <span id="hdrInfo">加载中...</span> | 数据更新: <strong id="hdrTimestamp">{{ timestamp }}</strong></div>
+</div>
+
+<div class="main">
+  <!-- ====== Top-level Tabs ====== -->
+  <div class="top-tabs">
+    <button class="top-tab-btn active" data-top-tab="normal" onclick="switchTopTab('normal')">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" style="margin-right:6px"><path d="M3 4h18l-8 10v6l-2 1v-7L3 4z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+      正常择券
+    </button>
+    <button class="top-tab-btn" data-top-tab="inversion" onclick="switchTopTab('inversion')">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" style="margin-right:6px"><path d="M12 2L2 22h20L12 2z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><circle cx="12" cy="17" r="1.5" fill="currentColor"/></svg>
+      寻找收益率倒挂券
+    </button>
+  </div>
+
+  <!-- =============================================================== -->
+  <!-- TOP TAB 1: 正常择券 -->
+  <!-- =============================================================== -->
+  <div class="tab-pane active" id="pane-normal">
+
+    <!-- 筛选条件 -->
+    <div class="card">
+      <div class="card-title">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 3h12l-4.5 5.25V13l-3-1.5V8.25L2 3z" stroke="#64748b" stroke-width="1.5" stroke-linejoin="round"/></svg>
+        债券筛选条件
+        <span style="font-size:.75rem;color:var(--tx3);font-weight:400;margin-left:auto">修改后实时生效</span>
+      </div>
+      <div class="card-body">
+        <div class="ctrl-grid">
+          <div class="ctrl-group">
+            <label>城投债</label>
+            <select id="nfCT" onchange="normalOnFilter()">
+              <option value="">全部</option>
+              <option value="是">仅城投债</option>
+              <option value="否">非城投债</option>
+            </select>
+          </div>
+          <div class="ctrl-group">
+            <label>隐含评级</label>
+            <div class="ms-wrap" id="nmsRating"><div class="ms-display" onclick="toggleMS('nmsRating')"><span class="ms-placeholder">全部</span></div><div class="ms-drop" id="drop-nmsRating"></div></div>
+          </div>
+          <div class="ctrl-group">
+            <label>内评</label>
+            <div class="ms-wrap" id="nmsIR"><div class="ms-display" onclick="toggleMS('nmsIR')"><span class="ms-placeholder">全部</span></div><div class="ms-drop" id="drop-nmsIR"></div></div>
+          </div>
+          <div class="ctrl-group">
+            <label>主体性质</label>
+            <select id="nfEntity" onchange="normalOnFilter()"><option value="">全部</option></select>
+          </div>
+          <div class="ctrl-group">
+            <label>债券类型</label>
+            <select id="nfSub" onchange="normalOnFilter()">
+              <option value="">全部</option>
+              <option value="否">非次级债</option>
+              <option value="是">次级债</option>
+            </select>
+          </div>
+          <div class="ctrl-group">
+            <label>最低期限 (年)</label>
+            <input type="number" id="nfMinTerm" step="0.1" placeholder="如 0.5" oninput="normalOnFilter()">
+          </div>
+          <div class="ctrl-group">
+            <label>最高期限 (年)</label>
+            <input type="number" id="nfMaxTerm" step="0.1" placeholder="如 3.0" oninput="normalOnFilter()">
+          </div>
+          <div class="ctrl-group">
+            <label>最低收益率 (%)</label>
+            <input type="number" id="nfMinYield" step="0.1" placeholder="如 1.8" oninput="normalOnFilter()">
+          </div>
+          <div class="ctrl-group">
+            <label>最高收益率 (%)</label>
+            <input type="number" id="nfMaxYield" step="0.1" placeholder="如 3.0" oninput="normalOnFilter()">
+          </div>
+          <div class="ctrl-group">
+            <label>搜索主体名称</label>
+            <input type="text" id="nfSearch" placeholder="输入关键词..." oninput="normalOnFilter()">
+          </div>
+          <div class="ctrl-group">
+            <label>相近期限阈值 (年)</label>
+            <input type="number" id="nfNearbyTh" value="0.5" min="0.05" step="0.05" title="同一主体内，与当前券期限差在此范围内的债券视为相近期限">
+          </div>
+          <div class="ctrl-group">
+            <label>每页显示条数</label>
+            <select id="nfPageSize" onchange="normalOnFilter()">
+              <option value="20">20</option>
+              <option value="50" selected>50</option>
+              <option value="100">100</option>
+              <option value="200">200</option>
+              <option value="500">500</option>
+            </select>
+          </div>
+        </div>
+        <div style="margin-top:10px;text-align:right">
+          <button class="btn btn-out btn-sm" onclick="normalResetFilters()">重置筛选</button>
+          <button class="btn btn-out btn-sm" onclick="normalOnFilter()" style="margin-left:6px">应用筛选</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 统计概览 -->
+    <div class="stats" id="nStatsBar">
+      <div class="stat-card"><div class="stat-val" id="nsTotal">-</div><div class="stat-label">债券总数</div></div>
+      <div class="stat-card"><div class="stat-val" id="nsFiltered">-</div><div class="stat-label">筛选结果</div></div>
+      <div class="stat-card success"><div class="stat-val" id="nsIssuers">-</div><div class="stat-label">涉及主体</div></div>
+      <div class="stat-card"><div class="stat-val" id="nsAvgYield">-</div><div class="stat-label">平均收益率(%)</div></div>
+    </div>
+
+    <!-- 导出 -->
+    <div class="export-bar">
+      <button class="btn btn-out btn-sm" onclick="normalExportCSV()">导出 CSV</button>
+      <button class="btn btn-out btn-sm" onclick="normalCollapseAll()">全部折叠</button>
+    </div>
+
+    <!-- 结果表格 -->
+    <div class="card">
+      <div class="card-body" style="padding:0">
+        <div class="tbl-wrap" id="normalResults">
+          <div class="empty"><div class="empty-text">加载中...</div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 分页 -->
+    <div class="pagination" id="nPagination"></div>
+
+  </div>
+
+  <!-- =============================================================== -->
+  <!-- TOP TAB 2: 寻找收益率倒挂券 (原版功能) -->
+  <!-- =============================================================== -->
+  <div class="tab-pane" id="pane-inversion">
+
+    <!-- 分析参数 -->
+    <div class="card">
+      <div class="card-title">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M6 2L6 14M10 2L10 14M2 6H14M2 10H14" stroke="#64748b" stroke-width="1.5" stroke-linecap="round"/></svg>
+        分析参数
+      </div>
+      <div class="card-body">
+        <div class="ctrl-grid">
+          <div class="ctrl-group">
+            <label>期限差阈值 (年)</label>
+            <input type="number" id="termTh" value="0.25" min="0" step="0.05">
+          </div>
+          <div class="ctrl-group">
+            <label>估值差阈值 (bp)</label>
+            <input type="number" id="yieldTh" value="3" min="0" step="1">
+          </div>
+          <div class="ctrl-group">
+            <label>剔除科创债</label>
+            <div style="display:flex;align-items:center;height:34px;gap:6px">
+              <input type="checkbox" id="excludeK" style="width:16px;height:16px;cursor:pointer;accent-color:var(--pri)">
+              <label for="excludeK" style="font-size:.82rem;cursor:pointer;color:var(--tx)">剔除交易所科创债</label>
+            </div>
+          </div>
+          <div class="ctrl-group">
+            <label>&nbsp;</label>
+            <button class="btn btn-pri" onclick="onAnalyze()">重新分析</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 筛选条件 -->
+    <div class="card">
+      <div class="card-title">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 3h12l-4.5 5.25V13l-3-1.5V8.25L2 3z" stroke="#64748b" stroke-width="1.5" stroke-linejoin="round"/></svg>
+        筛选条件
+        <span style="font-size:.75rem;color:var(--tx3);font-weight:400;margin-left:auto">修改后实时生效</span>
+      </div>
+      <div class="card-body">
+        <div class="ctrl-grid">
+          <div class="ctrl-group">
+            <label>城投债</label>
+            <select id="fCT" onchange="onFilter()">
+              <option value="">全部</option>
+              <option value="是">仅城投债</option>
+              <option value="否">非城投债</option>
+            </select>
+          </div>
+          <div class="ctrl-group">
+            <label>隐含评级</label>
+            <div class="ms-wrap" id="msRating"><div class="ms-display" onclick="toggleMS('msRating')"><span class="ms-placeholder">全部</span></div><div class="ms-drop" id="drop-msRating"></div></div>
+          </div>
+          <div class="ctrl-group">
+            <label>内评</label>
+            <div class="ms-wrap" id="msIR"><div class="ms-display" onclick="toggleMS('msIR')"><span class="ms-placeholder">全部</span></div><div class="ms-drop" id="drop-msIR"></div></div>
+          </div>
+          <div class="ctrl-group">
+            <label>主体性质</label>
+            <select id="fEntity" onchange="onFilter()"><option value="">全部</option></select>
+          </div>
+          <div class="ctrl-group">
+            <label>债券类型</label>
+            <select id="fSub" onchange="onFilter()">
+              <option value="">全部</option>
+              <option value="否">非次级债</option>
+              <option value="是">次级债</option>
+            </select>
+          </div>
+          <div class="ctrl-group">
+            <label>最低收益率 (%)</label>
+            <input type="number" id="fMinYield" step="0.1" placeholder="如 1.8" oninput="onFilter()">
+          </div>
+          <div class="ctrl-group">
+            <label>最高收益率 (%)</label>
+            <input type="number" id="fMaxYield" step="0.1" placeholder="如 3.0" oninput="onFilter()">
+          </div>
+          <div class="ctrl-group">
+            <label>搜索主体名称</label>
+            <input type="text" id="fSearch" placeholder="输入关键词..." oninput="onFilter()">
+          </div>
+        </div>
+        <div style="margin-top:10px;text-align:right">
+          <button class="btn btn-out btn-sm" onclick="resetFilters()">重置筛选</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 统计概览 -->
+    <div class="stats" id="statsBar">
+      <div class="stat-card"><div class="stat-val" id="sTotal">-</div><div class="stat-label">债券总数</div></div>
+      <div class="stat-card"><div class="stat-val" id="sGroups">-</div><div class="stat-label">有效分组</div></div>
+      <div class="stat-card danger"><div class="stat-val" id="sPairs">-</div><div class="stat-label">倒挂对数</div></div>
+      <div class="stat-card danger"><div class="stat-val" id="sIssuers">-</div><div class="stat-label">涉及主体</div></div>
+      <div class="stat-card success"><div class="stat-val" id="sConvex">-</div><div class="stat-label">凸点债券</div></div>
+      <div class="stat-card"><div class="stat-val" id="sFiltered">-</div><div class="stat-label">当前显示</div></div>
+    </div>
+
+    <!-- Tabs -->
+    <div class="tabs">
+      <button class="tab-btn active" data-tab="inversions" onclick="switchTab('inversions')">倒挂明细</button>
+      <button class="tab-btn" data-tab="convex" onclick="switchTab('convex')">凸点提示</button>
+    </div>
+
+    <!-- 倒挂明细 -->
+    <div class="tab-pane active" id="pane-inversions">
+      <div class="export-bar">
+        <button class="btn btn-out btn-sm" onclick="exportCSV('inversions')">导出 CSV</button>
+        <button class="btn btn-out btn-sm" onclick="collapseAll()">全部折叠</button>
+      </div>
+      <div id="invResults"></div>
+    </div>
+
+    <!-- 凸点提示 -->
+    <div class="tab-pane" id="pane-convex">
+      <div class="export-bar">
+        <button class="btn btn-out btn-sm" onclick="exportCSV('convex')">导出 CSV</button>
+      </div>
+      <div id="cvxResults"></div>
+    </div>
+
+  </div>
+</div>
+
+<footer style="text-align:center;padding:24px 16px 32px;color:#94a3b8;font-size:.85rem;letter-spacing:1px">华夏久盈固收中心信用组</footer>
+
+<script>
+// ===================================================================
+//  DATA
+// ===================================================================
+const RAW = {{ bond_data | safe }};
+const F={CODE:0,NAME:1,TERM:2,RATING:3,ISSUER:4,YTM:5,ENTITY:6,CT:7,SUB:8,TECH:9,IR:10};
+function toB(a){return{code:a[F.CODE],name:a[F.NAME],term:a[F.TERM],rating:a[F.RATING],issuer:a[F.ISSUER],ytm:a[F.YTM],entity:a[F.ENTITY],ct:a[F.CT],sub:a[F.SUB],tech:a[F.TECH],ir:a[F.IR]}}
+const BONDS=RAW.map(toB);
+
+// ===================================================================
+//  STATE
+// ===================================================================
+let STATE={
+  analysis:null,filtered:null,activeTab:'inversions',
+  // Normal page state
+  normalFiltered:[],normalPage:1,normalExpanded:{},nearbyCache:{}
+};
+
+// Pre-group bonds by issuer for nearby lookups
+const ISSUER_GROUPS={};
+BONDS.forEach(b=>{
+  const k=b.issuer;
+  if(!ISSUER_GROUPS[k])ISSUER_GROUPS[k]=[];
+  ISSUER_GROUPS[k].push(b);
+});
+Object.values(ISSUER_GROUPS).forEach(g=>g.sort((a,b)=>a.term-b.term));
+
+// ===================================================================
+//  INIT
+// ===================================================================
+function init(){
+  document.getElementById('hdrInfo').textContent=`共 ${BONDS.length.toLocaleString()} 只债券`;
+  populateFilters();
+  normalPopulateFilters();
+  onAnalyze();
+  normalOnFilter();
+  document.addEventListener('click',e=>{if(!e.target.closest('.ms-wrap'))document.querySelectorAll('.ms-drop.open').forEach(d=>d.classList.remove('open'))});
+}
+
+function populateFilters(){
+  const u=(f)=>[...new Set(BONDS.map(b=>b[f]))].filter(Boolean).sort();
+  initMS('msRating',u('rating'));
+  initMS('msIR',u('ir'));
+  fillSelect('fEntity',u('entity'));
+}
+
+function normalPopulateFilters(){
+  const u=(f)=>[...new Set(BONDS.map(b=>b[f]))].filter(Boolean).sort();
+  initMS('nmsRating',u('rating'));
+  initMS('nmsIR',u('ir'));
+  fillSelect('nfEntity',u('entity'));
+}
+
+function fillSelect(id,vals){
+  const sel=document.getElementById(id);
+  sel.querySelectorAll('option:not([value=""])').forEach(o=>o.remove());
+  vals.forEach(v=>{const o=document.createElement('option');o.value=v;o.textContent=v;sel.appendChild(o)});
+}
+
+// Multi-select component
+function initMS(id,vals){
+  const drop=document.getElementById('drop-'+id);
+  drop.innerHTML=vals.map(v=>`<label class="ms-opt"><input type="checkbox" value="${esc(v)}" onchange="onMSChange('${id}')">${esc(v)}</label>`).join('');
+}
+function toggleMS(id){
+  const drop=document.getElementById('drop-'+id);
+  document.querySelectorAll('.ms-drop.open').forEach(d=>{if(d.id!=='drop-'+id)d.classList.remove('open')});
+  drop.classList.toggle('open');
+}
+function onMSChange(id){
+  const wrap=document.getElementById(id);
+  const checks=[...wrap.querySelectorAll('input[type=checkbox]:checked')];
+  const disp=wrap.querySelector('.ms-display');
+  if(checks.length===0){
+    disp.innerHTML='<span class="ms-placeholder">全部</span>';
+  }else{
+    disp.innerHTML=checks.map((c,i)=>`<span class="ms-tag">${esc(c.value)}<span class="ms-tag-x" onclick="event.stopPropagation();uncheckMS('${id}',${i})">\u00d7</span></span>`).join('');
+  }
+  // trigger appropriate filter
+  if(id.startsWith('nms'))normalOnFilter();else onFilter();
+}
+function uncheckMS(id,idx){
+  const wrap=document.getElementById(id);
+  const checks=[...wrap.querySelectorAll('input[type=checkbox]:checked')];
+  if(checks[idx])checks[idx].checked=false;
+  onMSChange(id);
+}
+function getMSValues(id){
+  return [...document.getElementById(id).querySelectorAll('input[type=checkbox]:checked')].map(c=>c.value);
+}
+function clearMS(id){
+  const wrap=document.getElementById(id);
+  wrap.querySelectorAll('input[type=checkbox]').forEach(c=>c.checked=false);
+  wrap.querySelector('.ms-display').innerHTML='<span class="ms-placeholder">全部</span>';
+}
+
+// ===================================================================
+//  TOP-LEVEL TABS
+// ===================================================================
+function switchTopTab(tab){
+  document.querySelectorAll('.top-tab-btn').forEach(b=>b.classList.toggle('active',b.dataset.topTab===tab));
+  document.getElementById('pane-normal').classList.toggle('active',tab==='normal');
+  document.getElementById('pane-inversion').classList.toggle('active',tab==='inversion');
+}
+
+// ===================================================================
+//  NORMAL SELECTION ENGINE
+// ===================================================================
+function getNormalFilters(){
+  return {
+    ct:document.getElementById('nfCT').value,
+    rating:getMSValues('nmsRating'),
+    ir:getMSValues('nmsIR'),
+    entity:document.getElementById('nfEntity').value,
+    sub:document.getElementById('nfSub').value,
+    minY:parseFloat(document.getElementById('nfMinYield').value)||null,
+    maxY:parseFloat(document.getElementById('nfMaxYield').value)||null,
+    search:document.getElementById('nfSearch').value.trim().toLowerCase(),
+    minTerm:parseFloat(document.getElementById('nfMinTerm').value)||null,
+    maxTerm:parseFloat(document.getElementById('nfMaxTerm').value)||null,
+    nearbyTh:parseFloat(document.getElementById('nfNearbyTh').value)||0.5,
+    pageSize:parseInt(document.getElementById('nfPageSize').value)||50,
+  };
+}
+
+function bondMatchesFilter(b,f){
+  if(f.ct && b.ct!==f.ct)return false;
+  if(f.entity && b.entity!==f.entity)return false;
+  if(f.sub && b.sub!==f.sub)return false;
+  if(f.search && !b.issuer.toLowerCase().includes(f.search))return false;
+  if(f.rating.length && !f.rating.includes(b.rating))return false;
+  if(f.ir.length && !f.ir.includes(b.ir))return false;
+  if(f.minTerm!==null && b.term<f.minTerm)return false;
+  if(f.maxTerm!==null && b.term>f.maxTerm)return false;
+  if(f.minY!==null && b.ytm<f.minY)return false;
+  if(f.maxY!==null && b.ytm>f.maxY)return false;
+  return true;
+}
+
+function applyNormalFilters(){
+  const f=getNormalFilters();
+  const filtered=BONDS.filter(b=>bondMatchesFilter(b,f));
+  // Sort by issuer then term
+  filtered.sort((a,b)=>a.issuer.localeCompare(b.issuer,'zh')||a.term-b.term);
+  return {filtered,filters:f};
+}
+
+function getNearbyBonds(bond,threshold){
+  // Find bonds from same issuer with term difference < threshold
+  const cacheKey=bond.code+'|||'+threshold;
+  if(STATE.nearbyCache[cacheKey])return STATE.nearbyCache[cacheKey];
+
+  const group=ISSUER_GROUPS[bond.issuer]||[];
+  const nearby=group.filter(b=>{
+    if(b.code===bond.code)return false;
+    return Math.abs(b.term-bond.term)<=threshold;
+  });
+  // Sort by term difference ascending
+  nearby.sort((a,b)=>Math.abs(a.term-bond.term)-Math.abs(b.term-bond.term));
+
+  STATE.nearbyCache[cacheKey]=nearby;
+  return nearby;
+}
+
+// ===================================================================
+//  NORMAL RENDERING
+// ===================================================================
+function normalOnFilter(){
+  const result=applyNormalFilters();
+  STATE.normalFiltered=result.filtered;
+  STATE.normalPage=1;
+  STATE.normalExpanded={};
+
+  // Update stats
+  const avgY=result.filtered.length>0?result.filtered.reduce((s,b)=>s+b.ytm,0)/result.filtered.length:0;
+  const issuers=new Set(result.filtered.map(b=>b.issuer)).size;
+  document.getElementById('nsTotal').textContent=BONDS.length.toLocaleString();
+  document.getElementById('nsFiltered').textContent=result.filtered.length.toLocaleString();
+  document.getElementById('nsIssuers').textContent=issuers.toLocaleString();
+  document.getElementById('nsAvgYield').textContent=avgY.toFixed(4);
+
+  renderNormalTable(result.filtered,result.filters);
+}
+
+function renderNormalTable(bonds,filters){
+  const pageSize=filters.pageSize;
+  const totalPages=Math.ceil(bonds.length/pageSize);
+  const page=Math.min(STATE.normalPage,totalPages||1);
+  STATE.normalPage=page;
+
+  const start=(page-1)*pageSize;
+  const pageBonds=bonds.slice(start,start+pageSize);
+
+  const el=document.getElementById('normalResults');
+  if(pageBonds.length===0){
+    el.innerHTML='<div class="empty"><div class="empty-icon">--</div><div class="empty-text">未找到符合条件的债券</div></div>';
+    document.getElementById('nPagination').innerHTML='';
+    return;
+  }
+
+  let html='<table><thead><tr>';
+  html+='<th style="width:30px">#</th><th>展开</th><th>证券简称</th><th>证券代码</th><th class="num">期限(年)</th>';
+  html+='<th class="num">估值收益率(%)</th><th>隐含评级</th><th>内评</th>';
+  html+='<th>主体性质</th><th>城投</th><th>次级</th><th>主体名称</th>';
+  html+='<th style="width:60px">相近券数</th>';
+  html+='</tr></thead><tbody>';
+
+  const nearbyTh=filters.nearbyTh;
+
+  pageBonds.forEach((b,idx)=>{
+    const globalIdx=start+idx+1;
+    const expKey='b'+globalIdx;
+    const isExpanded=!!STATE.normalExpanded[expKey];
+    const nearby=getNearbyBonds(b,nearbyTh);
+    const nearbyCount=nearby.length;
+
+    html+=`<tr>
+      <td>${globalIdx}</td>
+      <td><button class="expand-btn" id="nbtn-${expKey}" onclick="normalToggleBond('${expKey}','${escAttr(b.code)}',${nearbyTh})">${isExpanded?'\u25bc 收':'\u25b6 展'}${nearbyCount>0?' ('+nearbyCount+')':''}</button></td>
+      <td><strong>${esc(b.name)}</strong></td>
+      <td style="font-size:.75rem;color:var(--tx2)">${esc(b.code)}</td>
+      <td class="num">${b.term.toFixed(2)}</td>
+      <td class="num"><strong>${b.ytm.toFixed(4)}</strong></td>
+      <td>${esc(b.rating)}</td>
+      <td>${esc(b.ir)}</td>
+      <td>${esc(b.entity)}</td>
+      <td>${b.ct==='是'?'\u2714':''}</td>
+      <td>${b.sub==='是'?'\u2714':''}</td>
+      <td style="font-size:.78rem;max-width:200px;overflow:hidden;text-overflow:ellipsis" title="${esc(b.issuer)}">${esc(b.issuer)}</td>
+      <td class="num">${nearbyCount>0?nearbyCount:''}</td>
+    </tr>`;
+
+    // Nearby bonds expandable row
+    html+=`<tr class="nearby-row${isExpanded?' open':''}" id="nrow-${expKey}">
+      <td colspan="13" class="nearby-cell">`;
+
+    if(nearby.length===0){
+      html+='<span style="color:var(--tx3);font-size:.8rem">同一主体暂无相近期限债券（阈值 ±'+nearbyTh.toFixed(2)+'年）</span>';
+    }else{
+      html+=`<div style="font-size:.8rem;font-weight:600;color:var(--tx2);margin-bottom:4px">同一主体相近期限债券 (${nearby.length}只，阈值±${nearbyTh.toFixed(2)}年)</div>`;
+      html+='<table class="nearby-tbl"><thead><tr>';
+      html+='<th>证券简称</th><th>证券代码</th><th class="num">期限(年)</th><th class="num">估值收益率(%)</th><th class="num">期限差(年)</th><th class="num">收益率差(bp)</th><th>隐含评级</th><th>内评</th>';
+      html+='</tr></thead><tbody>';
+
+      nearby.forEach(n=>{
+        const termDiff=n.term-b.term;
+        const yieldDiff=(n.ytm-b.ytm)*100;
+        const diffClass=yieldDiff>0?'color:var(--red)':yieldDiff<0?'color:var(--grn)':'';
+        html+=`<tr>
+          <td>${esc(n.name)}</td>
+          <td style="font-size:.75rem;color:var(--tx2)">${esc(n.code)}</td>
+          <td class="num">${n.term.toFixed(2)}</td>
+          <td class="num"><strong>${n.ytm.toFixed(4)}</strong></td>
+          <td class="num">${termDiff>0?'+':''}${termDiff.toFixed(2)}</td>
+          <td class="num"><strong style="${diffClass}">${yieldDiff>0?'+':''}${yieldDiff.toFixed(1)}</strong></td>
+          <td>${esc(n.rating)}</td>
+          <td>${esc(n.ir)}</td>
+        </tr>`;
+      });
+      html+='</tbody></table>';
+    }
+    html+='</td></tr>';
+  });
+
+  html+='</tbody></table>';
+  el.innerHTML=html;
+
+  // Render pagination
+  renderNormalPagination(bonds.length,pageSize,page,totalPages);
+}
+
+function renderNormalPagination(total,pageSize,page,totalPages){
+  const el=document.getElementById('nPagination');
+  if(totalPages<=1){el.innerHTML='';return;}
+
+  let html='';
+  html+=`<button ${page===1?'disabled':''} onclick="normalGoPage(${page-1})">\u25c0 上一页</button>`;
+
+  // Show page buttons with ellipsis
+  const maxButtons=7;
+  let startP=Math.max(1,page-Math.floor(maxButtons/2));
+  let endP=Math.min(totalPages,startP+maxButtons-1);
+  if(endP-startP<maxButtons-1)startP=Math.max(1,endP-maxButtons+1);
+
+  if(startP>1){
+    html+=`<button onclick="normalGoPage(1)">1</button>`;
+    if(startP>2)html+=`<span class="page-info">...</span>`;
+  }
+  for(let i=startP;i<=endP;i++){
+    html+=`<button class="${i===page?'active':''}" onclick="normalGoPage(${i})">${i}</button>`;
+  }
+  if(endP<totalPages){
+    if(endP<totalPages-1)html+=`<span class="page-info">...</span>`;
+    html+=`<button onclick="normalGoPage(${totalPages})">${totalPages}</button>`;
+  }
+
+  html+=`<button ${page===totalPages?'disabled':''} onclick="normalGoPage(${page+1})">下一页 \u25b6</button>`;
+  html+=`<span class="page-info">共 ${total} 条 / ${totalPages} 页</span>`;
+  el.innerHTML=html;
+}
+
+function normalGoPage(p){
+  STATE.normalPage=p;
+  STATE.normalExpanded={};
+  const f=getNormalFilters();
+  renderNormalTable(STATE.normalFiltered,f);
+}
+
+function normalToggleBond(expKey,code,nearbyTh){
+  const row=document.getElementById('nrow-'+expKey);
+  const btn=document.getElementById('nbtn-'+expKey);
+  const isOpen=row.classList.toggle('open');
+  STATE.normalExpanded[expKey]=isOpen;
+  // Update nearby count in button
+  const nearby=getNearbyBonds(BONDS.find(b=>b.code===code)||{},nearbyTh);
+  btn.textContent=(isOpen?'\u25bc 收':'\u25b6 展')+(nearby.length>0?' ('+nearby.length+')':'');
+}
+
+function normalCollapseAll(){
+  STATE.normalExpanded={};
+  const f=getNormalFilters();
+  renderNormalTable(STATE.normalFiltered,f);
+}
+
+function normalResetFilters(){
+  ['nfCT','nfEntity','nfSub'].forEach(id=>document.getElementById(id).value='');
+  ['nfMinTerm','nfMaxTerm','nfMinYield','nfMaxYield','nfSearch'].forEach(id=>document.getElementById(id).value='');
+  document.getElementById('nfNearbyTh').value='0.5';
+  document.getElementById('nfPageSize').value='50';
+  clearMS('nmsRating');clearMS('nmsIR');
+  normalOnFilter();
+}
+
+function normalExportCSV(){
+  let csv='\uFEFF序号,证券简称,证券代码,期限,估值收益率%,隐含评级,内评,主体性质,城投,次级,主体名称,相近券数\n';
+  STATE.normalFiltered.forEach((b,i)=>{
+    const nearbyTh=parseFloat(document.getElementById('nfNearbyTh').value)||0.5;
+    const nearby=getNearbyBonds(b,nearbyTh);
+    csv+=`${i+1},"${b.name}","${b.code}",${b.term},${b.ytm},"${b.rating}","${b.ir}","${b.entity}","${b.ct}","${b.sub}","${b.issuer}",${nearby.length}\n`;
+  });
+  const blob=new Blob([csv],{type:'text/csv;charset=utf-8'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+  a.href=url;a.download='正常择券结果.csv';
+  a.click();URL.revokeObjectURL(url);
+}
+
+// ===================================================================
+//  INVERSION ANALYSIS ENGINE (原版)
+// ===================================================================
+function runAnalysis(termTh,yieldTh,excludeK){
+  const t0=performance.now();
+  const pool=excludeK?BONDS.filter(b=>!b.name.includes('K')):BONDS;
+  const groupMap={};
+  pool.forEach(b=>{
+    const k=b.issuer+'|||'+b.sub;
+    (groupMap[k]=groupMap[k]||[]).push(b);
+  });
+  const issuerGroups={};
+  const allConvex=[];
+  let totalPairs=0, validGroupCount=0;
+  Object.entries(groupMap).forEach(([key,bonds])=>{
+    bonds.sort((a,b)=>a.term-b.term);
+    if(bonds.length<2)return;
+    validGroupCount++;
+    const inversions=[];
+    for(let i=0;i<bonds.length;i++){
+      for(let j=i+1;j<bonds.length;j++){
+        const td=bonds[j].term-bonds[i].term;
+        const yd=(bonds[i].ytm-bonds[j].ytm)*100;
+        if(td>=termTh&&yd>=yieldTh){
+          inversions.push({s:bonds[i],l:bonds[j],td:Math.round(td*100)/100,yd:Math.round(yd*10)/10});
+        }
+      }
+    }
+    if(inversions.length>0){
+      totalPairs+=inversions.length;
+      const maxYd=Math.max(...inversions.map(x=>x.yd));
+      issuerGroups[key]={
+        issuer:bonds[0].issuer,sub:bonds[0].sub,ct:bonds[0].ct,entity:bonds[0].entity,
+        bonds,inversions,maxYd
+      };
+    }
+    if(bonds.length>=3){
+      for(let i=1;i<bonds.length-1;i++){
+        const p=bonds[i-1],c=bonds[i],n=bonds[i+1];
+        const dp=(c.ytm-p.ytm)*100, dn=(c.ytm-n.ytm)*100;
+        if(dp>=yieldTh&&dn>=yieldTh&&(c.term-p.term)>=termTh&&(n.term-c.term)>=termTh){
+          allConvex.push({issuer:c.issuer,sub:c.sub,ct:bonds[0].ct,entity:bonds[0].entity,
+            bond:c,prev:p,next:n,dp:Math.round(dp*10)/10,dn:Math.round(dn*10)/10});
+        }
+      }
+    }
+  });
+  const seen=new Set();
+  const uniqueConvex=allConvex.filter(c=>{if(seen.has(c.bond.code))return false;seen.add(c.bond.code);return true;});
+  uniqueConvex.sort((a,b)=>(b.dp+b.dn)-(a.dp+a.dn));
+  const elapsed=Math.round(performance.now()-t0);
+  return {issuerGroups,convex:uniqueConvex,totalPairs,validGroupCount,elapsed,poolSize:pool.length};
+}
+
+// ===================================================================
+//  FILTER ENGINE (原版)
+// ===================================================================
+function getFilters(){
+  return {
+    ct:document.getElementById('fCT').value,
+    rating:getMSValues('msRating'),
+    ir:getMSValues('msIR'),
+    entity:document.getElementById('fEntity').value,
+    sub:document.getElementById('fSub').value,
+    minY:parseFloat(document.getElementById('fMinYield').value)||null,
+    maxY:parseFloat(document.getElementById('fMaxYield').value)||null,
+    search:document.getElementById('fSearch').value.trim().toLowerCase(),
+  };
+}
+
+function matchGroup(g,f){
+  if(f.ct && g.ct!==f.ct)return false;
+  if(f.entity && g.entity!==f.entity)return false;
+  if(f.sub && g.sub!==f.sub)return false;
+  if(f.search && !g.issuer.toLowerCase().includes(f.search))return false;
+  if(f.rating.length && !g.bonds.some(b=>f.rating.includes(b.rating)))return false;
+  if(f.ir.length && !g.bonds.some(b=>f.ir.includes(b.ir)))return false;
+  if(f.minY!==null && !g.bonds.some(b=>b.ytm>=f.minY))return false;
+  if(f.maxY!==null && !g.bonds.some(b=>b.ytm<=f.maxY))return false;
+  return true;
+}
+
+function matchConvex(c,f){
+  if(f.ct && c.ct!==f.ct)return false;
+  if(f.entity && c.entity!==f.entity)return false;
+  if(f.sub && c.sub!==f.sub)return false;
+  if(f.search && !c.issuer.toLowerCase().includes(f.search))return false;
+  if(f.rating.length && !f.rating.includes(c.bond.rating))return false;
+  if(f.ir.length && !f.ir.includes(c.bond.ir))return false;
+  if(f.minY!==null && c.bond.ytm<f.minY)return false;
+  if(f.maxY!==null && c.bond.ytm>f.maxY)return false;
+  return true;
+}
+
+function applyFilters(analysis){
+  const f=getFilters();
+  const groups={};
+  let pairsShown=0;
+  Object.entries(analysis.issuerGroups).forEach(([k,g])=>{
+    if(matchGroup(g,f)){groups[k]=g;pairsShown+=g.inversions.length;}
+  });
+  const convex=analysis.convex.filter(c=>matchConvex(c,f));
+  return {groups,convex,pairsShown,issuerCount:Object.keys(groups).length};
+}
+
+// ===================================================================
+//  RENDERING (原版)
+// ===================================================================
+function renderAll(){
+  const a=STATE.analysis, ft=STATE.filtered;
+  document.getElementById('sTotal').textContent=a.poolSize.toLocaleString();
+  document.getElementById('sGroups').textContent=a.validGroupCount;
+  document.getElementById('sPairs').textContent=a.totalPairs;
+  document.getElementById('sIssuers').textContent=Object.keys(a.issuerGroups).length;
+  document.getElementById('sConvex').textContent=a.convex.length;
+  document.getElementById('sFiltered').textContent=ft.issuerCount+'/'+ Object.keys(a.issuerGroups).length;
+  renderInversions(ft.groups);
+  renderConvex(ft.convex);
+}
+
+function renderInversions(groups){
+  const el=document.getElementById('invResults');
+  const sorted=Object.entries(groups).sort((a,b)=>b[1].maxYd-a[1].maxYd);
+  if(sorted.length===0){
+    el.innerHTML='<div class="empty"><div class="empty-icon">--</div><div class="empty-text">未找到符合条件的倒挂</div></div>';
+    return;
+  }
+  let html='';
+  sorted.forEach(([key,g],idx)=>{
+    const id='g'+idx;
+    const subTag=g.sub==='是'?'<span class="badge badge-orange">次级债</span>':'';
+    const ctTag=g.ct==='是'?'<span class="badge badge-blue">城投</span>':'';
+    html+=`<div class="acc-item">
+      <div class="acc-head" onclick="toggleAcc('${id}')">
+        <span class="acc-arrow" id="arrow-${id}">&#9654;</span>
+        <span class="acc-issuer">${esc(g.issuer)}</span>
+        <div class="acc-badges">
+          ${ctTag}${subTag}
+          <span class="badge badge-gray">${g.bonds[0].rating}</span>
+          <span class="badge badge-red">${g.inversions.length}对倒挂</span>
+          <span class="badge badge-red">最大 ${g.maxYd.toFixed(1)}bp</span>
+        </div>
+      </div>
+      <div class="acc-detail" id="detail-${id}">
+        ${renderGroupDetail(g)}
+      </div>
+    </div>`;
+  });
+  el.innerHTML=html;
+}
+
+function renderGroupDetail(g){
+  const bonds=g.bonds;
+  const minY=Math.min(...bonds.map(b=>b.ytm));
+  const maxY=Math.max(...bonds.map(b=>b.ytm));
+  const range=maxY-minY||0.01;
+  const highCodes=new Set();
+  const lowCodes=new Set();
+  g.inversions.forEach(inv=>{highCodes.add(inv.s.code);lowCodes.add(inv.l.code)});
+  let html='<div class="sec-label">存量债概览（按期限排列）</div><div class="tbl-wrap"><table><thead><tr>';
+  html+='<th>证券简称</th><th class="num">期限(年)</th><th class="num">估值收益率(%)</th><th style="width:80px">分布</th><th>隐含评级</th><th>内评</th>';
+  html+='</tr></thead><tbody>';
+  bonds.forEach(b=>{
+    const pct=Math.max(5,((b.ytm-minY)/range)*100);
+    let fillClass='fill-normal';
+    let rowClass='';
+    if(highCodes.has(b.code)&&!lowCodes.has(b.code)){fillClass='fill-high';rowClass=' class="highlight-row"';}
+    else if(lowCodes.has(b.code)&&!highCodes.has(b.code)){fillClass='fill-low';}
+    html+=`<tr${rowClass}>
+      <td title="${esc(b.code)}">${esc(b.name)}</td>
+      <td class="num">${b.term.toFixed(2)}</td>
+      <td class="num"><strong>${b.ytm.toFixed(4)}</strong></td>
+      <td><div class="yield-bar"><div class="yield-fill ${fillClass}" style="width:${pct.toFixed(0)}%"></div></div></td>
+      <td>${esc(b.rating)}</td>
+      <td>${esc(b.ir)}</td>
+    </tr>`;
+  });
+  html+='</tbody></table></div>';
+  html+='<div class="sec-label" style="margin-top:14px">倒挂对明细（按倒挂幅度排序）</div><div class="tbl-wrap"><table><thead><tr>';
+  html+='<th>#</th><th>短期限债券（估值偏高）</th><th class="num">期限</th><th class="num">估值%</th>';
+  html+='<th style="text-align:center">vs</th>';
+  html+='<th>长期限债券（估值偏低）</th><th class="num">期限</th><th class="num">估值%</th>';
+  html+='<th class="num">期限差</th><th class="num">倒挂(bp)</th>';
+  html+='</tr></thead><tbody>';
+  const sorted=[...g.inversions].sort((a,b)=>b.yd-a.yd);
+  sorted.forEach((inv,i)=>{
+    html+=`<tr>
+      <td>${i+1}</td>
+      <td style="color:var(--red)" title="${esc(inv.s.code)}">${esc(inv.s.name)}</td>
+      <td class="num">${inv.s.term.toFixed(2)}</td><td class="num">${inv.s.ytm.toFixed(4)}</td>
+      <td style="text-align:center;color:var(--tx3)">vs</td>
+      <td style="color:var(--grn)" title="${esc(inv.l.code)}">${esc(inv.l.name)}</td>
+      <td class="num">${inv.l.term.toFixed(2)}</td><td class="num">${inv.l.ytm.toFixed(4)}</td>
+      <td class="num">${inv.td.toFixed(2)}</td>
+      <td class="num"><strong style="color:var(--red)">${inv.yd.toFixed(1)}</strong></td>
+    </tr>`;
+  });
+  html+='</tbody></table></div>';
+  return html;
+}
+
+function renderConvex(convex){
+  const el=document.getElementById('cvxResults');
+  if(convex.length===0){
+    el.innerHTML='<div class="empty"><div class="empty-icon">--</div><div class="empty-text">未找到符合条件的凸点债券</div></div>';
+    return;
+  }
+  let html='<div class="card"><div class="card-body"><p style="font-size:.82rem;color:var(--tx2);margin-bottom:10px">';
+  html+='凸点定义：在同一主体的期限序列中，该债券的估值收益率同时<strong>高于</strong>期限更短和更长的相邻债券，形成曲线凸出（即该期限位置的债券被市场给予了更高的收益率/更低的价格）。</p>';
+  html+='<div class="tbl-wrap"><table class="convex-table"><thead><tr>';
+  html+='<th>#</th><th>主体</th><th>类型</th><th>凸点债券</th><th class="num">期限(年)</th>';
+  html+='<th class="num">绝对收益(%)</th><th>隐含评级</th><th>内评</th>';
+  html+='<th class="num">高于短邻(bp)</th><th class="num">高于长邻(bp)</th>';
+  html+='<th>短邻债券</th><th>长邻债券</th>';
+  html+='</tr></thead><tbody>';
+  convex.forEach((c,i)=>{
+    const subTag=c.sub==='是'?'次级':'普通';
+    html+=`<tr>
+      <td>${i+1}</td>
+      <td>${esc(c.issuer)}</td>
+      <td>${subTag}</td>
+      <td title="${esc(c.bond.code)}"><strong>${esc(c.bond.name)}</strong></td>
+      <td class="num">${c.bond.term.toFixed(2)}</td>
+      <td class="num"><strong style="color:var(--red)">${c.bond.ytm.toFixed(4)}</strong></td>
+      <td>${esc(c.bond.rating)}</td>
+      <td>${esc(c.bond.ir)}</td>
+      <td class="num" style="color:var(--red)">${c.dp.toFixed(1)}</td>
+      <td class="num" style="color:var(--red)">${c.dn.toFixed(1)}</td>
+      <td title="${c.prev.ytm.toFixed(4)}%">${esc(c.prev.name)}</td>
+      <td title="${c.next.ytm.toFixed(4)}%">${esc(c.next.name)}</td>
+    </tr>`;
+  });
+  html+='</tbody></table></div></div></div>';
+  el.innerHTML=html;
+}
+
+// ===================================================================
+//  EVENT HANDLERS (原版)
+// ===================================================================
+function onAnalyze(){
+  const termTh=parseFloat(document.getElementById('termTh').value)||0.25;
+  const yieldTh=parseFloat(document.getElementById('yieldTh').value)||3;
+  const excludeK=document.getElementById('excludeK').checked;
+  STATE.analysis=runAnalysis(termTh,yieldTh,excludeK);
+  STATE.filtered=applyFilters(STATE.analysis);
+  renderAll();
+}
+
+function onFilter(){
+  if(!STATE.analysis)return;
+  STATE.filtered=applyFilters(STATE.analysis);
+  renderAll();
+}
+
+function resetFilters(){
+  ['fCT','fEntity','fSub'].forEach(id=>document.getElementById(id).value='');
+  ['fMinYield','fMaxYield','fSearch'].forEach(id=>document.getElementById(id).value='');
+  clearMS('msRating');clearMS('msIR');
+  onFilter();
+}
+
+function switchTab(tab){
+  STATE.activeTab=tab;
+  document.querySelectorAll('#pane-inversion .tab-btn').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));
+  document.querySelectorAll('#pane-inversion .tab-pane').forEach(p=>p.classList.toggle('active',p.id==='pane-'+tab));
+}
+
+function toggleAcc(id){
+  const detail=document.getElementById('detail-'+id);
+  const arrow=document.getElementById('arrow-'+id);
+  const open=detail.classList.toggle('open');
+  arrow.classList.toggle('open',open);
+}
+
+function collapseAll(){
+  document.querySelectorAll('#pane-inversion .acc-detail').forEach(d=>d.classList.remove('open'));
+  document.querySelectorAll('#pane-inversion .acc-arrow').forEach(a=>a.classList.remove('open'));
+}
+
+// ===================================================================
+//  EXPORT (原版)
+// ===================================================================
+function exportCSV(type){
+  let csv='';
+  if(type==='inversions'){
+    csv='\uFEFF主体,次级,短期限债券,短期限代码,期限,估值%,长期限债券,长期限代码,期限,估值%,期限差,倒挂bp\n';
+    const ft=STATE.filtered;
+    Object.values(ft.groups).sort((a,b)=>b.maxYd-a.maxYd).forEach(g=>{
+      g.inversions.sort((a,b)=>b.yd-a.yd).forEach(inv=>{
+        csv+=`"${g.issuer}",${g.sub},"${inv.s.name}","${inv.s.code}",${inv.s.term},${inv.s.ytm},"${inv.l.name}","${inv.l.code}",${inv.l.term},${inv.l.ytm},${inv.td},${inv.yd}\n`;
+      });
+    });
+  } else {
+    csv='\uFEFF主体,类型,凸点债券,代码,期限,绝对收益%,隐含评级,内评,高于短邻bp,高于长邻bp\n';
+    STATE.filtered.convex.forEach(c=>{
+      csv+=`"${c.issuer}",${c.sub==='是'?'次级':'普通'},"${c.bond.name}","${c.bond.code}",${c.bond.term},${c.bond.ytm},${c.bond.rating},${c.bond.ir},${c.dp},${c.dn}\n`;
+    });
+  }
+  const blob=new Blob([csv],{type:'text/csv;charset=utf-8'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+  a.href=url;a.download=(type==='inversions'?'倒挂明细':'凸点债券')+'.csv';
+  a.click();URL.revokeObjectURL(url);
+}
+
+// ===================================================================
+//  UTILS
+// ===================================================================
+function esc(s){if(!s)return'';return s.replace(/&/g,'&').replace(/</g,'<').replace(/>/g,'>').replace(/"/g,'"')}
+function escAttr(s){if(!s)return'';return s.replace(/&/g,'&').replace(/</g,'<').replace(/>/g,'>').replace(/"/g,'"').replace(/'/g,'&#39;')}
+
+// ===================================================================
+//  GO
+// ===================================================================
+window.onload=init;
+</script>
+</body>
+</html>
