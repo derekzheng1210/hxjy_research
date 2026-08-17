@@ -64,6 +64,18 @@ class InternalKnowledgeBaseTest(unittest.TestCase):
         self.assertNotEqual(user["password_hash"], "member-password")
         self.assertNotIn("password", user)
 
+    def test_reminder_config_is_separate_from_empty_business_records(self):
+        store.set_reminder_config({
+            "period": "2026", "reportCategory": "deep",
+            "rules": [{"id": "rule-1", "label": "测试专题", "mode": "person",
+                       "target": 2, "userIds": ["member"]}],
+        })
+        config = store.reminder_config()
+        self.assertEqual(config["period"], "2026")
+        self.assertEqual(config["rules"][0]["target"], 2)
+        self.assertEqual(store.reports(), [])
+        self.assertEqual(store.ratings(), [])
+
     def test_admin_route_is_isolated_and_password_can_change(self):
         self.portal_session()
         portal_admin = self.client.get("/admin")
