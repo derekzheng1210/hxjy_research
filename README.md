@@ -28,10 +28,39 @@ python app.py
 
 访问 `http://127.0.0.1:5000`，先输入 `SITE_PASSWORD`。
 
-## Render/云端建议
+## Linux / 腾讯云生产部署
+
+不要在服务器上使用 `python app.py`。项目提供了适合 2 核 / 2GB 实例的
+Gunicorn 与 Nginx 示例配置：
+
+```bash
+gunicorn -c gunicorn.conf.py app:app
+```
+
+- `gunicorn.conf.py`：默认 2 workers × 2 threads，并开启预加载以减少重复内存。
+- `deploy/nginx.conf.example`：开启 gzip、反向代理缓冲及 110MB 上传限制。
+- `deploy/juyuan-credit-tools.service.example`：systemd 服务示例。
+- 部署后用浏览器开发者工具确认大响应包含 `Content-Encoding: gzip`。
+
+应用自身也有 gzip 兜底；Nginx 已压缩时不会重复压缩。可通过
+`COMPRESS_MIN_SIZE`、`COMPRESS_LEVEL` 调整应用层压缩阈值和等级。
+机构行为代理缓存默认 30 秒，可通过 `INSTITUTION_FLOW_QUERY_TTL` 调整；
+一级定价结果缓存默认保留 12 组筛选结果，可通过 `PRICING_RESULT_CACHE_MAX` 调整。
+
+示例文件替换域名和安装路径后，可按以下顺序启用：
+
+```bash
+sudo cp deploy/juyuan-credit-tools.service.example /etc/systemd/system/juyuan-credit-tools.service
+sudo cp deploy/nginx.conf.example /etc/nginx/conf.d/juyuan-credit-tools.conf
+sudo systemctl daemon-reload
+sudo systemctl enable --now juyuan-credit-tools
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+## Render/其他云端建议
 
 - Build Command: `pip install -r requirements.txt`
-- Start Command: `gunicorn app:app`
+- Start Command: `gunicorn -c gunicorn.conf.py app:app`
 - Environment Variables:
 - `SITE_PASSWORD`: 全站访问密码
 - `ADMIN_PASSWORD`: 后台上传和一键更新的二次验证密码，未设置时默认 `123456`
@@ -60,12 +89,16 @@ python app.py
 - Office 文档在线预览依赖本机 LibreOffice；PDF 查看和文件下载不受影响。
 - 超级管理员密码保存在数据库中并进行哈希，可在后台“安全设置”中修改。
 
-账号迁移默认只做预检；确认结果后加 `--apply` 写入。迁移只保留账号和超级管理员密码，
-不会复制报告、评分或附件：
+账号迁移默认只做预检；确认结果后加 `--apply` 写入。账号迁移只保留账号和超级管理员密码，
+不会复制报告、评分或附件。专题要求使用独立命令迁移，仍不会复制任何报告、评分、附件或 PDF 缓存：
 
 ```powershell
 python scripts/migrate_internal_knowledge_base_accounts.py --source "D:\path\to\data\store.json"
 python scripts/migrate_internal_knowledge_base_accounts.py --source "D:\path\to\data\store.json" --apply
+
+# 预检并迁移原系统的专题要求（迁移前自动备份知识库数据库）
+python scripts/migrate_internal_knowledge_base_reminders.py --source "D:\path\to\data\store.json"
+python scripts/migrate_internal_knowledge_base_reminders.py --source "D:\path\to\data\store.json" --apply
 ```
 
 ## 数据维护

@@ -52,6 +52,40 @@ HISTORY_START_DATE = "20240101"
 _BACKGROUND_JOBS: set[str] = set()
 _BACKGROUND_COMPLETED: set[str] = set()
 _BACKGROUND_LOCK = threading.Lock()
+_RESULT_CACHE: dict[tuple, dict] = {}
+_RESULT_CACHE_LOCK = threading.Lock()
+_RESULT_CACHE_MAX = max(1, int(os.environ.get("PRICING_RESULT_CACHE_MAX", "12")))
+
+
+def _cache_file_signature() -> tuple | None:
+    try:
+        stat = os.stat(CACHE_DB_PATH)
+        signature = [stat.st_mtime_ns, stat.st_size]
+        wal_path = f"{CACHE_DB_PATH}-wal"
+        try:
+            wal_stat = os.stat(wal_path)
+            signature.extend([wal_stat.st_mtime_ns, wal_stat.st_size])
+        except OSError:
+            signature.extend([None, None])
+        return tuple(signature)
+    except OSError:
+        return None
+
+
+def _cached_result(key: tuple, builder):
+    signature = _cache_file_signature()
+    cache_key = (signature, *key)
+    with _RESULT_CACHE_LOCK:
+        cached = _RESULT_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+    result = builder()
+    if result is not None:
+        with _RESULT_CACHE_LOCK:
+            if len(_RESULT_CACHE) >= _RESULT_CACHE_MAX:
+                _RESULT_CACHE.pop(next(iter(_RESULT_CACHE)))
+            _RESULT_CACHE[cache_key] = result
+    return result
 
 
 def _get_cache_conn():
@@ -612,6 +646,190 @@ def _read_bonds_from_cache(
         cache_conn.close()
 
 
+def _cache_filter_sql(
+    start_date: str,
+    end_date: str,
+    exclude_short: bool,
+    only_public: bool,
+    exclude_perpetual: bool,
+    term_min: float | None,
+    term_max: float | None,
+    *,
+    apply_config_exclusions: bool,
+) -> tuple[str, list]:
+    filters = ["issue_date_rule = ?", "issue_date >= ?", "issue_date <= ?"]
+    params: list = [ISSUE_DATE_RULE_VERSION, start_date, end_date]
+    if exclude_short:
+        filters.append("effective_term >= 1.0")
+    if only_public:
+        filters.append("TRIM(COALESCE(raise_mode, '')) = '1'")
+    if exclude_perpetual:
+        filters.extend([
+            "COALESCE(bond_type, '') <> 'perpetual'",
+            "UPPER(TRIM(COALESCE(cvtbd_expire, ''))) NOT LIKE '%+N'",
+            "COALESCE(bond_name, '') NOT LIKE '%永续%'",
+        ])
+    if term_min is not None:
+        filters.append("effective_term >= ?")
+        params.append(term_min)
+    if term_max is not None:
+        filters.append("effective_term <= ?")
+        params.append(term_max)
+    if apply_config_exclusions:
+        for keyword in config.EXCLUDED_ISSUER_KEYWORDS:
+            filters.append("COALESCE(issuer, '') NOT LIKE ?")
+            params.append(f"%{keyword}%")
+        for keyword in config.EXCLUDED_BOND_NAME_KEYWORDS:
+            filters.append("COALESCE(bond_name, '') NOT LIKE ?")
+            params.append(f"%{keyword}%")
+        for pattern in getattr(config, "EXCLUDED_BOND_NAME_LIKE_PATTERNS", ()):
+            filters.append("COALESCE(bond_name, '') NOT LIKE ?")
+            params.append(pattern)
+    return " AND ".join(filters), params
+
+
+def _read_market_result_from_cache(
+    start_date: str,
+    end_date: str,
+    exclude_short: bool,
+    only_public: bool,
+    exclude_perpetual: bool,
+    term_min: float | None,
+    term_max: float | None,
+) -> dict | None:
+    """Read only the seven columns needed by the market view."""
+    cache_conn = _get_cache_conn()
+    if not cache_conn:
+        return None
+    where_sql, params = _cache_filter_sql(
+        start_date, end_date, exclude_short, only_public, exclude_perpetual,
+        term_min, term_max, apply_config_exclusions=True,
+    )
+    try:
+        rows = cache_conn.execute(f"""
+            SELECT issue_date, issuer, issue_amount_wan, deviation_bp,
+                   COALESCE(is_no_judgement, 0) AS is_no_judgement,
+                   COALESCE(is_non_market, 0) AS is_non_market,
+                   CASE WHEN deviation_bp > ? THEN 1 ELSE 0 END AS is_overpriced
+            FROM bond_deviations
+            WHERE {where_sql}
+            ORDER BY issue_date
+        """, [OVERPRICED_THRESHOLD_BP, *params]).fetchall()
+        bonds = [{
+            "issue_date": row["issue_date"],
+            "issuer": row["issuer"],
+            "issue_amount_wan": row["issue_amount_wan"],
+            "deviation_bp": row["deviation_bp"],
+            "is_no_judgement": bool(row["is_no_judgement"]) or row["deviation_bp"] is None,
+            "is_non_market": bool(row["is_non_market"]),
+            "is_overpriced": bool(row["is_overpriced"]),
+        } for row in rows]
+        return _build_market_result(bonds, start_date, end_date)
+    except Exception:
+        return None
+    finally:
+        cache_conn.close()
+
+
+def _read_issuer_summary_aggregated(
+    start_date: str,
+    end_date: str,
+    exclude_short: bool,
+    only_public: bool,
+    exclude_perpetual: bool,
+    term_min: float | None,
+    term_max: float | None,
+) -> dict | None:
+    """Aggregate issuer rows in SQLite instead of materialising every bond."""
+    cache_conn = _get_cache_conn()
+    if not cache_conn:
+        return None
+    where_sql, params = _cache_filter_sql(
+        start_date, end_date, exclude_short, only_public, exclude_perpetual,
+        term_min, term_max, apply_config_exclusions=False,
+    )
+    valid = "COALESCE(is_no_judgement, 0) = 0 AND deviation_bp IS NOT NULL"
+    try:
+        rows = cache_conn.execute(f"""
+            SELECT issuer,
+                   COUNT(*) AS total_bonds,
+                   SUM(issue_amount_wan) AS issue_amount_wan,
+                   COUNT(issue_amount_wan) AS issue_amount_bond_count,
+                   SUM(CASE WHEN {valid} THEN 1 ELSE 0 END) AS calculated_bonds,
+                   SUM(CASE WHEN {valid} AND is_non_market = 1 THEN 1 ELSE 0 END) AS non_market_count,
+                   SUM(CASE WHEN {valid} AND is_overpriced = 1 THEN 1 ELSE 0 END) AS overpriced_count,
+                   AVG(CASE WHEN {valid} THEN deviation_bp END) AS avg_deviation_bp,
+                   AVG(CASE WHEN {valid} THEN ABS(deviation_bp) END) AS avg_abs_deviation_bp,
+                   MIN(CASE WHEN {valid} THEN deviation_bp END) AS min_deviation_bp,
+                   MAX(CASE WHEN {valid} THEN deviation_bp END) AS max_deviation_bp,
+                   MIN(issue_date) AS first_issue_date,
+                   MAX(issue_date) AS last_issue_date
+            FROM bond_deviations
+            WHERE {where_sql} AND TRIM(COALESCE(issuer, '')) <> ''
+            GROUP BY issuer
+        """, params).fetchall()
+        issuers = []
+        total_amount_wan = 0.0
+        has_known_amount = False
+        for row in rows:
+            total = row["total_bonds"] or 0
+            calculated = row["calculated_bonds"] or 0
+            non_market = row["non_market_count"] or 0
+            overpriced = row["overpriced_count"] or 0
+            amount = row["issue_amount_wan"]
+            if amount is not None:
+                total_amount_wan += float(amount)
+                has_known_amount = True
+            issuers.append({
+                "issuer": row["issuer"],
+                "internal_rating": rating_for_issuer(row["issuer"]),
+                "total_bonds": total,
+                "issue_amount_yi": _workpaper_round(amount / 10000, 4) if amount is not None else None,
+                "issue_amount_bond_count": row["issue_amount_bond_count"] or 0,
+                "calculated_bonds": calculated,
+                "calculable_ratio": _workpaper_round(calculated / total, 4) if total else 0.0,
+                "non_market_count": non_market,
+                "non_market_ratio": _workpaper_round(non_market / calculated, 4) if calculated else None,
+                "overpriced_count": overpriced,
+                "overpriced_ratio": _workpaper_round(overpriced / calculated, 4) if calculated else None,
+                "avg_deviation_bp": _workpaper_round(row["avg_deviation_bp"], 2) if row["avg_deviation_bp"] is not None else None,
+                "avg_abs_deviation_bp": _workpaper_round(row["avg_abs_deviation_bp"], 2) if row["avg_abs_deviation_bp"] is not None else None,
+                "min_deviation_bp": _workpaper_round(row["min_deviation_bp"], 2) if row["min_deviation_bp"] is not None else None,
+                "max_deviation_bp": _workpaper_round(row["max_deviation_bp"], 2) if row["max_deviation_bp"] is not None else None,
+                "first_issue_date": row["first_issue_date"],
+                "last_issue_date": row["last_issue_date"],
+            })
+
+        deviations = [row[0] for row in cache_conn.execute(
+            f"SELECT deviation_bp FROM bond_deviations WHERE {where_sql} AND {valid}", params,
+        ).fetchall()]
+        total_bonds = sum(row["total_bonds"] for row in issuers)
+        calculated_bonds = sum(row["calculated_bonds"] for row in issuers)
+        non_market_count = sum(row["non_market_count"] for row in issuers)
+        overpriced_count = sum(row["overpriced_count"] for row in issuers)
+        known_amount_count = sum(row["issue_amount_bond_count"] for row in issuers)
+        overall = {
+            "total_bonds": total_bonds,
+            "issuer_count": len(issuers),
+            "issue_amount_wan": round(total_amount_wan, 4) if has_known_amount else None,
+            "issue_amount_yi": round(total_amount_wan / 10000, 4) if has_known_amount else None,
+            "issue_amount_bond_count": known_amount_count,
+            "calculated_bonds": calculated_bonds,
+            "calculable_ratio": round(calculated_bonds / total_bonds, 4) if total_bonds else 0.0,
+            "non_market_count": non_market_count,
+            "non_market_ratio": round(non_market_count / calculated_bonds, 4) if calculated_bonds else 0.0,
+            "overpriced_count": overpriced_count,
+            "overpriced_ratio": round(overpriced_count / calculated_bonds, 4) if calculated_bonds else 0.0,
+            "avg_deviation_bp": round(sum(deviations) / len(deviations), 2) if deviations else 0.0,
+            "median_deviation_bp": round(median(deviations), 2) if deviations else 0.0,
+        }
+        return {"start_date": start_date, "end_date": end_date, "summary": overall, "issuers": issuers, "_source": "cache"}
+    except Exception:
+        return None
+    finally:
+        cache_conn.close()
+
+
 def _issuer_rows_from_bonds(bonds: list[dict], history_lookup: dict[str, dict] | None = None) -> list[dict]:
     """Aggregate cached bond rows by issuer for market/date overview tables."""
     grouped: dict[str, list[dict]] = {}
@@ -948,7 +1166,7 @@ def api_cache_meta():
 def api_market():
     """Return cached all-market summary and issue-date time series."""
     start_date = request.args.get("start_date", HISTORY_START_DATE)
-    end_date = request.args.get("end_date", _default_end_date())
+    end_date = request.args.get("end_date") or _default_end_date()
     exclude_short = request.args.get("exclude_short", "0") == "1"
     only_public = request.args.get("only_public", "0") == "1"
     exclude_perpetual = request.args.get("exclude_perpetual", "0") == "1"
@@ -962,26 +1180,29 @@ def api_market():
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
 
-    bonds = _read_bonds_from_cache(
-        start_date,
-        end_date,
-        exclude_short,
-        only_public,
-        exclude_perpetual,
-        term_min,
-        term_max,
+    cache_key = (
+        "market", start_date, end_date, exclude_short, only_public,
+        exclude_perpetual, term_min, term_max,
     )
-    cache_missing = bonds is None
+    cached = _cached_result(cache_key, lambda: _read_market_result_from_cache(
+        start_date, end_date, exclude_short, only_public, exclude_perpetual,
+        term_min, term_max,
+    ))
+    cache_missing = cached is None
     if cache_missing:
-        bonds = []
         _schedule_background_job(
             f"amount:{start_date}:{end_date}",
             _backfill_issue_amounts,
             start_date,
             end_date,
         )
-    amount_pending = _schedule_amount_backfill(bonds, start_date, end_date)
-    result = _build_market_result(bonds, start_date, end_date)
+    result = dict(cached or _build_market_result([], start_date, end_date))
+    summary = result.get("summary") or {}
+    amount_pending = False
+    if summary.get("issue_amount_bond_count", 0) < summary.get("total_bonds", 0):
+        amount_pending = _schedule_background_job(
+            f"amount:{start_date}:{end_date}", _backfill_issue_amounts, start_date, end_date,
+        )
     result["_background_refresh"] = cache_missing
     result["_amount_pending"] = amount_pending
     return jsonify(result)
@@ -991,7 +1212,7 @@ def api_market():
 def api_issuer_summary():
     """Return all-issuer aggregation from the cached issuance deviations."""
     start_date = request.args.get("start_date", HISTORY_START_DATE)
-    end_date = request.args.get("end_date", _default_end_date())
+    end_date = request.args.get("end_date") or _default_end_date()
     exclude_short = request.args.get("exclude_short", "0") == "1"
     only_public = request.args.get("only_public", "0") == "1"
     exclude_perpetual = request.args.get("exclude_perpetual", "0") == "1"
@@ -1005,19 +1226,55 @@ def api_issuer_summary():
     except ValueError:
         return jsonify({"error": "日期或期限筛选无效"}), 400
 
-    bonds = _read_bonds_from_cache(
-        start_date,
-        end_date,
-        exclude_short,
-        only_public,
-        exclude_perpetual,
-        term_min,
-        term_max,
-        apply_config_exclusions=False,
-        use_cached_overpriced=True,
+    cache_key = (
+        "issuer-summary", start_date, end_date, exclude_short, only_public,
+        exclude_perpetual, term_min, term_max,
     )
-    cache_missing = bonds is None
-    result = _build_issuer_summary_result(bonds or [], start_date, end_date)
+    cached = _cached_result(cache_key, lambda: _read_issuer_summary_aggregated(
+        start_date, end_date, exclude_short, only_public, exclude_perpetual,
+        term_min, term_max,
+    ))
+    cache_missing = cached is None
+    result = dict(cached or _build_issuer_summary_result([], start_date, end_date))
+    rows = list(result.get("issuers") or [])
+    keyword = request.args.get("search", "").strip().casefold()
+    try:
+        min_sample = max(0, int(request.args.get("min_sample", "0") or 0))
+        export_all = request.args.get("export", "0") == "1"
+        page_size = 100000 if export_all else max(20, min(200, int(request.args.get("page_size", "100") or 100)))
+        page = max(1, int(request.args.get("page", "1") or 1))
+    except ValueError:
+        return jsonify({"error": "分页参数无效"}), 400
+    if keyword:
+        rows = [row for row in rows if keyword in row["issuer"].casefold()]
+    if min_sample:
+        rows = [row for row in rows if row["calculated_bonds"] >= min_sample]
+
+    sort_by = request.args.get("sort_by", "avg_deviation_bp")
+    allowed_sort = {
+        "issuer", "total_bonds", "issue_amount_yi", "calculated_bonds", "calculable_ratio",
+        "non_market_count", "non_market_ratio", "overpriced_count", "overpriced_ratio",
+        "avg_deviation_bp", "last_issue_date",
+    }
+    if sort_by not in allowed_sort:
+        sort_by = "avg_deviation_bp"
+    descending = request.args.get("sort_dir", "desc") != "asc"
+    if sort_by == "issuer":
+        rows.sort(key=lambda row: row[sort_by], reverse=descending)
+    else:
+        rows.sort(key=lambda row: (row.get(sort_by) is not None, row.get(sort_by) or 0), reverse=descending)
+
+    total_filtered = len(rows)
+    total_pages = max(1, (total_filtered + page_size - 1) // page_size)
+    page = min(page, total_pages)
+    start = (page - 1) * page_size
+    result["issuers"] = rows[start:start + page_size]
+    result["pagination"] = {
+        "page": page,
+        "page_size": page_size,
+        "total": total_filtered,
+        "total_pages": total_pages,
+    }
     result["_background_refresh"] = cache_missing
     return jsonify(result)
 
@@ -1210,4 +1467,3 @@ if __name__ == "__main__":
         port=config.FLASK_PORT,
         debug=config.FLASK_DEBUG,
     )
-

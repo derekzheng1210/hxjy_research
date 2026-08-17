@@ -1,0 +1,20 @@
+[Unit]
+Description=Juyuan Credit Tools Portal
+After=network.target
+
+[Service]
+Type=notify
+User=www-data
+Group=www-data
+WorkingDirectory=/opt/juyuan_credit_tools_portal
+EnvironmentFile=/opt/juyuan_credit_tools_portal/.env
+ExecStart=/opt/juyuan_credit_tools_portal/.venv/bin/gunicorn -c gunicorn.conf.py app:app
+ExecReload=/bin/kill -s HUP $MAINPID
+KillSignal=SIGQUIT
+TimeoutStopSec=30
+Restart=always
+RestartSec=3
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

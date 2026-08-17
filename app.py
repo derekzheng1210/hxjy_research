@@ -1,4 +1,5 @@
 ﻿import json
+import gzip
 import hmac
 import os
 import re
@@ -66,12 +67,32 @@ INSTITUTION_FLOW_UPSTREAM = "http://43.137.12.140:8000/bondflow/api"
 INSTITUTION_FLOW_UPSTREAM_PAGE = "http://43.137.12.140:8000/jgxw/"
 INSTITUTION_FLOW_TIMEOUT = 120
 INSTITUTION_FLOW_OPTIONS_TTL = 300
+INSTITUTION_FLOW_QUERY_TTL = int(os.environ.get("INSTITUTION_FLOW_QUERY_TTL", "30"))
+INSTITUTION_FLOW_CACHE_MAX = int(os.environ.get("INSTITUTION_FLOW_CACHE_MAX", "128"))
 _institution_flow_options = {"timestamp": 0.0, "payload": None}
+_institution_flow_cache_lock = threading.Lock()
+_institution_flow_cache = {}
 _institution_flow_http = requests.Session()
 _institution_flow_http.headers.update({
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) credit-tools-portal/1.0",
     "Referer": INSTITUTION_FLOW_UPSTREAM_PAGE,
 })
+
+COMPRESS_MIN_SIZE = int(os.environ.get("COMPRESS_MIN_SIZE", "1024"))
+COMPRESS_LEVEL = max(1, min(9, int(os.environ.get("COMPRESS_LEVEL", "5"))))
+_compress_cache_lock = threading.Lock()
+_compress_cache = {}
+_compressible_mimetypes = {
+    "application/javascript",
+    "application/json",
+    "application/xml",
+    "image/svg+xml",
+    "text/css",
+    "text/html",
+    "text/javascript",
+    "text/plain",
+    "text/xml",
+}
 
 
 def site_password():
@@ -436,6 +457,60 @@ def html_response(path: Path, active_endpoint: str, missing_message: str, replac
 
 
 @app.after_request
+def compress_text_response(response):
+    """Gzip sizeable text responses when the reverse proxy did not compress them."""
+    if (
+        request.method == "HEAD"
+        or response.status_code < 200
+        or response.status_code in {204, 205, 304}
+        or response.headers.get("Content-Encoding")
+        or "gzip" not in request.accept_encodings
+        or request.accept_encodings["gzip"] <= 0
+        or response.mimetype not in _compressible_mimetypes
+    ):
+        return response
+
+    content_length = response.content_length
+    if content_length is not None and content_length < COMPRESS_MIN_SIZE:
+        return response
+
+    cache_key = None
+    etag = response.headers.get("ETag")
+    if etag and content_length:
+        cache_key = (etag, content_length, response.mimetype, COMPRESS_LEVEL)
+        with _compress_cache_lock:
+            compressed = _compress_cache.get(cache_key)
+        if compressed is not None:
+            response.direct_passthrough = False
+            response.set_data(compressed)
+            response.headers["Content-Encoding"] = "gzip"
+            response.vary.add("Accept-Encoding")
+            if etag and not etag.startswith("W/"):
+                response.headers["ETag"] = f"W/{etag}"
+            return response
+
+    response.direct_passthrough = False
+    payload = response.get_data()
+    if len(payload) < COMPRESS_MIN_SIZE:
+        return response
+    compressed = gzip.compress(payload, compresslevel=COMPRESS_LEVEL)
+    if len(compressed) >= len(payload):
+        return response
+
+    if cache_key is not None:
+        with _compress_cache_lock:
+            if len(_compress_cache) >= 32:
+                _compress_cache.pop(next(iter(_compress_cache)))
+            _compress_cache[cache_key] = compressed
+    response.set_data(compressed)
+    response.headers["Content-Encoding"] = "gzip"
+    response.vary.add("Accept-Encoding")
+    if etag and not etag.startswith("W/"):
+        response.headers["ETag"] = f"W/{etag}"
+    return response
+
+
+@app.after_request
 def inject_primary_market_pricing_nav(response):
     if request.blueprint != pricing_bp.name or not response.content_type.startswith("text/html"):
         return response
@@ -562,7 +637,16 @@ def bond_picker():
 @app.route("/strategy-dashboard")
 @login_required
 def strategy_dashboard():
-    return html_response(STRATEGY_HTML, "strategy_dashboard", "策略仪表盘 HTML 文件不存在，请先到后台上传。")
+    local_echarts = url_for("static", filename="vendor/echarts.min.js")
+    return html_response(
+        STRATEGY_HTML,
+        "strategy_dashboard",
+        "策略仪表盘 HTML 文件不存在，请先到后台上传。",
+        replacements={
+            "https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js": local_echarts,
+            "https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js": local_echarts,
+        },
+    )
 
 
 @app.route("/spread-monitor")
@@ -603,6 +687,14 @@ def institution_flow_proxy(subpath):
         cached = _institution_flow_options
         if cached["payload"] is not None and time.time() - cached["timestamp"] < INSTITUTION_FLOW_OPTIONS_TTL:
             return jsonify(cached["payload"])
+    cache_key = (subpath.rstrip("/"), tuple(sorted(institution_flow_forward_args())))
+    if not is_options and INSTITUTION_FLOW_QUERY_TTL > 0:
+        with _institution_flow_cache_lock:
+            cached = _institution_flow_cache.get(cache_key)
+        if cached and time.time() - cached["timestamp"] < INSTITUTION_FLOW_QUERY_TTL:
+            return app.response_class(
+                cached["content"], status=cached["status"], content_type=cached["content_type"],
+            )
     try:
         response = _institution_flow_http.get(
             f"{INSTITUTION_FLOW_UPSTREAM}/{subpath}",
@@ -616,6 +708,16 @@ def institution_flow_proxy(subpath):
             _institution_flow_options.update(timestamp=time.time(), payload=response.json())
         except ValueError:
             pass
+    elif response.ok and INSTITUTION_FLOW_QUERY_TTL > 0:
+        with _institution_flow_cache_lock:
+            if len(_institution_flow_cache) >= INSTITUTION_FLOW_CACHE_MAX:
+                _institution_flow_cache.pop(next(iter(_institution_flow_cache)))
+            _institution_flow_cache[cache_key] = {
+                "timestamp": time.time(),
+                "content": response.content,
+                "status": response.status_code,
+                "content_type": response.headers.get("Content-Type", "application/json"),
+            }
     return app.response_class(
         response.content,
         status=response.status_code,
@@ -674,6 +776,7 @@ def industry_prosperity():
 @app.route("/credit-std-dev")
 @login_required
 def credit_std_dev():
+    local_echarts = url_for("static", filename="vendor/echarts.min.js")
     return html_response(
         STD_DEV_HTML,
         "credit_std_dev",
@@ -681,6 +784,7 @@ def credit_std_dev():
         replacements={
             'src="data/spread_data.js"': f'src="{url_for("credit_std_dev_data_js")}"',
             "src='data/spread_data.js'": f"src='{url_for('credit_std_dev_data_js')}'",
+            "https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js": local_echarts,
         },
     )
 

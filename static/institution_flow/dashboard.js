@@ -241,11 +241,16 @@ function renderSummary() {
   addChips(state.inst, options.institutions); addChips(state.bond, options.bond_types); addChips(state.tenor, options.tenors);
   if (!wrap.children.length) wrap.innerHTML = '<span style="font-size:12px;color:var(--muted)">全部机构 × 全部券种 × 全部期限</span>';
 }
+var filterChangeTimer = null;
 function onFilterChange() {
-  loadedTabs = {};
   mainRequests.invalidate();
   seasonalityRequests.invalidate();
   dailyRequests.invalidate();
+  clearTimeout(filterChangeTimer);
+  filterChangeTimer = setTimeout(applyFilterChange, 180);
+}
+function applyFilterChange() {
+  loadedTabs = {};
   seasonYieldSeq += 1;
   lastMainResp = null;
   mainStore = null;

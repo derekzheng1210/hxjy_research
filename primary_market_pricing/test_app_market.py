@@ -130,7 +130,9 @@ class MarketAggregationTests(unittest.TestCase):
         }, results)
 
     def test_market_cache_miss_returns_empty_without_waiting(self):
-        with patch.object(app_module, "_read_bonds_from_cache", return_value=None), patch.object(
+        with patch.object(app_module, "_read_market_result_from_cache", return_value=None), patch.object(
+            app_module, "_cached_result", side_effect=lambda key, builder: builder()
+        ), patch.object(
             app_module, "_schedule_background_job", return_value=True
         ):
             response = app_module.app.test_client().get(
@@ -163,13 +165,14 @@ class MarketAggregationTests(unittest.TestCase):
         self.assertIsNone(no_sample["avg_deviation_bp"])
         self.assertIsNone(no_sample["avg_abs_deviation_bp"])
 
-    def test_issuer_summary_endpoint_returns_all_cached_issuers(self):
+    def test_issuer_summary_endpoint_is_paginated(self):
         response = app_module.app.test_client().get(
             "/api/issuer-summary?start_date=20260701&end_date=20260710"
         )
         self.assertEqual(response.status_code, 200)
         data = response.get_json()
-        self.assertEqual(data["summary"]["issuer_count"], len(data["issuers"]))
+        self.assertEqual(data["summary"]["issuer_count"], data["pagination"]["total"])
+        self.assertEqual(len(data["issuers"]), min(100, data["pagination"]["total"]))
 
     def test_date_cache_miss_returns_empty_and_schedules_refresh(self):
         with patch.object(app_module, "_read_bonds_from_cache", return_value=None), patch.object(
