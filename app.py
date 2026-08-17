@@ -4,6 +4,7 @@ import os
 import re
 import shutil
 import tempfile
+import threading
 from datetime import datetime
 from functools import wraps
 from pathlib import Path
@@ -377,14 +378,52 @@ def render_portal_template(template_name: str, active_endpoint: str, **context):
     return Response(inject_portal_nav(html, active_endpoint), content_type="text/html; charset=utf-8")
 
 
+# 注入导航栏后的 HTML 缓存：仪表盘 HTML（如策略仪表盘 ~7MB）每次请求都全量读盘 +
+# 全量正则注入极其昂贵，而文件仅在"一键更新"重写后才变化。按 mtime 缓存最终结果，
+# 文件未变时直接复用，省去读盘与正则扫描。
+_html_cache_lock = threading.Lock()
+_html_cache = {}  # key -> {"mtime": float, "html": str}
+
+
 def html_response(path: Path, active_endpoint: str, missing_message: str, replacements=None):
     if not path.exists():
         return Response(missing_message, status=404, content_type="text/plain; charset=utf-8")
-    html = path.read_text(encoding="utf-8", errors="replace")
-    if replacements:
-        for old, new in replacements.items():
-            html = html.replace(old, new)
-    return Response(inject_portal_nav(html, active_endpoint), content_type="text/html; charset=utf-8")
+    try:
+        stat = path.stat()
+        mtime = stat.st_mtime
+        size = stat.st_size
+    except OSError:
+        mtime = None
+        size = None
+
+    cache_key = (
+        str(path),
+        active_endpoint,
+        tuple(sorted(replacements.items())) if replacements else None,
+    )
+
+    html = None
+    with _html_cache_lock:
+        ent = _html_cache.get(cache_key)
+        if ent and ent["mtime"] == mtime:
+            html = ent["html"]
+
+    if html is None:
+        html = path.read_text(encoding="utf-8", errors="replace")
+        if replacements:
+            for old, new in replacements.items():
+                html = html.replace(old, new)
+        html = inject_portal_nav(html, active_endpoint)
+        with _html_cache_lock:
+            _html_cache[cache_key] = {"mtime": mtime, "html": html}
+
+    # 浏览器缓存：1 分钟内不重复请求整页；ETag 命中时仅回 304，省去 7MB 传输。
+    etag = f'"{active_endpoint}-{int(mtime or 0)}-{size or 0}"'
+    resp = Response(html, content_type="text/html; charset=utf-8")
+    resp.headers["ETag"] = etag
+    resp.headers["Cache-Control"] = "private, max-age=60"
+    resp.make_conditional(request)
+    return resp
 
 
 @app.after_request
