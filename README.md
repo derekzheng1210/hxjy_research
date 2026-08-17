@@ -21,6 +21,8 @@ pip install -r requirements.txt
 $env:SITE_PASSWORD="your-password"
 $env:ADMIN_PASSWORD="your-admin-password"
 $env:SECRET_KEY="change-this-secret"
+# 启用知识搜索：从 DeepSeek 控制台获取密钥后设置；Windows 服务安装脚本会写入服务进程环境。
+$env:DEEPSEEK_API_KEY="sk-..."
 # 可选：数据不在项目同级时设置
 # $env:PORTAL_DATA_ROOT="D:\信用债研究\完整网页内容\juyuan_credit_data"
 python app.py
@@ -88,6 +90,8 @@ sudo nginx -t && sudo systemctl reload nginx
 - PDF 缓存不会自动过期，超级管理员可在后台查看占用空间并按文件、报告或全部删除。
 - Office 文档在线预览依赖本机 LibreOffice；PDF 查看和文件下载不受影响。
 - 超级管理员密码保存在数据库中并进行哈希，可在后台“安全设置”中修改。
+- 知识搜索调用 DeepSeek，设置 `DEEPSEEK_API_KEY` 后即可启用；密钥仅保存在 `.env` 或服务进程环境变量中，不会下发到浏览器。已安装的 Windows 服务需要同步更新其 NSSM 环境变量并重启服务。
+  管理员可运行 `powershell -ExecutionPolicy Bypass -File scripts/sync_windows_service_deepseek_key.ps1` 完成同步。
 
 账号迁移默认只做预检；确认结果后加 `--apply` 写入。账号迁移只保留账号和超级管理员密码，
 不会复制报告、评分或附件。专题要求使用独立命令迁移，仍不会复制任何报告、评分、附件或 PDF 缓存：

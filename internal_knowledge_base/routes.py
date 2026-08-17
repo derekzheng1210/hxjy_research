@@ -109,7 +109,6 @@ def _llm_api_key():
         return ""
 
 
-LLM_API_KEY = _llm_api_key()
 LLM_BASE_URL = "https://api.deepseek.com"
 LLM_MODEL = "deepseek-chat"
 LLM_TIMEOUT = 90
@@ -529,7 +528,10 @@ def _call_deepseek(prompt, system=None, max_tokens=None):
     max_tokens：可选的输出长度上限，未传时由模型默认值决定。
     两参数均不影响不传时的原有行为（如标签/摘要提取）。
     """
-    if not LLM_API_KEY:
+    # 每次调用时解析密钥：Windows 服务更新环境变量并重启、或管理员补充 .env
+    # 后，不会因为模块导入时缓存了空值而一直不可用。
+    api_key = _llm_api_key()
+    if not api_key:
         raise RuntimeError("未配置 DEEPSEEK_API_KEY")
     messages = []
     if system:
@@ -548,7 +550,7 @@ def _call_deepseek(prompt, system=None, max_tokens=None):
         LLM_BASE_URL.rstrip("/") + "/chat/completions",
         data=body,
         headers={"Content-Type": "application/json",
-                 "Authorization": f"Bearer {LLM_API_KEY}"},
+                 "Authorization": f"Bearer {api_key}"},
     )
     # 系统环境可能配置了失效的本地代理（例如 127.0.0.1:9）。
     # DeepSeek 请求显式直连，避免知识搜索因代理拒绝连接而失败。
@@ -1280,7 +1282,7 @@ def api_knowledge_search():
     if request.method == "GET":
         history = store.qa_history_for_user(user["id"])
         return jsonify({"limit": limit, "used": used, "remaining": max(limit - used, 0),
-                        "available": bool(LLM_API_KEY), "history": history})
+                        "available": bool(_llm_api_key()), "history": history})
     if used >= limit:
         return json_error(f"今日 {limit} 次知识搜索额度已用完，请明天再试", 429)
     question = str((request.get_json(silent=True) or {}).get("question", "")).strip()
@@ -1288,7 +1290,7 @@ def api_knowledge_search():
         return json_error("请输入具体问题", 400)
     if len(question) > 300:
         return json_error("问题请控制在 300 字以内", 400)
-    if not LLM_API_KEY:
+    if not _llm_api_key():
         return json_error("知识搜索尚未配置 DEEPSEEK_API_KEY", 503)
     try:
         result = _answer_knowledge_question(question)

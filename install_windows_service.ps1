@@ -67,6 +67,15 @@ Write-Host "Installing Python dependencies ..."
 
 $SitePassword = Read-Host "Enter SITE_PASSWORD for website login"
 $SecretKey = Read-Host "Enter Flask SECRET_KEY, use a long random string"
+# 知识搜索使用服务进程自身的环境变量。不能只设置到当前用户环境，
+# 否则 NSSM 服务（尤其以其他账户运行时）不会继承该密钥。
+$DeepSeekApiKey = $env:DEEPSEEK_API_KEY
+if (-not $DeepSeekApiKey) {
+    $DeepSeekApiKey = [Environment]::GetEnvironmentVariable("DEEPSEEK_API_KEY", "User")
+}
+if (-not $DeepSeekApiKey) {
+    $DeepSeekApiKey = Read-Host "Enter DEEPSEEK_API_KEY (leave blank to disable knowledge search)"
+}
 
 Write-Host "Registering Windows service $ServiceName ..."
 $ExistingService = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
@@ -78,7 +87,17 @@ if ($ExistingService) {
 
 & $Nssm install $ServiceName $VenvPython "app.py"
 & $Nssm set $ServiceName AppDirectory $ProjectDir
-& $Nssm set $ServiceName AppEnvironmentExtra "PORTAL_DATA_ROOT=$DataRoot" "SITE_PASSWORD=$SitePassword" "SECRET_KEY=$SecretKey" "FLASK_DEBUG=0" "PORT=$Port"
+$ServiceEnvironment = @(
+    "PORTAL_DATA_ROOT=$DataRoot",
+    "SITE_PASSWORD=$SitePassword",
+    "SECRET_KEY=$SecretKey",
+    "FLASK_DEBUG=0",
+    "PORT=$Port"
+)
+if ($DeepSeekApiKey) {
+    $ServiceEnvironment += "DEEPSEEK_API_KEY=$DeepSeekApiKey"
+}
+& $Nssm set $ServiceName AppEnvironmentExtra $ServiceEnvironment
 & $Nssm set $ServiceName AppStdout (Join-Path $LogDir "service-out.log")
 & $Nssm set $ServiceName AppStderr (Join-Path $LogDir "service-error.log")
 & $Nssm set $ServiceName AppRotateFiles 1
