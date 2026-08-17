@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="csrf-token" content="__CSRF_TOKEN__">
+  <meta name="theme-color" content="#1e293b">
+  <title>后台管理 · 内部知识库</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231e293b'/%3E%3Cpath d='M16 4a3 3 0 0 0-3 3v2H9a3 3 0 0 0-3 3v3h20v-3a3 3 0 0 0-3-3h-4V7a3 3 0 0 0-3-3ZM6 17v8a3 3 0 0 0 3 3h14a3 3 0 0 0 3-3v-8H6Z' fill='white'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="css/style.css">
+  <link rel="stylesheet" href="css/admin.css">
+</head>
+<body>
+  <!-- 登录页 -->
+  <div class="admin-login-page" id="adminLoginPage">
+    <div class="admin-login-card">
+      <div class="admin-login-brand">
+        <div class="admin-brand-mark">
+          <svg viewBox="0 0 32 32" fill="none"><rect width="32" height="32" rx="7" fill="#1e293b"/><path d="M16 7a2.5 2.5 0 0 0-2.5 2.5V11H10a2.5 2.5 0 0 0-2.5 2.5V16h17v-2.5A2.5 2.5 0 0 0 22 11h-3.5V9.5A2.5 2.5 0 0 0 16 7ZM7.5 18v6.5A2.5 2.5 0 0 0 10 27h12a2.5 2.5 0 0 0 2.5-2.5V18h-17Z" fill="white"/></svg>
+        </div>
+        <h1>后台管理</h1>
+        <p>内部知识库</p>
+      </div>
+      <form id="adminLoginForm" class="admin-login-form" novalidate>
+        <div class="form-field">
+          <label for="adminPassword">管理密码</label>
+          <div class="input-with-icon">
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="4" y="10" width="16" height="11" rx="2" stroke="currentColor" stroke-width="1.8"/><path d="M8 10V7a4 4 0 0 1 8 0v3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+            <input id="adminPassword" name="password" type="password" autocomplete="current-password" placeholder="请输入后台管理密码" required autofocus>
+          </div>
+        </div>
+        <div class="login-error" id="adminLoginError" role="alert"></div>
+        <button class="btn btn-primary btn-login" type="submit">进入后台</button>
+        <a class="admin-back-link" href="./">← 返回内部知识库</a>
+      </form>
+    </div>
+  </div>
+
+  <!-- 后台主体 -->
+  <div class="admin-shell" id="adminShell" hidden>
+    <aside class="admin-sidebar">
+      <div class="admin-sidebar-brand">
+        <div class="admin-brand-mark">
+          <svg viewBox="0 0 32 32" fill="none"><rect width="32" height="32" rx="7" fill="#1e293b"/><path d="M16 7a2.5 2.5 0 0 0-2.5 2.5V11H10a2.5 2.5 0 0 0-2.5 2.5V16h17v-2.5A2.5 2.5 0 0 0 22 11h-3.5V9.5A2.5 2.5 0 0 0 16 7ZM7.5 18v6.5A2.5 2.5 0 0 0 10 27h12a2.5 2.5 0 0 0 2.5-2.5V18h-17Z" fill="white"/></svg>
+        </div>
+        <div>
+          <strong>后台管理</strong>
+          <span>内部知识库</span>
+        </div>
+      </div>
+      <nav class="admin-nav" aria-label="后台导航">
+        <button class="admin-nav-item active" data-view="overview">
+          <svg viewBox="0 0 24 24" fill="none"><rect x="3" y="3" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="1.8"/><rect x="14" y="3" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="1.8"/><rect x="3" y="14" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="1.8"/><rect x="14" y="14" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="1.8"/></svg>
+          <span>概览</span>
+        </button>
+        <button class="admin-nav-item" data-view="reports">
+          <svg viewBox="0 0 24 24" fill="none"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H10l2 2h5.5A2.5 2.5 0 0 1 20 7.5v9a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 4 16.5v-11Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+          <span>报告管理</span>
+        </button>
+        <button class="admin-nav-item" data-view="users">
+          <svg viewBox="0 0 24 24" fill="none"><path d="M20 21a8 8 0 0 0-16 0M12 13a5 5 0 1 0 0-10 5 5 0 0 0 0 10Z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          <span>用户管理</span>
+        </button>
+        <button class="admin-nav-item" data-view="reminders">
+          <svg viewBox="0 0 24 24" fill="none"><path d="M6 3h12v18H6zM9 8h6M9 12h6M9 16h4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span>工作提醒</span>
+        </button>
+        <button class="admin-nav-item" data-view="cache">
+          <svg viewBox="0 0 24 24" fill="none"><path d="M4 7c0-2 3.6-4 8-4s8 2 8 4-3.6 4-8 4-8-2-8-4Zm0 0v5c0 2 3.6 4 8 4s8-2 8-4V7m-16 5v5c0 2 3.6 4 8 4s8-2 8-4v-5" stroke="currentColor" stroke-width="1.8"/></svg>
+          <span>PDF缓存</span>
+        </button>
+        <button class="admin-nav-item" data-view="security">
+          <svg viewBox="0 0 24 24" fill="none"><path d="M12 3 5 6v5c0 4.7 2.8 8.3 7 10 4.2-1.7 7-5.3 7-10V6l-7-3Z" stroke="currentColor" stroke-width="1.8"/><path d="M9 12l2 2 4-4" stroke="currentColor" stroke-width="1.8"/></svg>
+          <span>安全设置</span>
+        </button>
+      </nav>
+      <div class="admin-sidebar-footer">
+        <a class="admin-link" href="./">← 返回内部知识库</a>
+        <a class="admin-link" href="/">← 返回内部研究平台</a>
+        <button class="admin-logout" id="adminLogoutBtn">退出后台</button>
+      </div>
+    </aside>
+
+    <main class="admin-main">
+      <header class="admin-topbar">
+        <button class="icon-button admin-menu" id="adminMenuBtn" aria-label="打开导航">
+          <svg viewBox="0 0 24 24" fill="none"><path d="M4 7h16M4 12h16M4 17h16" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+        </button>
+        <div>
+          <div class="admin-topbar-title" id="adminTopbarTitle">概览</div>
+          <div class="admin-topbar-sub" id="adminTopbarSub"></div>
+        </div>
+      </header>
+      <div class="admin-content" id="adminViewRoot"></div>
+    </main>
+    <div class="sidebar-mask" id="adminSidebarMask"></div>
+  </div>
+
+  <div class="modal-layer" id="adminModalLayer" aria-hidden="true"></div>
+  <div class="toast-stack" id="adminToastStack" aria-live="polite"></div>
+
+  <script src="js/data.js"></script>
+  <script src="js/admin.js"></script>
+</body>
+</html>

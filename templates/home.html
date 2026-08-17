@@ -3,9 +3,9 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>信用债研究平台</title>
+<title>内部研究平台</title>
 <style>
-*{box-sizing:border-box}body{margin:0;background:#f3f4f6;color:#111827;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif}.main{max-width:1120px;margin:0 auto;padding:24px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px}.card{background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:18px;text-decoration:none;color:#111827;box-shadow:0 1px 3px rgba(15,23,42,.06)}.card:hover{border-color:#2563eb;box-shadow:0 8px 22px rgba(37,99,235,.1)}.card h2{font-size:17px;margin:0 0 8px}.card p{font-size:13px;color:#4b5563;line-height:1.6;margin:0 0 14px}.meta{font-size:12px;color:#6b7280;background:#f9fafb;border:1px solid #f3f4f6;border-radius:6px;padding:8px 10px}.section-title{font-size:13px;color:#6b7280;font-weight:700;margin:0 0 12px}
+*{box-sizing:border-box}body{margin:0;background:#f3f4f6;color:#111827;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif}.main{max-width:1120px;margin:0 auto;padding:24px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px}.card{background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:18px;text-decoration:none;color:#111827;box-shadow:0 1px 3px rgba(15,23,42,.06)}.card:hover{border-color:#2563eb;box-shadow:0 8px 22px rgba(37,99,235,.1)}.card h2{font-size:17px;margin:0 0 8px}.card p{font-size:13px;color:#4b5563;line-height:1.6;margin:0 0 14px}.meta{font-size:12px;color:#6b7280;background:#f9fafb;border:1px solid #f3f4f6;border-radius:6px;padding:8px 10px}.section-title{font-size:13px;color:#6b7280;font-weight:700;margin:0 0 12px}.management-title{margin-top:28px;padding-top:22px;border-top:1px solid #dbe2ea}.management-card{border-left:4px solid #475569}.management-card:hover{border-color:#475569;box-shadow:0 8px 22px rgba(71,85,105,.14)}
 </style>
 </head>
 <body>
@@ -20,6 +20,10 @@
     <a class="card" href="{{ url_for('industry_prosperity') }}"><h2>行业景气度跟踪</h2><p>分析各个行业景气度</p><div class="meta">更新日期：{{ status.industry_prosperity.updated }}</div></a>
     <a class="card" href="{{ url_for('credit_std_dev') }}"><h2>信用债两倍标准差</h2><p>跟踪信用利差相对均值与标准差区间的位置。</p><div class="meta">数据：{{ status.credit_std_dev.data_updated }}</div></a>
     <a class="card" href="{{ url_for('institution_flow') }}"><h2>机构行为监测</h2><p>观察机构净买入，并叠加国债、国开债、地方债、信用收益率和利差走势。</p><div class="meta">曲线更新：{{ status.institution_flow.updated }}</div></a>
+  </div>
+  <div class="section-title management-title">管理与协同</div>
+  <div class="grid">
+    <a class="card management-card" href="{{ url_for('internal_knowledge_base.index') }}"><h2>内部知识库</h2><p>统一管理内部研究成果、团队评阅、意见反馈与知识检索。</p></a>
   </div>
 </main>
 </body>

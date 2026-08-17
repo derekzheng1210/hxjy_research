@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="csrf-token" content="__CSRF_TOKEN__">
+  <meta name="theme-color" content="#2563eb">
+  <title>内部知识库</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%232563eb'/%3E%3Cpath d='M8 7.5h16v17H8zM12 12h8M12 16h8M12 20h5' fill='none' stroke='white' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <div class="login-page" id="loginPage">
+    <div class="login-shell">
+      <section class="login-intro">
+        <div class="brand-mark brand-mark-large" aria-hidden="true">
+          <svg viewBox="0 0 32 32" fill="none"><path d="M7 7.5h18v17H7z" stroke="currentColor" stroke-width="2"/><path d="M11 12h10M11 16h10M11 20h6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        </div>
+        <h1>内部知识库</h1>
+        <div class="login-features" aria-label="平台能力">
+          <span>四类报告统一管理</span>
+          <span>九大研究主题分类</span>
+          <span>三维等权研究评分</span>
+          <span>分级权限保护明细</span>
+        </div>
+      </section>
+
+      <main class="login-panel">
+        <div class="login-mobile-brand">
+          <div class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 32 32" fill="none"><path d="M7 7.5h18v17H7z" stroke="currentColor" stroke-width="2"/><path d="M11 12h10M11 16h10M11 20h6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          </div>
+          <span>内部知识库</span>
+        </div>
+        <div class="login-heading">
+          <span class="status-dot"></span>
+          <span>仅限内部访问</span>
+        </div>
+        <h2>欢迎回来</h2>
+        <p>请使用内部账号登录后继续</p>
+
+        <form id="loginForm" class="login-form" novalidate>
+          <div class="form-field">
+            <label for="loginUsername">账号</label>
+            <div class="input-with-icon">
+              <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M20 21a8 8 0 0 0-16 0M12 13a5 5 0 1 0 0-10 5 5 0 0 0 0 10Z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+              <input id="loginUsername" name="username" autocomplete="username" placeholder="请输入姓名全拼" required>
+            </div>
+          </div>
+          <div class="form-field">
+            <label for="loginPassword">密码</label>
+            <div class="input-with-icon">
+              <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="4" y="10" width="16" height="11" rx="2" stroke="currentColor" stroke-width="1.8"/><path d="M8 10V7a4 4 0 0 1 8 0v3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+              <input id="loginPassword" name="password" type="password" autocomplete="current-password" placeholder="请输入密码" required>
+              <button class="password-toggle" id="passwordToggle" type="button" aria-label="显示密码">
+                <svg viewBox="0 0 24 24" fill="none"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z" stroke="currentColor" stroke-width="1.7"/><circle cx="12" cy="12" r="2.5" stroke="currentColor" stroke-width="1.7"/></svg>
+              </button>
+            </div>
+          </div>
+          <div class="login-error" id="loginError" role="alert"></div>
+          <button class="btn btn-primary btn-login" type="submit">
+            登录平台
+            <svg viewBox="0 0 24 24" fill="none"><path d="m9 18 6-6-6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+        </form>
+        <div class="login-hint">
+          <svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.7"/><path d="M12 11v5M12 8h.01" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          <span>账号默认为姓名全拼，初始密码为 <strong>123456</strong></span>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <div class="app-shell" id="appShell" hidden>
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-brand">
+        <div class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 32 32" fill="none"><path d="M7 7.5h18v17H7z" stroke="currentColor" stroke-width="2"/><path d="M11 12h10M11 16h10M11 20h6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        </div>
+        <div>
+          <strong>内部知识库</strong>
+        </div>
+      </div>
+
+      <nav class="sidebar-nav" aria-label="主导航">
+        <div class="nav-caption">工作台</div>
+        <button class="nav-item active" data-view="dashboard">
+          <svg viewBox="0 0 24 24" fill="none"><rect x="3" y="3" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="1.8"/><rect x="14" y="3" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="1.8"/><rect x="3" y="14" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="1.8"/><rect x="14" y="14" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="1.8"/></svg>
+          <span>首页总览</span>
+        </button>
+        <button class="nav-item" data-view="reports">
+          <svg viewBox="0 0 24 24" fill="none"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H10l2 2h5.5A2.5 2.5 0 0 1 20 7.5v9a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 4 16.5v-11Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+          <span>内部报告</span>
+        </button>
+        <button class="nav-item" data-view="external-reports">
+          <svg viewBox="0 0 24 24" fill="none"><path d="M14 4h6v6M20 4l-8 8M10 6H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span>外部报告</span>
+        </button>
+        <button class="nav-item" data-view="research-reports" data-report-type="research_visit">
+          <svg viewBox="0 0 24 24" fill="none"><path d="M4 19V5a2 2 0 0 1 2-2h9l5 5v11a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M15 3v6h5M8 13h8M8 17h5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          <span>调研报告</span>
+        </button>
+        <button class="nav-item" data-view="roadshow-reports" data-report-type="roadshow">
+          <svg viewBox="0 0 24 24" fill="none"><path d="M4 5h16v11H4V5Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="m8 21 4-5 4 5M8 10l3-2 2 2 3-3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span>路演报告</span>
+        </button>
+        <button class="nav-item" data-view="my-reports">
+          <svg viewBox="0 0 24 24" fill="none"><path d="M6 3h8l4 4v14H6V3Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M14 3v5h4M9 13h6M9 17h4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="18" cy="18" r="3" fill="currentColor"/></svg>
+          <span>我的报告</span>
+        </button>
+        <button class="nav-item" data-view="rating">
+          <svg viewBox="0 0 24 24" fill="none"><path d="m12 3 2.4 5.1 5.6.7-4.1 4 .9 5.6-4.8-2.7-4.8 2.7.9-5.6-4.1-4 5.6-.7L12 3Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+          <span>待我评分</span>
+          <span class="nav-badge" id="pendingNavBadge">0</span>
+        </button>
+        <button class="nav-item" data-view="results">
+          <svg viewBox="0 0 24 24" fill="none"><path d="M5 20V10M12 20V4M19 20v-7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          <span>评分结果</span>
+        </button>
+        <button class="nav-item" data-view="knowledge-search">
+          <svg viewBox="0 0 24 24" fill="none"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H10l2 2h5.5A2.5 2.5 0 0 1 20 7.5V17M8 9h7M8 13h5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="m14 19 2 2 4-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span>知识搜索</span>
+        </button>
+
+        <div class="nav-caption nav-caption-space">快速分类</div>
+        <button class="nav-item nav-category" data-view="reports" data-category="weekly"><span class="category-dot weekly"></span><span>周报</span></button>
+        <button class="nav-item nav-category" data-view="reports" data-category="monthly"><span class="category-dot monthly"></span><span>月报</span></button>
+        <button class="nav-item nav-category" data-view="reports" data-category="deep"><span class="category-dot deep"></span><span>深度报告</span></button>
+        <button class="nav-item nav-category" data-view="external-reports"><span class="category-dot external"></span><span>外部报告</span></button>
+        <button class="nav-item nav-category" data-view="reports" data-category="other"><span class="category-dot other"></span><span>其他报告</span></button>
+
+        <div class="nav-caption nav-caption-space">研究主题</div>
+        <button class="nav-item nav-theme" data-view="reports" data-theme="macro_rate"><span class="theme-dot macro_rate"></span><span>宏观利率</span></button>
+        <button class="nav-item nav-theme" data-view="reports" data-theme="credit"><span class="theme-dot credit"></span><span>信用</span></button>
+        <button class="nav-item nav-theme" data-view="reports" data-theme="multi_asset"><span class="theme-dot multi_asset"></span><span>多资产</span></button>
+        <button class="nav-item nav-theme" data-view="reports" data-theme="quant"><span class="theme-dot quant"></span><span>量化</span></button>
+        <button class="nav-item nav-theme" data-view="reports" data-theme="fixed_income_plus"><span class="theme-dot fixed_income_plus"></span><span>固收+</span></button>
+        <button class="nav-item nav-theme" data-view="reports" data-theme="equity"><span class="theme-dot equity"></span><span>权益</span></button>
+        <button class="nav-item nav-theme" data-view="reports" data-theme="other"><span class="theme-dot other"></span><span>其他</span></button>
+      </nav>
+
+      <a class="portal-return-link" href="/">← 返回内部研究平台</a>
+      <div class="sidebar-account" id="sidebarAccount"></div>
+    </aside>
+
+    <div class="main-shell">
+      <header class="topbar">
+        <div class="topbar-left">
+          <button class="icon-button mobile-menu" id="mobileMenu" aria-label="打开导航">
+            <svg viewBox="0 0 24 24" fill="none"><path d="M4 7h16M4 12h16M4 17h16" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          </button>
+          <div>
+            <div class="topbar-title" id="topbarTitle">首页总览</div>
+            <div class="topbar-date" id="topbarDate"></div>
+          </div>
+        </div>
+        <div class="topbar-actions">
+          <label class="top-search" for="globalSearch">
+            <svg viewBox="0 0 24 24" fill="none"><circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="1.8"/><path d="m16.5 16.5 4 4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+            <input id="globalSearch" placeholder="搜索全部报告">
+            <kbd>Ctrl K</kbd>
+          </label>
+        </div>
+      </header>
+
+      <main class="content" id="viewRoot"></main>
+    </div>
+    <div class="sidebar-mask" id="sidebarMask"></div>
+  </div>
+
+  <div class="modal-layer" id="modalLayer" aria-hidden="true"></div>
+  <div class="toast-stack" id="toastStack" aria-live="polite"></div>
+
+  <script src="js/data.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>

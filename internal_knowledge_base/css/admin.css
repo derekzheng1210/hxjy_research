@@ -1,0 +1,321 @@
+/* 内部知识库 — 后台管理界面样式
+   复用主站 css/style.css 的变量与组件，本文件仅补充后台特有样式。 */
+
+body { background: var(--page); }
+
+/* ===== 登录页 ===== */
+.admin-login-page {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background:
+    linear-gradient(rgba(30, 41, 59, .04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(30, 41, 59, .04) 1px, transparent 1px),
+    var(--page);
+  background-size: 36px 36px;
+}
+
+/* 工作提醒配置 */
+.admin-external-badge{display:inline-block;margin-left:7px;padding:2px 6px;border-radius:999px;background:#eff6ff;color:#2563eb;font-size:10px;font-style:normal}
+.reminder-config-page{display:grid;gap:16px}.reminder-config-head{display:flex;justify-content:space-between;align-items:end;padding:22px}.reminder-config-head h2{margin:0 0 6px}.reminder-config-head p{margin:0;color:var(--text-muted);font-size:13px}.reminder-config-fields{display:flex;gap:12px}.reminder-config-fields .form-field{min-width:180px}.reminder-config-fields .form-field span{display:block;margin-bottom:6px;font-size:12px;font-weight:700}
+.reminder-admin-list{overflow:hidden;border:1px solid var(--border);border-radius:var(--radius-lg);background:#fff}.reminder-admin-list>.admin-table-toolbar>div span{color:var(--text-muted);font-size:12px}.reminder-admin-card{position:relative;display:grid;grid-template-columns:36px 1fr auto;gap:14px;align-items:start;padding:18px 20px;border-top:1px solid var(--border)}.reminder-rule-number{display:grid;place-content:center;width:30px;height:30px;border-radius:9px;background:#eff6ff;color:#2563eb;font-weight:800}.reminder-admin-card .admin-form-grid{width:100%;margin:0}.reminder-admin-card select[multiple]{min-height:116px;padding:6px}.reminder-admin-card select[multiple] option{padding:6px;border-radius:5px}.reminder-remove{align-self:center;color:var(--danger)}.reminder-save-bar{position:sticky;bottom:0;display:flex;justify-content:space-between;align-items:center;padding:14px 18px;border:1px solid var(--border);border-radius:12px;background:rgba(255,255,255,.94);box-shadow:0 -8px 24px rgba(15,23,42,.06);backdrop-filter:blur(10px)}.reminder-save-bar span{color:var(--text-muted);font-size:12px}
+@media(max-width:800px){.reminder-config-head,.reminder-save-bar{align-items:stretch;flex-direction:column;gap:14px}.reminder-config-fields{flex-direction:column}.reminder-admin-card{grid-template-columns:32px 1fr}.reminder-remove{grid-column:2}}
+
+.admin-login-card {
+  width: min(420px, 100%);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+}
+
+.admin-login-brand {
+  padding: 36px 36px 28px;
+  text-align: center;
+  border-bottom: 1px solid var(--border);
+  background: linear-gradient(180deg, #1e293b, #0f172a);
+  color: white;
+}
+
+.admin-brand-mark {
+  width: 52px;
+  height: 52px;
+  margin: 0 auto 16px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius);
+}
+.admin-brand-mark svg { width: 52px; height: 52px; }
+
+.admin-login-brand h1 { margin: 0 0 6px; font-size: 24px; letter-spacing: -.02em; }
+.admin-login-brand p { margin: 0; color: #94a3b8; font-size: 13px; }
+
+.admin-login-form { padding: 28px 36px 32px; }
+.admin-login-form .form-field label { font-size: 14px; }
+.admin-login-form .btn-login { width: 100%; margin-top: 18px; height: 46px; justify-content: center; }
+.admin-back-link {
+  display: block;
+  margin-top: 18px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 13px;
+  text-decoration: none;
+}
+.admin-back-link:hover { color: var(--primary); }
+
+.login-error { color: var(--danger); font-size: 13px; min-height: 18px; margin-top: 6px; }
+.login-error.show { display: block; }
+
+/* ===== 后台布局 ===== */
+.admin-shell {
+  display: grid;
+  grid-template-columns: var(--sidebar-width) 1fr;
+  min-height: 100vh;
+}
+
+.admin-sidebar {
+  display: flex;
+  flex-direction: column;
+  background: #0f172a;
+  color: #e2e8f0;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+}
+
+.admin-sidebar-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 22px 20px;
+  border-bottom: 1px solid rgba(255, 255, 255, .08);
+}
+.admin-sidebar-brand .admin-brand-mark { width: 38px; height: 38px; margin: 0; flex: 0 0 auto; }
+.admin-sidebar-brand .admin-brand-mark svg { width: 38px; height: 38px; }
+.admin-sidebar-brand strong { display: block; font-size: 15px; color: white; }
+.admin-sidebar-brand span { display: block; font-size: 11px; color: #94a3b8; }
+
+.admin-nav {
+  flex: 1;
+  padding: 16px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow-y: auto;
+}
+
+.admin-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  width: 100%;
+  padding: 11px 14px;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius);
+  color: #cbd5e1;
+  font-size: 14px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  transition: background .15s, color .15s;
+}
+.admin-nav-item svg { width: 20px; height: 20px; color: #94a3b8; }
+.admin-nav-item:hover { background: rgba(255, 255, 255, .06); color: white; }
+.admin-nav-item.active { background: rgba(37, 99, 235, .25); color: white; }
+.admin-nav-item.active svg { color: #93c5fd; }
+
+.admin-sidebar-footer {
+  padding: 16px 20px;
+  border-top: 1px solid rgba(255, 255, 255, .08);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.admin-link { color: #94a3b8; font-size: 13px; text-decoration: none; }
+.admin-link:hover { color: white; }
+.admin-logout {
+  padding: 9px 12px;
+  background: rgba(185, 28, 28, .15);
+  border: 1px solid rgba(185, 28, 28, .3);
+  border-radius: var(--radius);
+  color: #fca5a5;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background .15s;
+}
+.admin-logout:hover { background: rgba(185, 28, 28, .3); color: white; }
+
+.admin-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.admin-topbar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 0 28px;
+  height: var(--topbar-height);
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+.admin-topbar-title { font-size: 19px; font-weight: 800; letter-spacing: -.01em; }
+.admin-topbar-sub { color: var(--text-muted); font-size: 13px; }
+.admin-menu { display: none; }
+
+.admin-content { padding: 28px; flex: 1; min-width: 0; }
+
+/* ===== 概览 ===== */
+.admin-overview-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 16px;
+  margin-bottom: 28px;
+}
+.admin-stat-card {
+  padding: 22px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+}
+.admin-stat-card span { display: block; color: var(--text-muted); font-size: 13px; margin-bottom: 8px; }
+.admin-stat-card strong { font-size: 32px; font-weight: 800; letter-spacing: -.02em; color: var(--primary); }
+.admin-stat-card small { display: block; color: var(--text-faint); font-size: 12px; margin-top: 6px; }
+
+.admin-category-stats {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+}
+.admin-category-stat {
+  padding: 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  text-align: center;
+}
+.admin-category-stat strong { display: block; font-size: 24px; color: var(--text); }
+.admin-category-stat span { color: var(--text-muted); font-size: 13px; }
+
+/* ===== 数据表格 ===== */
+.admin-table-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+  overflow: hidden;
+}
+.admin-table-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--border);
+}
+.admin-table-toolbar .search-field { flex: 1; min-width: 200px; }
+.admin-table-toolbar .select-control { height: 40px; width: auto; min-width: 130px; }
+.admin-report-deleted { background: #fafafa; }
+.admin-report-deleted td { color: var(--text-muted); }
+.admin-trash-badge { display: inline-flex; margin-left: 7px; padding: 2px 6px; color: #b45309; background: #fff7ed; border: 1px solid #fed7aa; border-radius: 10px; font-size: 10px; font-style: normal; font-weight: 700; vertical-align: middle; }
+
+.admin-table-wrap { overflow-x: auto; }
+.admin-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+.admin-table thead th {
+  text-align: left;
+  padding: 12px 16px;
+  background: var(--surface-muted);
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+.admin-table tbody td {
+  padding: 13px 16px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+.admin-table tbody tr:last-child td { border-bottom: 0; }
+.admin-table tbody tr:hover { background: var(--surface-muted); }
+.admin-table .col-title { min-width: 180px; }
+.admin-table .col-title strong { display: block; font-size: 14px; }
+.admin-table .col-title span { color: var(--text-muted); font-size: 12px; }
+.admin-table .row-actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.admin-table .row-actions .btn { padding: 5px 10px; font-size: 12px; }
+
+.admin-role-tag {
+  display: inline-block;
+  padding: 2px 9px;
+  border-radius: 10px;
+  font-size: 12px;
+  font-weight: 600;
+}
+.admin-role-tag.leader { background: #ede9fe; color: #6d28d9; }
+.admin-role-tag.admin { background: #fef3c7; color: #b45309; }
+.admin-role-tag.member { background: #dbeafe; color: #1d4ed8; }
+
+.admin-pw-status { font-size: 12px; color: var(--text-muted); }
+.admin-pw-status.default { color: var(--warning); font-weight: 600; }
+
+.admin-empty {
+  padding: 60px 20px;
+  text-align: center;
+  color: var(--text-muted);
+}
+.admin-empty strong { display: block; margin-bottom: 6px; color: var(--text); }
+
+/* ===== 后台 Modal 复用主站样式 ===== */
+.admin-shell ~ .modal-layer .modal-card { max-width: 560px; }
+.admin-form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.admin-form-grid .full { grid-column: 1 / -1; }
+.admin-form-grid .form-field label { font-size: 14px; }
+.admin-form-note {
+  padding: 10px 12px;
+  background: var(--warning-soft);
+  border: 1px solid #fde68a;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+  margin-top: 12px;
+}
+
+/* ===== 响应式 ===== */
+@media (max-width: 900px) {
+  .admin-category-stats { grid-template-columns: repeat(2, 1fr); }
+  .admin-form-grid { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 768px) {
+  .admin-shell { grid-template-columns: 1fr; }
+  .admin-sidebar {
+    position: fixed;
+    left: 0;
+    top: 0;
+    width: var(--sidebar-width);
+    z-index: 100;
+    transform: translateX(-100%);
+    transition: transform .22s;
+  }
+  .admin-sidebar.open { transform: translateX(0); }
+  .admin-menu { display: grid; place-items: center; }
+  .admin-content { padding: 18px; }
+  .sidebar-mask.open { display: block; opacity: 1; }
+}

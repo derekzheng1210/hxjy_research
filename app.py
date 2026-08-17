@@ -27,6 +27,7 @@ from juyuan_update.unified_excel import (
     save_update_settings,
 )
 from primary_market_pricing.app import pricing_bp
+from internal_knowledge_base import bp as internal_knowledge_base_bp
 import institution_flow_config
 import institution_flow_data
 
@@ -57,6 +58,7 @@ SHEET_NAME = "万得"
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "dev-secret-change-before-deploy")
 app.register_blueprint(pricing_bp, url_prefix="/primary-market-pricing")
+app.register_blueprint(internal_knowledge_base_bp, url_prefix="/internal-knowledge-base")
 
 BONDS_CACHE = []
 DATA_TIMESTAMP = "尚未加载"
@@ -290,6 +292,7 @@ def portal_nav(active_endpoint: str):
         ("industry_prosperity", "行业景气度"),
         ("credit_std_dev", "两倍标准差"),
         ("institution_flow", "机构行为监测"),
+        ("internal_knowledge_base.index", "内部知识库"),
         ("admin", "后台上传"),
     ]
     items = ['<style id="portal-nav-style">']
@@ -304,14 +307,20 @@ def portal_nav(active_endpoint: str):
         "padding:0 14px;height:30px;display:inline-flex;align-items:center;border-radius:4px;transition:all .2s}"
         ".portal-nav a:hover{color:#2563eb;background:#eff6ff}"
         ".portal-nav a.active{color:#2563eb;background:#eff6ff;font-weight:700}"
+        ".portal-nav a.management-link{margin-left:8px;border-left:1px solid #cbd5e1;border-radius:0 4px 4px 0;padding-left:18px;color:#475569}"
     )
     items.append("</style>")
     items.append('<!-- CREDIT_TOOLS_PORTAL_NAV -->')
     items.append('<div class="portal-nav" data-portal-nav="credit-tools">')
-    items.append('<div class="brand">信用债研究平台</div>')
+    items.append('<div class="brand">内部研究平台</div>')
     for endpoint, label in links:
-        active = ' class="active"' if endpoint == active_endpoint else ""
-        items.append(f'<a href="{url_for(endpoint)}"{active}>{label}</a>')
+        classes = []
+        if endpoint == active_endpoint:
+            classes.append("active")
+        if endpoint == "internal_knowledge_base.index":
+            classes.append("management-link")
+        class_attr = f' class="{" ".join(classes)}"' if classes else ""
+        items.append(f'<a href="{url_for(endpoint)}"{class_attr}>{label}</a>')
     items.append("</div>")
     return "".join(items)
 

@@ -1,4 +1,4 @@
-﻿# 信用债研究平台部署包
+﻿# 内部研究平台部署包
 
 这是可手工上传到 GitHub 的 Flask 部署目录。
 
@@ -47,6 +47,26 @@ python app.py
 - 信用债两倍标准差：后台上传页面 HTML 和 `spread_data.js`。
 - 机构行为监测：实时代理机构行为上游数据；国债/国开债 1-30 年期曲线由后台“一键更新”的“机构行为曲线”模块增量维护。
 - 曲线映射表固定随代码发布，位于 `config/映射表.xlsx`。
+
+## 内部知识库
+
+门户内置独立的管理型子系统，入口为 `/internal-knowledge-base/`，超级管理员后台为
+`/internal-knowledge-base/admin`。进入子系统前需要先通过门户访问密码，再使用个人账号登录。
+
+- 账号、报告、评分、系统配置和审计记录保存在
+  `PORTAL_DATA_ROOT/internal_knowledge_base/knowledge_base.db`。
+- 上传文件、永久 PDF 缓存和转换临时文件分别保存在该目录的 `uploads/`、`pdf_cache/` 和 `temp/`。
+- PDF 缓存不会自动过期，超级管理员可在后台查看占用空间并按文件、报告或全部删除。
+- Office 文档在线预览依赖本机 LibreOffice；PDF 查看和文件下载不受影响。
+- 超级管理员密码保存在数据库中并进行哈希，可在后台“安全设置”中修改。
+
+账号迁移默认只做预检；确认结果后加 `--apply` 写入。迁移只保留账号和超级管理员密码，
+不会复制报告、评分或附件：
+
+```powershell
+python scripts/migrate_internal_knowledge_base_accounts.py --source "D:\path\to\data\store.json"
+python scripts/migrate_internal_knowledge_base_accounts.py --source "D:\path\to\data\store.json" --apply
+```
 
 ## 数据维护
 

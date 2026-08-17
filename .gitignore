@@ -30,3 +30,4 @@ primary_market_pricing/大智慧财汇元数据表结构 (1).xlsx
 # 杂项
 *.log
 *.tmp
+/.test_runtime/
