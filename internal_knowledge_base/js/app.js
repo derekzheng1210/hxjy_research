@@ -29,6 +29,39 @@
     reminders: () => apiFetch('/api/work-reminders', { credentials: 'same-origin' }).then(handleJson),
     knowledgeStatus: () => apiFetch('/api/knowledge-search', { credentials: 'same-origin' }).then(handleJson),
     knowledgeAsk: (question) => apiFetch('/api/knowledge-search', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ question }) }).then(handleJson),
+    // 流式问答：SSE 逐事件回调 onEvent({type:'stage'|'delta'|'done'|'error', ...})，
+    // 前置校验失败（额度/密钥等）时服务端返回 JSON 错误，此处统一抛出。
+    knowledgeAskStream: async (question, onEvent) => {
+      const response = await apiFetch('/api/knowledge-search/stream', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ question }) });
+      if (!response.ok || !(response.headers.get('content-type') || '').includes('text/event-stream')) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.error || `知识搜索失败 (${response.status})`);
+      }
+      if (!response.body || typeof response.body.getReader !== 'function') {
+        // 浏览器不支持流式读取时，回落到一次性返回的旧接口，保证功能可用。
+        const result = await API.knowledgeAsk(question);
+        onEvent({ type: 'done', ...result });
+        return;
+      }
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        let sep;
+        while ((sep = buffer.indexOf('\n\n')) !== -1) {
+          const frame = buffer.slice(0, sep);
+          buffer = buffer.slice(sep + 2);
+          const dataLine = frame.split('\n').find(line => line.startsWith('data:'));
+          if (!dataLine) continue;
+          let payload = null;
+          try { payload = JSON.parse(dataLine.slice(5).trim()); } catch (err) { payload = null; }
+          if (payload) onEvent(payload);
+        }
+      }
+    },
     knowledgeClearHistory: () => apiFetch('/api/knowledge-search', { method: 'DELETE', credentials: 'same-origin' }).then(handleJson),
     toggleLike: (id) => apiFetch(`/api/reports/${id}/like`, { method: 'POST', credentials: 'same-origin' }).then(handleJson),
     recordView: (id) => apiFetch(`/api/reports/${id}/view`, { method: 'POST', credentials: 'same-origin' }).then(handleJson),
@@ -776,7 +809,7 @@
           <ul class="knowledge-history-list">${historyItems || '<li class="knowledge-history-empty">暂无历史提问</li>'}</ul>
         </aside>
         <div class="knowledge-shell panel-card">
-          <div class="knowledge-conversation" id="knowledgeConversation">${knowledge.messages.length ? knowledge.messages.map(message => `<article class="knowledge-message ${message.role}"><div>${message.role === 'user' ? '我' : 'AI'}</div><section><div class="knowledge-answer">${message.role === 'assistant' ? renderKnowledgeAnswer(message.text) : escapeHTML(message.text).replace(/\n/g, '<br>')}</div>${message.sources?.length ? `<aside><span>引用报告</span>${message.sources.map(source => `<button data-action="view-report" data-id="${source.id}">《${escapeHTML(source.title)}》 · ${escapeHTML(source.author)}${source.publishedAt ? ` · ${escapeHTML(source.publishedAt)}` : ''}</button>`).join('')}</aside>` : ''}</section></article>`).join('') : `<div class="knowledge-empty"><strong>向报告库提一个问题</strong><p>例如：“近期信用利差变化的主要驱动是什么？”</p></div>`}</div>
+          <div class="knowledge-conversation" id="knowledgeConversation">${knowledge.messages.length ? knowledge.messages.map(message => `<article class="knowledge-message ${message.role}"><div>${message.role === 'user' ? '我' : 'AI'}</div><section>${message.role === 'assistant' && message.streaming ? `<div class="knowledge-status">${escapeHTML(message.stage || '正在检索知识库…')}</div>` : ''}<div class="knowledge-answer${message.role === 'assistant' && message.streaming ? ' streaming' : ''}">${message.role === 'assistant' ? (message.text ? renderKnowledgeAnswer(message.text) : '') : escapeHTML(message.text).replace(/\n/g, '<br>')}</div>${message.sources?.length ? `<aside><span>引用报告</span>${message.sources.map(source => `<button data-action="view-report" data-id="${source.id}">《${escapeHTML(source.title)}》 · ${escapeHTML(source.author)}${source.publishedAt ? ` · ${escapeHTML(source.publishedAt)}` : ''}</button>`).join('')}</aside>` : ''}</section></article>`).join('') : `<div class="knowledge-empty"><strong>向报告库提一个问题</strong><p>例如：“近期信用利差变化的主要驱动是什么？”</p></div>`}</div>
           <form class="knowledge-form" id="knowledgeForm"><textarea id="knowledgeQuestion" maxlength="300" placeholder="输入你想从报告中了解的问题…" ${knowledge.remaining ? '' : 'disabled'}></textarea><button class="btn btn-primary" type="submit" ${knowledge.remaining && knowledge.available !== false ? '' : 'disabled'}>发送问题</button></form>${knowledge.available === false ? '<p class="knowledge-warning">服务端尚未配置 DeepSeek API 密钥，暂时无法发起问答。</p>' : ''}
         </div>
       </section>`;
@@ -807,21 +840,76 @@
     const question = input?.value.trim();
     if (!question) return notify('请输入问题', 'error');
     state.knowledge.messages.push({ role: 'user', text: question });
+    // 追加一个流式占位气泡：状态行先显示检索进度，随后逐字填充 AI 回答。
+    const placeholder = { role: 'assistant', text: '', sources: [], streaming: true, stage: '正在检索知识库…' };
+    state.knowledge.messages.push(placeholder);
     renderKnowledgeSearch();
     const form = document.getElementById('knowledgeForm');
     form?.classList.add('loading');
+    const submitBtn = form?.querySelector('button[type=submit]');
+    if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = '生成中…'; }
+    let doneResult = null;
     try {
-      const result = await API.knowledgeAsk(question);
-      // 新问答成功后追加到历史列表，并清除历史选中态，让对话区显示最新完整对话。
-      const newHistoryItem = { question, answer: result.answer || '', sources: result.sources || [], createdAt: new Date().toISOString() };
-      state.knowledge.history = [...(state.knowledge.history || []), newHistoryItem];
-      state.knowledge.activeHistoryIdx = undefined;
-      state.knowledge = { ...state.knowledge, ...result, messages: [...state.knowledge.messages, { role: 'assistant', text: result.answer || '未找到相关报告', sources: result.sources || [] }] };
+      await API.knowledgeAskStream(question, evt => {
+        if (evt.type === 'stage') {
+          placeholder.stage = evt.text || '';
+          scheduleKnowledgeStreamRefresh();
+        } else if (evt.type === 'delta') {
+          placeholder.text += evt.text || '';
+          scheduleKnowledgeStreamRefresh();
+        } else if (evt.type === 'done') {
+          doneResult = evt;
+        } else if (evt.type === 'error') {
+          throw new Error(evt.message || '知识搜索暂时不可用。');
+        }
+      });
+      if (doneResult) {
+        placeholder.text = doneResult.answer || '';
+        placeholder.sources = doneResult.sources || [];
+        placeholder.streaming = false;
+        placeholder.stage = '';
+        // 新问答成功后追加到历史列表，并清除历史选中态，让对话区显示最新完整对话。
+        const newHistoryItem = { question, answer: placeholder.text, sources: placeholder.sources, createdAt: new Date().toISOString() };
+        state.knowledge.history = [...(state.knowledge.history || []), newHistoryItem];
+        state.knowledge.activeHistoryIdx = undefined;
+        state.knowledge = { ...state.knowledge, limit: doneResult.limit ?? state.knowledge.limit, used: doneResult.used ?? state.knowledge.used, remaining: doneResult.remaining ?? state.knowledge.remaining };
+      }
     } catch (error) {
-      state.knowledge.messages.push({ role: 'assistant', text: error.message || '知识搜索暂时不可用。', sources: [] });
+      placeholder.streaming = false;
+      placeholder.stage = '';
+      // 已流出的部分回答保留，仅在没有任何内容时才显示错误占位。
+      placeholder.text = placeholder.text || error.message || '知识搜索暂时不可用。';
       notify(error.message || '知识搜索失败', 'error');
     }
     renderKnowledgeSearch();
+  }
+
+  // 流式期间避免每个 delta 都全量重渲染视图，只增量更新最后一个 assistant 气泡。
+  let knowledgeStreamRefreshTimer = null;
+  function scheduleKnowledgeStreamRefresh() {
+    if (knowledgeStreamRefreshTimer) return;
+    knowledgeStreamRefreshTimer = setTimeout(() => {
+      knowledgeStreamRefreshTimer = null;
+      refreshKnowledgeStreamBubble();
+    }, 60);
+  }
+
+  function refreshKnowledgeStreamBubble() {
+    const conversation = document.getElementById('knowledgeConversation');
+    const message = state.knowledge.messages[state.knowledge.messages.length - 1];
+    if (!conversation || !message || message.role !== 'assistant') return;
+    const bubbles = conversation.querySelectorAll('.knowledge-message.assistant');
+    const bubble = bubbles[bubbles.length - 1];
+    if (!bubble) return;
+    const statusEl = bubble.querySelector('.knowledge-status');
+    if (statusEl && !(message.streaming && message.stage)) statusEl.remove();
+    else if (statusEl) statusEl.textContent = message.stage;
+    const answerEl = bubble.querySelector('.knowledge-answer');
+    if (answerEl) {
+      answerEl.classList.toggle('streaming', Boolean(message.streaming));
+      answerEl.innerHTML = message.text ? renderKnowledgeAnswer(message.text) : '';
+    }
+    conversation.scrollTop = conversation.scrollHeight;
   }
 
   function focusHistoryItem(idx) {

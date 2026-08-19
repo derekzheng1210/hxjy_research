@@ -18,7 +18,8 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 from flask import (Blueprint, current_app, request, send_file, send_from_directory,
-                   jsonify, session, redirect, url_for, abort, Response)
+                   jsonify, session, redirect, url_for, abort, Response,
+                   stream_with_context)
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from paths import (INTERNAL_KNOWLEDGE_BASE_DIR, INTERNAL_KNOWLEDGE_BASE_DB,
@@ -532,42 +533,106 @@ def _extract_text(file_path):
     return text[:LLM_MAX_TEXT_CHARS]
 
 
-def _call_deepseek(prompt, system=None, max_tokens=None):
+def _call_deepseek(prompt, system=None, max_tokens=None, json_mode=True):
     """调用 DeepSeek（OpenAI 兼容接口），返回 message content 字符串。
 
     system：可选的系统消息，用于约束角色与回答风格。
     max_tokens：可选的输出长度上限，未传时由模型默认值决定。
-    两参数均不影响不传时的原有行为（如标签/摘要提取）。
+    json_mode：是否要求 JSON 输出；知识问答需要流式展示纯文本，传 False。
+    三参数均不影响不传时的原有行为（如标签/摘要提取）。
     """
     # 每次调用时解析密钥：Windows 服务更新环境变量并重启、或管理员补充 .env
     # 后，不会因为模块导入时缓存了空值而一直不可用。
     api_key = _llm_api_key()
     if not api_key:
         raise RuntimeError("未配置 DEEPSEEK_API_KEY")
-    messages = []
-    if system:
-        messages.append({"role": "system", "content": system})
-    messages.append({"role": "user", "content": prompt})
+    messages = _llm_messages(prompt, system=system)
     payload = {
         "model": LLM_MODEL,
         "messages": messages,
         "temperature": 0.3,
-        "response_format": {"type": "json_object"},
+    }
+    if json_mode:
+        payload["response_format"] = {"type": "json_object"}
+    if max_tokens:
+        payload["max_tokens"] = max_tokens
+    return _open_llm_response(payload, api_key)
+
+
+def _stream_deepseek(prompt, system=None, max_tokens=None):
+    """流式调用 DeepSeek，逐段 yield 模型输出的文本增量。
+
+    流式模式不支持 response_format，输出格式由 system 提示词约束、
+    由调用方解析。错误消息与 _call_deepseek 保持一致。
+    """
+    api_key = _llm_api_key()
+    if not api_key:
+        raise RuntimeError("未配置 DEEPSEEK_API_KEY")
+    payload = {
+        "model": LLM_MODEL,
+        "messages": _llm_messages(prompt, system=system),
+        "temperature": 0.3,
+        "stream": True,
     }
     if max_tokens:
         payload["max_tokens"] = max_tokens
-    body = json.dumps(payload).encode("utf-8")
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    try:
+        with _open_llm_raw(payload, api_key) as resp:
+            for raw_line in resp:
+                line = raw_line.decode("utf-8", errors="replace").strip()
+                if not line.startswith("data:"):
+                    continue
+                data = line[len("data:"):].strip()
+                if data == "[DONE]":
+                    break
+                try:
+                    chunk = json.loads(data)
+                except json.JSONDecodeError:
+                    continue
+                choices = chunk.get("choices") or [{}]
+                delta = (choices[0].get("delta") or {}).get("content")
+                if delta:
+                    yield delta
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")[:240]
+        raise RuntimeError(f"知识服务返回 HTTP {exc.code}{(': ' + detail) if detail else ''}") from exc
+    except urllib.error.URLError as exc:
+        reason = getattr(exc, "reason", exc)
+        if isinstance(reason, TimeoutError) or "timed out" in str(reason).lower():
+            raise RuntimeError("知识服务响应超时，请稍后重试") from exc
+        raise RuntimeError("无法连接知识服务，请检查网络连接或 DeepSeek API 配置") from exc
+    except TimeoutError as exc:
+        # 读取响应体阶段的超时不会包成 URLError，需要单独翻译。
+        raise RuntimeError("知识服务响应超时，请稍后重试") from exc
+
+
+def _llm_messages(prompt, system=None):
+    messages = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": prompt})
+    return messages
+
+
+def _open_llm_raw(payload, api_key):
+    """构造并发送 chat/completions 请求，返回未读取的响应对象。"""
     req = urllib.request.Request(
         LLM_BASE_URL.rstrip("/") + "/chat/completions",
-        data=body,
+        data=json.dumps(payload).encode("utf-8"),
         headers={"Content-Type": "application/json",
                  "Authorization": f"Bearer {api_key}"},
     )
     # 系统环境可能配置了失效的本地代理（例如 127.0.0.1:9）。
     # DeepSeek 请求显式直连，避免知识搜索因代理拒绝连接而失败。
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    return opener.open(req, timeout=LLM_TIMEOUT)
+
+
+def _open_llm_response(payload, api_key):
+    """非流式调用：读取完整响应并返回 content 字符串。"""
     try:
-        with opener.open(req, timeout=LLM_TIMEOUT) as resp:
+        with _open_llm_raw(payload, api_key) as resp:
             data = json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")[:240]
@@ -639,8 +704,12 @@ def _knowledge_query_terms(question, vocabulary=""):
     return compact_query, terms, subterms
 
 
-def _knowledge_candidates(question, limit=6):
-    """检索正文与元信息，过滤弱相关项，并返回带完整元数据的上下文候选。"""
+def _iter_knowledge_candidates(question, limit=6):
+    """与 _knowledge_candidates 相同的检索逻辑，但每解析完一份报告 yield (已解析, 总数) 进度。
+
+    全文抽取是本地检索的主要耗时，流式接口借此逐份推送进度；
+    迭代结束后通过 StopIteration.value 返回候选列表。
+    """
     reports = store.reports()
     metadata_corpus = "".join(
         re.sub(r"\s+", "", " ".join([
@@ -654,7 +723,7 @@ def _knowledge_candidates(question, limit=6):
     )
     query, terms, subterms = _knowledge_query_terms(question, metadata_corpus)
     ranked = []
-    for report in reports:
+    for idx, report in enumerate(reports, 1):
         title = str(report.get("title", ""))
         summary = str(report.get("summary", ""))
         recommendation = str(report.get("recommendation", ""))
@@ -666,6 +735,7 @@ def _knowledge_candidates(question, limit=6):
                              category_key, REPORT_CATEGORY_LABELS.get(category_key, "")])
         path = report_file_path(report)
         text = _extract_text(path) if path else ""
+        yield idx, len(reports)
         fallback = "\n".join(filter(None, [recommendation, summary]))
         content = text.strip() or fallback
         metadata_compact = re.sub(r"\s+", "", metadata).lower()
@@ -729,10 +799,25 @@ def _knowledge_candidates(question, limit=6):
     return candidates
 
 
-def _answer_knowledge_question(question):
-    candidates = _knowledge_candidates(question)
-    if not candidates:
-        return {"answer": "未找到相关报告", "sources": []}
+def _knowledge_candidates(question, limit=6):
+    """检索正文与元信息，过滤弱相关项，并返回带完整元数据的上下文候选。"""
+    retrieval = _iter_knowledge_candidates(question, limit=limit)
+    while True:
+        try:
+            next(retrieval)
+        except StopIteration as stop:
+            return stop.value or []
+
+
+KNOWLEDGE_SOURCE_MARKER = "===SOURCE_IDS==="
+
+
+def _knowledge_qa_messages(question, candidates):
+    """构建知识问答的 system 与用户 prompt，供流式与非流式两条路径共用。
+
+    输出格式为“答案正文 + 单独一行的标记 + JSON 数组”，使流式接口可以
+    把标记之前的正文实时推送给前端，标记之后只留机器可读的引用 ID。
+    """
     ordered_candidates = sorted(candidates, key=lambda item: item["published_at"], reverse=True)
     material = "\n\n".join(
         f"[REPORT_ID:{item['id']}]\n"
@@ -750,7 +835,7 @@ def _answer_knowledge_question(question):
         "1. 仅使用【参考上下文】回答，禁止使用外部知识、常识补全或编造；上下文没有实质相关报告时，answer 必须严格为“未找到相关报告”。\n"
         "2. 客观中立，忠实还原报告原文观点，不添加个人评价、推测或总结性升华。\n"
         "3. 每篇报告必须包含发布时间、主要方向、主要观点；上下文缺失时对应字段写“原文未提及”。\n"
-        "4. 合并重复报告，按发布时间倒序排列；只在 source_ids 中列出实际入选且支持答案的报告 ID。\n"
+        "4. 合并重复报告，按发布时间倒序排列；只引用实际入选且支持答案的报告 ID。\n"
         "5. 逐一判断报告与问题是否实质相关，剔除仅关键词匹配但内容无关的报告。\n"
         "6. 每条主要观点精炼至 100 字以内，最多输出 3 条；不要输出上下文没有明确支持的数字、因果关系或结论。\n\n"
         "answer 必须严格使用以下模板，不要添加任何开场白、结束语或模板外内容：\n"
@@ -762,32 +847,72 @@ def _answer_knowledge_question(question):
         "  - {核心观点1，精炼至100字以内}\n"
         "  - {核心观点2，精炼至100字以内}\n"
         "  - {核心观点3（如有），精炼至100字以内}\n\n"
-        "依此类推。只输出一个 JSON 对象："
-        "{\"answer\":\"严格按上述模板生成的字符串\",\"source_ids\":[\"报告ID\"]}。"
+        "依此类推。\n\n"
+        "输出格式：先直接输出 answer 正文（严格按上述模板，不要用引号或代码块包裹），"
+        f"然后另起一行只输出 {KNOWLEDGE_SOURCE_MARKER}，"
+        "紧接着再起一行输出一个 JSON 数组，数组内只包含实际入选且支持答案的报告 ID，"
+        "例如 [\"r001\",\"r002\"]；没有引用任何报告时输出 []。除此之外不要输出任何内容。"
     )
     prompt = f"用户问题：{question}\n\n【参考上下文】\n{material}"
-    raw = _call_deepseek(prompt, system=system, max_tokens=2800)
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError:
-        match = re.search(r"\{.*\}", raw, re.S)
-        data = json.loads(match.group(0)) if match else {}
-    source_ids = data.get("source_ids", []) if isinstance(data, dict) else []
-    if not isinstance(source_ids, list):
-        source_ids = [source_ids]
+    return system, prompt
+
+
+def _parse_knowledge_answer(raw, candidates):
+    """解析模型输出：正文 + ===SOURCE_IDS=== 标记 + JSON 数组。
+
+    兼容模型偶尔仍按旧 JSON 对象格式（{\"answer\":..., \"source_ids\":[...]}）
+    输出的情况，保证非流式路径的旧行为不受影响。
+    """
+    text = str(raw or "").strip()
+    source_ids = []
+    if KNOWLEDGE_SOURCE_MARKER in text:
+        text, ids_raw = text.split(KNOWLEDGE_SOURCE_MARKER, 1)
+        text = text.strip()
+        match = re.search(r"\[.*?\]", ids_raw, re.S)
+        if match:
+            try:
+                parsed = json.loads(match.group(0))
+            except json.JSONDecodeError:
+                parsed = None
+            if isinstance(parsed, list):
+                source_ids = parsed
+    else:
+        data = None
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError:
+            found = re.search(r"\{.*\}", text, re.S)
+            if found:
+                try:
+                    data = json.loads(found.group(0))
+                except json.JSONDecodeError:
+                    data = None
+        if isinstance(data, dict):
+            ids = data.get("source_ids", [])
+            source_ids = ids if isinstance(ids, list) else [ids]
+            text = str(data.get("answer", "")).strip()
     source_map = {item["id"]: item for item in candidates}
     sources = [
         {"id": rid, "title": source_map[rid]["title"], "author": source_map[rid]["author"],
          "publishedAt": source_map[rid]["published_at"]}
-        for rid in source_ids if rid in source_map
+        for rid in (str(item) for item in source_ids) if rid in source_map
     ]
     sources.sort(key=lambda item: item["publishedAt"], reverse=True)
-    answer = str(data.get("answer", "")).strip() if isinstance(data, dict) else ""
+    answer = text
     if not answer or answer == "报告库中暂无可用于回答的报告。":
         answer = "未找到相关报告"
     if answer == "未找到相关报告":
         sources = []
     return {"answer": answer, "sources": sources}
+
+
+def _answer_knowledge_question(question):
+    candidates = _knowledge_candidates(question)
+    if not candidates:
+        return {"answer": "未找到相关报告", "sources": []}
+    system, prompt = _knowledge_qa_messages(question, candidates)
+    raw = _call_deepseek(prompt, system=system, max_tokens=2800, json_mode=False)
+    return _parse_knowledge_answer(raw, candidates)
 
 
 def json_error(message, code=400):
@@ -1311,6 +1436,93 @@ def api_knowledge_search():
     store.add_qa_usage(user["id"], day, question)
     store.add_qa_history(user["id"], question, result.get("answer", ""), result.get("sources", []))
     return jsonify({**result, "limit": limit, "used": used + 1, "remaining": max(limit - used - 1, 0)})
+
+
+@app.route("/api/knowledge-search/stream", methods=["POST"])
+def api_knowledge_search_stream():
+    """知识搜索流式端点：以 SSE 推送检索进度与回答增量，缓解长等待焦虑。
+
+    前置校验（登录/额度/问题长度/密钥）在进入流之前完成，失败照常返回
+    JSON 错误；校验通过后返回 text/event-stream，事件格式为
+    data: {"type": "stage"|"delta"|"done"|"error", ...}\n\n
+    """
+    user = require_user()
+    if not user:
+        return json_error("未登录", 401)
+    day = datetime.now(CST).strftime("%Y-%m-%d")
+    used = store.qa_usage_today(user["id"], day)
+    knowledge_config = store.knowledge_config()
+    limit = knowledge_config["leaderLimit"] if user.get("role") == "leader" else knowledge_config["memberLimit"]
+    if used >= limit:
+        return json_error(f"今日 {limit} 次知识搜索额度已用完，请明天再试", 429)
+    question = str((request.get_json(silent=True) or {}).get("question", "")).strip()
+    if len(question) < 2:
+        return json_error("请输入具体问题", 400)
+    if len(question) > 300:
+        return json_error("问题请控制在 300 字以内", 400)
+    if not _llm_api_key():
+        return json_error("知识搜索尚未配置 DEEPSEEK_API_KEY", 503)
+
+    user_id = user["id"]
+    remaining = max(limit - used - 1, 0)
+
+    def event(payload):
+        return "data: " + json.dumps(payload, ensure_ascii=False) + "\n\n"
+
+    def generate():
+        # 阶段一：本地检索。全文抽取是本地主要耗时，逐份报告推送解析进度。
+        candidates = []
+        retrieval = _iter_knowledge_candidates(question)
+        while True:
+            try:
+                done_count, total = next(retrieval)
+            except StopIteration as stop:
+                candidates = stop.value or []
+                break
+            yield event({"type": "stage", "text": f"正在解析报告库（{done_count}/{total}）…"})
+        if not candidates:
+            store.add_qa_usage(user_id, day, question)
+            store.add_qa_history(user_id, question, "未找到相关报告", [])
+            yield event({"type": "done", "answer": "未找到相关报告", "sources": [],
+                         "limit": limit, "used": used + 1, "remaining": remaining})
+            return
+        yield event({"type": "stage", "text": f"已定位 {len(candidates)} 篇相关报告，正在生成回答…"})
+        system, prompt = _knowledge_qa_messages(question, candidates)
+        # 阶段二：流式生成。标记可能跨 chunk 分裂，扣留缓冲保证
+        # ===SOURCE_IDS=== 之后的内容不会混入推送给前端的答案正文。
+        raw = ""
+        emitted = 0
+        got_delta = False
+        try:
+            for delta in _stream_deepseek(prompt, system=system, max_tokens=2800):
+                got_delta = True
+                raw += delta
+                if KNOWLEDGE_SOURCE_MARKER in raw:
+                    safe_end = raw.index(KNOWLEDGE_SOURCE_MARKER)
+                else:
+                    safe_end = max(len(raw) - len(KNOWLEDGE_SOURCE_MARKER), 0)
+                if safe_end > emitted:
+                    yield event({"type": "delta", "text": raw[emitted:safe_end]})
+                    emitted = safe_end
+            if KNOWLEDGE_SOURCE_MARKER not in raw and len(raw) > emitted:
+                yield event({"type": "delta", "text": raw[emitted:]})
+            result = _parse_knowledge_answer(raw, candidates)
+            store.add_qa_history(user_id, question, result.get("answer", ""), result.get("sources", []))
+            yield event({"type": "done", **result, "limit": limit, "used": used + 1, "remaining": remaining})
+        except Exception as exc:
+            # 不把底层 WinError/代理地址直接暴露给用户，便于定位并保持提示可读。
+            yield event({"type": "error", "message": f"知识搜索暂时不可用：{exc}"})
+        finally:
+            # 模型已开始生成（LLM 成本已发生）即计入当日额度，
+            # 客户端中途断开也不能通过反复重试绕过限制。
+            if got_delta:
+                store.add_qa_usage(user_id, day, question)
+
+    response = Response(stream_with_context(generate()), mimetype="text/event-stream")
+    response.headers["Cache-Control"] = "no-cache"
+    # 反向代理（如 nginx）默认缓冲响应体会导致 SSE 事件攒批到达，需显式关闭。
+    response.headers["X-Accel-Buffering"] = "no"
+    return response
 
 
 def _remove_report_file(report):
