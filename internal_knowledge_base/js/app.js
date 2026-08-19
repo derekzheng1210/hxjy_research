@@ -103,11 +103,19 @@
     return orgs;
   }
 
-  // 是否具备某份月报/深度报告的评分资格：领导始终可评，研究人员仅当其部门在所选打分部门内。
-  // 报告对所有人可见，本判断仅影响是否能进入评分流程。
+  // 部门领导（org 为资产配置部/固收中心）按报告所选打分部门过滤；通用领导
+  // （org 为领导/行政/空）始终参与。
+  function leaderInScoringScope(user, scoringOrgs) {
+    const org = user && user.org;
+    if (org === '资产配置部' || org === '固收中心') return scoringOrgs.includes(org);
+    return true;
+  }
+
+  // 是否具备某份月报/深度报告的评分资格：部门领导按 org 过滤，通用领导始终可评，
+  // 研究人员仅当其部门在所选打分部门内。报告对所有人可见，本判断仅影响是否能进入评分流程。
   function canRateReport(report) {
     if (!canRate()) return false;
-    if (isLeader()) return true;
+    if (isLeader()) return leaderInScoringScope(state.currentUser, reportScoringOrgs(report));
     return reportScoringOrgs(report).includes(state.currentUser.org);
   }
 

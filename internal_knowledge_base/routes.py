@@ -378,11 +378,21 @@ def report_scoring_orgs(report):
     return [org for org in orgs if org in SCORING_ORGS] or list(SCORING_ORGS)
 
 
+def leader_in_scoring_scope(user, scoring_orgs):
+    """部门领导按报告所选打分部门过滤；不隶属具体打分部门的通用领导始终参与。"""
+    org = user.get("org")
+    if org in SCORING_ORGS:
+        return org in scoring_orgs
+    return True
+
+
 def eligible_scorers(report):
     """返回某份月报/深度报告的应评分人员列表。
 
-    规则：领导始终参与评分；研究人员仅当其所属部门在报告所选打分部门内时参与。
-    行政账号不参与评分。报告对所有人可见，本函数仅决定评分资格。
+    规则：部门领导（org 为资产配置部/固收中心）仅当其所属部门在报告所选打分
+    部门内时参与；通用领导（org 为领导/行政/空）始终参与；研究人员仅当其所属
+    部门在报告所选打分部门内时参与。行政账号不参与评分。报告对所有人可见，
+    本函数仅决定评分资格。
     """
     scoring_orgs = set(report_scoring_orgs(report))
     result = []
@@ -391,7 +401,8 @@ def eligible_scorers(report):
         if role == "admin":
             continue
         if role == "leader":
-            result.append(user)
+            if leader_in_scoring_scope(user, scoring_orgs):
+                result.append(user)
         elif user.get("org") in scoring_orgs:
             result.append(user)
     return result
@@ -402,7 +413,7 @@ def is_eligible_scorer(report, user):
     if not user or user.get("role") == "admin":
         return False
     if user.get("role") == "leader":
-        return True
+        return leader_in_scoring_scope(user, set(report_scoring_orgs(report)))
     return user.get("org") in set(report_scoring_orgs(report))
 
 
@@ -1481,7 +1492,7 @@ def api_scoring_status(rid):
         return json_error("报告不存在", 404)
     if report.get("reportType", "internal") != "internal":
         return json_error("外部报告不参与评分", 400)
-    # 应评分人员按报告所选打分部门确定（领导始终参与）
+    # 应评分人员按报告所选打分部门确定（部门领导按 org 过滤，通用领导始终参与）
     scorers_all = eligible_scorers(report)
     ratings = [r for r in store.ratings() if r.get("reportId") == rid]
     rating_by_user = {r.get("userId"): r for r in ratings}
