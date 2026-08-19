@@ -704,13 +704,95 @@ def _knowledge_query_terms(question, vocabulary=""):
     return compact_query, terms, subterms
 
 
-def _iter_knowledge_candidates(question, limit=6):
+# 知识搜索范围筛选：时间范围对应的天数，custom/all 由前端单独处理
+KNOWLEDGE_PERIOD_DAYS = {"1m": 30, "3m": 90}
+KNOWLEDGE_REPORT_TYPES = ("internal", "external", "research_visit", "roadshow")
+
+
+def _parse_knowledge_filters(data):
+    """解析知识搜索的范围筛选参数，缺省为“过去一个月的内部报告”。"""
+    data = data or {}
+
+    def text(key):
+        return str(data.get(key) or "").strip()
+
+    period = text("period") or "1m"
+    if period not in ("1m", "3m", "all", "custom"):
+        period = "1m"
+    date_from = date_to = ""
+    if period == "custom":
+        # 自定义区间为闭区间 [dateFrom, dateTo]，缺省的边界不限制。
+        def parse_date(key):
+            value = text(key)
+            try:
+                return datetime.strptime(value, "%Y-%m-%d").strftime("%Y-%m-%d")
+            except ValueError:
+                return ""
+        date_from = parse_date("dateFrom")
+        date_to = parse_date("dateTo")
+    elif period != "all":
+        date_from = (datetime.now(CST) - timedelta(days=KNOWLEDGE_PERIOD_DAYS[period])).strftime("%Y-%m-%d")
+    category = text("category")
+    if category not in REPORT_CATEGORY_LABELS:
+        category = ""
+    theme = text("theme")
+    if theme not in REPORT_THEMES:
+        theme = ""
+    report_type = text("reportType") or "internal"
+    if report_type != "all" and report_type not in KNOWLEDGE_REPORT_TYPES:
+        report_type = "internal"
+    return {
+        "period": period, "date_from": date_from, "date_to": date_to,
+        "category": category, "theme": theme, "report_type": report_type,
+        "author": text("author")[:50],
+    }
+
+
+def _report_matches_knowledge_filters(report, filters):
+    """判断报告是否落在知识搜索筛选范围内；filters 为空表示不过滤。"""
+    if not filters:
+        return True
+    report_type = filters.get("report_type", "")
+    if report_type and report_type != "all":
+        if str(report.get("reportType", "internal")) != report_type:
+            return False
+    if filters.get("category") and str(report.get("category", "")) != filters["category"]:
+        return False
+    if filters.get("theme") and str(report.get("theme", "")) != filters["theme"]:
+        return False
+    author = filters.get("author", "")
+    if author:
+        # 外部报告的署名作者在 sourceAuthor，内部报告在 author。
+        names = {str(report.get("author", "")), str(report.get("sourceAuthor", ""))}
+        if author not in names:
+            return False
+    if filters.get("date_from") or filters.get("date_to"):
+        date_str = str(report.get("reportDate") or report.get("uploadedAt", ""))[:10]
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date_str):
+            return False
+        if filters.get("date_from") and date_str < filters["date_from"]:
+            return False
+        if filters.get("date_to") and date_str > filters["date_to"]:
+            return False
+    return True
+
+
+def _knowledge_no_match_answer(filters=None):
+    """筛选范围内无候选时的回答文案，提示用户放宽条件而不是报告库为空。"""
+    if filters:
+        return "当前筛选范围内未找到相关报告，可尝试扩大时间范围或放宽筛选条件。"
+    return "未找到相关报告"
+
+
+def _iter_knowledge_candidates(question, limit=6, filters=None):
     """与 _knowledge_candidates 相同的检索逻辑，但每解析完一份报告 yield (已解析, 总数) 进度。
 
     全文抽取是本地检索的主要耗时，流式接口借此逐份推送进度；
     迭代结束后通过 StopIteration.value 返回候选列表。
+    filters：可选的范围筛选（_parse_knowledge_filters 的结果），检索前先过滤报告。
     """
-    reports = store.reports()
+    reports = [report for report in store.reports()
+               if _report_matches_knowledge_filters(report, filters)]
     metadata_corpus = "".join(
         re.sub(r"\s+", "", " ".join([
             str(report.get("title", "")), str(report.get("summary", "")),
@@ -799,9 +881,9 @@ def _iter_knowledge_candidates(question, limit=6):
     return candidates
 
 
-def _knowledge_candidates(question, limit=6):
+def _knowledge_candidates(question, limit=6, filters=None):
     """检索正文与元信息，过滤弱相关项，并返回带完整元数据的上下文候选。"""
-    retrieval = _iter_knowledge_candidates(question, limit=limit)
+    retrieval = _iter_knowledge_candidates(question, limit=limit, filters=filters)
     while True:
         try:
             next(retrieval)
@@ -906,10 +988,10 @@ def _parse_knowledge_answer(raw, candidates):
     return {"answer": answer, "sources": sources}
 
 
-def _answer_knowledge_question(question):
-    candidates = _knowledge_candidates(question)
+def _answer_knowledge_question(question, filters=None):
+    candidates = _knowledge_candidates(question, filters=filters)
     if not candidates:
-        return {"answer": "未找到相关报告", "sources": []}
+        return {"answer": _knowledge_no_match_answer(filters), "sources": []}
     system, prompt = _knowledge_qa_messages(question, candidates)
     raw = _call_deepseek(prompt, system=system, max_tokens=2800, json_mode=False)
     return _parse_knowledge_answer(raw, candidates)
@@ -1421,15 +1503,17 @@ def api_knowledge_search():
                         "available": bool(_llm_api_key()), "history": history})
     if used >= limit:
         return json_error(f"今日 {limit} 次知识搜索额度已用完，请明天再试", 429)
-    question = str((request.get_json(silent=True) or {}).get("question", "")).strip()
+    payload = request.get_json(silent=True) or {}
+    question = str(payload.get("question", "")).strip()
     if len(question) < 2:
         return json_error("请输入具体问题", 400)
     if len(question) > 300:
         return json_error("问题请控制在 300 字以内", 400)
     if not _llm_api_key():
         return json_error("知识搜索尚未配置 DEEPSEEK_API_KEY", 503)
+    filters = _parse_knowledge_filters(payload)
     try:
-        result = _answer_knowledge_question(question)
+        result = _answer_knowledge_question(question, filters=filters)
     except Exception as exc:
         # 不把底层 WinError/代理地址直接暴露给用户，便于定位并保持提示可读。
         return json_error(f"知识搜索暂时不可用：{exc}", 503)
@@ -1455,13 +1539,15 @@ def api_knowledge_search_stream():
     limit = knowledge_config["leaderLimit"] if user.get("role") == "leader" else knowledge_config["memberLimit"]
     if used >= limit:
         return json_error(f"今日 {limit} 次知识搜索额度已用完，请明天再试", 429)
-    question = str((request.get_json(silent=True) or {}).get("question", "")).strip()
+    payload = request.get_json(silent=True) or {}
+    question = str(payload.get("question", "")).strip()
     if len(question) < 2:
         return json_error("请输入具体问题", 400)
     if len(question) > 300:
         return json_error("问题请控制在 300 字以内", 400)
     if not _llm_api_key():
         return json_error("知识搜索尚未配置 DEEPSEEK_API_KEY", 503)
+    filters = _parse_knowledge_filters(payload)
 
     user_id = user["id"]
     remaining = max(limit - used - 1, 0)
@@ -1472,7 +1558,7 @@ def api_knowledge_search_stream():
     def generate():
         # 阶段一：本地检索。全文抽取是本地主要耗时，逐份报告推送解析进度。
         candidates = []
-        retrieval = _iter_knowledge_candidates(question)
+        retrieval = _iter_knowledge_candidates(question, filters=filters)
         while True:
             try:
                 done_count, total = next(retrieval)
@@ -1481,9 +1567,10 @@ def api_knowledge_search_stream():
                 break
             yield event({"type": "stage", "text": f"正在解析报告库（{done_count}/{total}）…"})
         if not candidates:
+            answer = _knowledge_no_match_answer(filters)
             store.add_qa_usage(user_id, day, question)
-            store.add_qa_history(user_id, question, "未找到相关报告", [])
-            yield event({"type": "done", "answer": "未找到相关报告", "sources": [],
+            store.add_qa_history(user_id, question, answer, [])
+            yield event({"type": "done", "answer": answer, "sources": [],
                          "limit": limit, "used": used + 1, "remaining": remaining})
             return
         yield event({"type": "stage", "text": f"已定位 {len(candidates)} 篇相关报告，正在生成回答…"})

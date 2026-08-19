@@ -28,18 +28,19 @@
     reportAuthors: () => apiFetch('/api/report-authors', { credentials: 'same-origin' }).then(handleJson),
     reminders: () => apiFetch('/api/work-reminders', { credentials: 'same-origin' }).then(handleJson),
     knowledgeStatus: () => apiFetch('/api/knowledge-search', { credentials: 'same-origin' }).then(handleJson),
-    knowledgeAsk: (question) => apiFetch('/api/knowledge-search', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ question }) }).then(handleJson),
+    knowledgeAsk: (question, filters = {}) => apiFetch('/api/knowledge-search', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ question, ...filters }) }).then(handleJson),
     // 流式问答：SSE 逐事件回调 onEvent({type:'stage'|'delta'|'done'|'error', ...})，
+    // filters 携带范围筛选（时间/来源/种类/主题/人员），
     // 前置校验失败（额度/密钥等）时服务端返回 JSON 错误，此处统一抛出。
-    knowledgeAskStream: async (question, onEvent) => {
-      const response = await apiFetch('/api/knowledge-search/stream', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ question }) });
+    knowledgeAskStream: async (question, filters = {}, onEvent) => {
+      const response = await apiFetch('/api/knowledge-search/stream', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ question, ...filters }) });
       if (!response.ok || !(response.headers.get('content-type') || '').includes('text/event-stream')) {
         const data = await response.json().catch(() => ({}));
         throw new Error(data.error || `知识搜索失败 (${response.status})`);
       }
       if (!response.body || typeof response.body.getReader !== 'function') {
         // 浏览器不支持流式读取时，回落到一次性返回的旧接口，保证功能可用。
-        const result = await API.knowledgeAsk(question);
+        const result = await API.knowledgeAsk(question, filters);
         onEvent({ type: 'done', ...result });
         return;
       }
@@ -105,7 +106,7 @@
     uploadFiles: [],  // 待上传文件列表 {file, title}
     reportAuthors: [],
     reminders: null,
-    knowledge: { limit: 10, used: 0, remaining: 10, available: true, messages: [] }
+    knowledge: { limit: 10, used: 0, remaining: 10, available: true, messages: [], filters: { period: '1m', reportType: 'internal', category: '', theme: '', author: '', dateFrom: '', dateTo: '' } }
   };
 
   const els = {};
@@ -796,6 +797,7 @@
 
   function renderKnowledgeSearch() {
     const knowledge = state.knowledge;
+    const kf = knowledge.filters || {};
     const history = Array.isArray(knowledge.history) ? knowledge.history : [];
     const historyItems = history.map((item, idx) => {
       const time = item.createdAt ? new Date(item.createdAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
@@ -809,6 +811,24 @@
           <ul class="knowledge-history-list">${historyItems || '<li class="knowledge-history-empty">暂无历史提问</li>'}</ul>
         </aside>
         <div class="knowledge-shell panel-card">
+          <div class="knowledge-filters">
+            <label class="knowledge-filter">时间范围
+              <select id="knowledgeFilterPeriod"><option value="1m" ${kf.period === '1m' ? 'selected' : ''}>过去一个月</option><option value="3m" ${kf.period === '3m' ? 'selected' : ''}>过去三个月</option><option value="all" ${kf.period === 'all' ? 'selected' : ''}>全部时间</option><option value="custom" ${kf.period === 'custom' ? 'selected' : ''}>自定义</option></select>
+            </label>
+            <span class="knowledge-filter-dates" id="knowledgeCustomDates" ${kf.period === 'custom' ? '' : 'hidden'}><input type="date" id="knowledgeDateFrom" value="${escapeHTML(kf.dateFrom || '')}" title="开始日期"><span>至</span><input type="date" id="knowledgeDateTo" value="${escapeHTML(kf.dateTo || '')}" title="结束日期"></span>
+            <label class="knowledge-filter">报告来源
+              <select id="knowledgeFilterType">${[['internal', '内部报告'], ['external', '外部报告'], ['research_visit', '调研报告'], ['roadshow', '路演报告'], ['all', '全部来源']].map(([value, label]) => `<option value="${value}" ${kf.reportType === value ? 'selected' : ''}>${label}</option>`).join('')}</select>
+            </label>
+            <label class="knowledge-filter">报告种类
+              <select id="knowledgeFilterCategory"><option value="">全部种类</option>${Object.entries(categories).map(([key, cat]) => `<option value="${key}" ${kf.category === key ? 'selected' : ''}>${cat.label}</option>`).join('')}</select>
+            </label>
+            <label class="knowledge-filter">主题类型
+              <select id="knowledgeFilterTheme"><option value="">全部主题</option>${Object.entries(themes).map(([key, theme]) => `<option value="${key}" ${kf.theme === key ? 'selected' : ''}>${theme.label}</option>`).join('')}</select>
+            </label>
+            <label class="knowledge-filter">人员
+              <select id="knowledgeFilterAuthor"><option value="">全部人员</option>${knowledgeAuthorOptions().map(name => `<option value="${escapeHTML(name)}" ${kf.author === name ? 'selected' : ''}>${escapeHTML(name)}</option>`).join('')}</select>
+            </label>
+          </div>
           <div class="knowledge-conversation" id="knowledgeConversation">${knowledge.messages.length ? knowledge.messages.map(message => `<article class="knowledge-message ${message.role}"><div>${message.role === 'user' ? '我' : 'AI'}</div><section>${message.role === 'assistant' && message.streaming ? `<div class="knowledge-status">${escapeHTML(message.stage || '正在检索知识库…')}</div>` : ''}<div class="knowledge-answer${message.role === 'assistant' && message.streaming ? ' streaming' : ''}">${message.role === 'assistant' ? (message.text ? renderKnowledgeAnswer(message.text) : '') : escapeHTML(message.text).replace(/\n/g, '<br>')}</div>${message.sources?.length ? `<aside><span>引用报告</span>${message.sources.map(source => `<button data-action="view-report" data-id="${source.id}">《${escapeHTML(source.title)}》 · ${escapeHTML(source.author)}${source.publishedAt ? ` · ${escapeHTML(source.publishedAt)}` : ''}</button>`).join('')}</aside>` : ''}</section></article>`).join('') : `<div class="knowledge-empty"><strong>向报告库提一个问题</strong><p>例如：“近期信用利差变化的主要驱动是什么？”</p></div>`}</div>
           <form class="knowledge-form" id="knowledgeForm"><textarea id="knowledgeQuestion" maxlength="300" placeholder="输入你想从报告中了解的问题…" ${knowledge.remaining ? '' : 'disabled'}></textarea><button class="btn btn-primary" type="submit" ${knowledge.remaining && knowledge.available !== false ? '' : 'disabled'}>发送问题</button></form>${knowledge.available === false ? '<p class="knowledge-warning">服务端尚未配置 DeepSeek API 密钥，暂时无法发起问答。</p>' : ''}
         </div>
@@ -824,6 +844,40 @@
     });
     const conversation = document.getElementById('knowledgeConversation');
     if (conversation) conversation.scrollTop = conversation.scrollHeight;
+    bindKnowledgeFilters();
+  }
+
+  // 人员下拉选项：从已加载的报告列表提取去重后的署名作者。
+  function knowledgeAuthorOptions() {
+    const names = new Set();
+    (state.reports || []).forEach(report => {
+      const name = report.reportType === 'external' ? (report.sourceAuthor || report.author) : report.author;
+      if (name) names.add(String(name));
+    });
+    return [...names].sort((a, b) => a.localeCompare(b, 'zh-Hans-CN'));
+  }
+
+  // 筛选条件只影响下一次提问，变更时写入 state 以便视图重渲染后保持选中。
+  function bindKnowledgeFilters() {
+    const filters = state.knowledge.filters || (state.knowledge.filters = {});
+    const period = document.getElementById('knowledgeFilterPeriod');
+    const dates = document.getElementById('knowledgeCustomDates');
+    const dateFrom = document.getElementById('knowledgeDateFrom');
+    const dateTo = document.getElementById('knowledgeDateTo');
+    const type = document.getElementById('knowledgeFilterType');
+    const category = document.getElementById('knowledgeFilterCategory');
+    const theme = document.getElementById('knowledgeFilterTheme');
+    const author = document.getElementById('knowledgeFilterAuthor');
+    period?.addEventListener('change', () => {
+      filters.period = period.value;
+      if (dates) dates.hidden = period.value !== 'custom';
+    });
+    dateFrom?.addEventListener('change', () => { filters.dateFrom = dateFrom.value; });
+    dateTo?.addEventListener('change', () => { filters.dateTo = dateTo.value; });
+    type?.addEventListener('change', () => { filters.reportType = type.value; });
+    category?.addEventListener('change', () => { filters.category = category.value; });
+    theme?.addEventListener('change', () => { filters.theme = theme.value; });
+    author?.addEventListener('change', () => { filters.author = author.value; });
   }
 
   function renderKnowledgeAnswer(value) {
@@ -849,8 +903,10 @@
     const submitBtn = form?.querySelector('button[type=submit]');
     if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = '生成中…'; }
     let doneResult = null;
+    // 范围筛选随问题一起提交（拷贝快照，流式期间用户改筛选不影响本次请求）。
+    const filters = { ...(state.knowledge.filters || {}) };
     try {
-      await API.knowledgeAskStream(question, evt => {
+      await API.knowledgeAskStream(question, filters, evt => {
         if (evt.type === 'stage') {
           placeholder.stage = evt.text || '';
           scheduleKnowledgeStreamRefresh();
