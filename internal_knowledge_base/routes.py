@@ -704,75 +704,107 @@ def _knowledge_query_terms(question, vocabulary=""):
     return compact_query, terms, subterms
 
 
-# 知识搜索范围筛选：时间范围对应的天数，custom/all 由前端单独处理
+# 知识搜索范围筛选：时间范围对应的天数，all/custom 由前端单独处理
 KNOWLEDGE_PERIOD_DAYS = {"1m": 30, "3m": 90}
 KNOWLEDGE_REPORT_TYPES = ("internal", "external", "research_visit", "roadshow")
+KNOWLEDGE_FILTER_MAX_VALUES = 30  # 多选每个维度最多接受的选项数，防止恶意超长列表
 
 
 def _parse_knowledge_filters(data):
-    """解析知识搜索的范围筛选参数，缺省为“过去一个月的内部报告”。"""
+    """解析知识搜索的范围筛选参数。
+
+    时间范围为单选（1m/3m/all/custom + 自定义起止日期）；
+    来源/种类/主题/人员支持多选，报告属性命中任一即可，
+    空列表表示该维度不过滤。整体缺省为“过去一个月的内部报告”。
+    """
     data = data or {}
 
-    def text(key):
-        return str(data.get(key) or "").strip()
+    def selection(key, allowed, default):
+        raw = data.get(key)
+        if isinstance(raw, str):
+            raw = [raw]
+        if raw is None:
+            return list(default)
+        if not isinstance(raw, list):
+            return list(default)
+        return [str(item).strip() for item in raw
+                if str(item).strip() in allowed][:KNOWLEDGE_FILTER_MAX_VALUES]
 
-    period = text("period") or "1m"
+    period = str(data.get("period") or "").strip()
     if period not in ("1m", "3m", "all", "custom"):
         period = "1m"
+
+    def parse_date(key):
+        value = str(data.get(key) or "").strip()
+        try:
+            return datetime.strptime(value, "%Y-%m-%d").strftime("%Y-%m-%d")
+        except ValueError:
+            return ""
+
     date_from = date_to = ""
     if period == "custom":
         # 自定义区间为闭区间 [dateFrom, dateTo]，缺省的边界不限制。
-        def parse_date(key):
-            value = text(key)
-            try:
-                return datetime.strptime(value, "%Y-%m-%d").strftime("%Y-%m-%d")
-            except ValueError:
-                return ""
         date_from = parse_date("dateFrom")
         date_to = parse_date("dateTo")
     elif period != "all":
         date_from = (datetime.now(CST) - timedelta(days=KNOWLEDGE_PERIOD_DAYS[period])).strftime("%Y-%m-%d")
-    category = text("category")
-    if category not in REPORT_CATEGORY_LABELS:
-        category = ""
-    theme = text("theme")
-    if theme not in REPORT_THEMES:
-        theme = ""
-    report_type = text("reportType") or "internal"
-    if report_type != "all" and report_type not in KNOWLEDGE_REPORT_TYPES:
-        report_type = "internal"
+
+    raw_types = data.get("reportTypes")
+    if isinstance(raw_types, str):
+        raw_types = [raw_types]
+    if raw_types is None:
+        report_types = ["internal"]
+    elif isinstance(raw_types, list):
+        report_types = [str(item).strip() for item in raw_types
+                        if str(item).strip() in KNOWLEDGE_REPORT_TYPES][:KNOWLEDGE_FILTER_MAX_VALUES]
+    else:
+        report_types = ["internal"]
+
+    raw_authors = data.get("authors")
+    if isinstance(raw_authors, str):
+        raw_authors = [raw_authors]
+    authors = ([str(item).strip()[:50] for item in raw_authors if str(item).strip()]
+               if isinstance(raw_authors, list) else [])[:KNOWLEDGE_FILTER_MAX_VALUES]
+
     return {
         "period": period, "date_from": date_from, "date_to": date_to,
-        "category": category, "theme": theme, "report_type": report_type,
-        "author": text("author")[:50],
+        "report_types": report_types,
+        "categories": selection("categories", REPORT_CATEGORY_LABELS, ()),
+        "themes": selection("themes", REPORT_THEMES, ()),
+        "authors": authors,
     }
 
 
 def _report_matches_knowledge_filters(report, filters):
-    """判断报告是否落在知识搜索筛选范围内；filters 为空表示不过滤。"""
+    """判断报告是否落在知识搜索筛选范围内；filters 为空表示不过滤。
+
+    来源/种类/主题/人员为多选：报告属性命中已选列表中的任一值即通过，
+    列表为空表示该维度不过滤。
+    """
     if not filters:
         return True
-    report_type = filters.get("report_type", "")
-    if report_type and report_type != "all":
-        if str(report.get("reportType", "internal")) != report_type:
-            return False
-    if filters.get("category") and str(report.get("category", "")) != filters["category"]:
+    report_types = filters.get("report_types") or []
+    if report_types and str(report.get("reportType", "internal")) not in report_types:
         return False
-    if filters.get("theme") and str(report.get("theme", "")) != filters["theme"]:
+    categories = filters.get("categories") or []
+    if categories and str(report.get("category", "")) not in categories:
         return False
-    author = filters.get("author", "")
-    if author:
+    themes = filters.get("themes") or []
+    if themes and str(report.get("theme", "")) not in themes:
+        return False
+    authors = filters.get("authors") or []
+    if authors:
         # 外部报告的署名作者在 sourceAuthor，内部报告在 author。
         names = {str(report.get("author", "")), str(report.get("sourceAuthor", ""))}
-        if author not in names:
+        if not names.intersection(authors):
             return False
     if filters.get("date_from") or filters.get("date_to"):
         date_str = str(report.get("reportDate") or report.get("uploadedAt", ""))[:10]
         if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date_str):
             return False
-        if filters.get("date_from") and date_str < filters["date_from"]:
+        if filters["date_from"] and date_str < filters["date_from"]:
             return False
-        if filters.get("date_to") and date_str > filters["date_to"]:
+        if filters["date_to"] and date_str > filters["date_to"]:
             return False
     return True
 

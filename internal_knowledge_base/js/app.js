@@ -106,7 +106,7 @@
     uploadFiles: [],  // 待上传文件列表 {file, title}
     reportAuthors: [],
     reminders: null,
-    knowledge: { limit: 10, used: 0, remaining: 10, available: true, messages: [], filters: { period: '1m', reportType: 'internal', category: '', theme: '', author: '', dateFrom: '', dateTo: '' } }
+    knowledge: { limit: 10, used: 0, remaining: 10, available: true, messages: [], filters: { period: '1m', dateFrom: '', dateTo: '', reportTypes: ['internal'], categories: [], themes: [], authors: [] } }
   };
 
   const els = {};
@@ -811,24 +811,7 @@
           <ul class="knowledge-history-list">${historyItems || '<li class="knowledge-history-empty">暂无历史提问</li>'}</ul>
         </aside>
         <div class="knowledge-shell panel-card">
-          <div class="knowledge-filters">
-            <label class="knowledge-filter">时间范围
-              <select id="knowledgeFilterPeriod"><option value="1m" ${kf.period === '1m' ? 'selected' : ''}>过去一个月</option><option value="3m" ${kf.period === '3m' ? 'selected' : ''}>过去三个月</option><option value="all" ${kf.period === 'all' ? 'selected' : ''}>全部时间</option><option value="custom" ${kf.period === 'custom' ? 'selected' : ''}>自定义</option></select>
-            </label>
-            <span class="knowledge-filter-dates" id="knowledgeCustomDates" ${kf.period === 'custom' ? '' : 'hidden'}><input type="date" id="knowledgeDateFrom" value="${escapeHTML(kf.dateFrom || '')}" title="开始日期"><span>至</span><input type="date" id="knowledgeDateTo" value="${escapeHTML(kf.dateTo || '')}" title="结束日期"></span>
-            <label class="knowledge-filter">报告来源
-              <select id="knowledgeFilterType">${[['internal', '内部报告'], ['external', '外部报告'], ['research_visit', '调研报告'], ['roadshow', '路演报告'], ['all', '全部来源']].map(([value, label]) => `<option value="${value}" ${kf.reportType === value ? 'selected' : ''}>${label}</option>`).join('')}</select>
-            </label>
-            <label class="knowledge-filter">报告种类
-              <select id="knowledgeFilterCategory"><option value="">全部种类</option>${Object.entries(categories).map(([key, cat]) => `<option value="${key}" ${kf.category === key ? 'selected' : ''}>${cat.label}</option>`).join('')}</select>
-            </label>
-            <label class="knowledge-filter">主题类型
-              <select id="knowledgeFilterTheme"><option value="">全部主题</option>${Object.entries(themes).map(([key, theme]) => `<option value="${key}" ${kf.theme === key ? 'selected' : ''}>${theme.label}</option>`).join('')}</select>
-            </label>
-            <label class="knowledge-filter">人员
-              <select id="knowledgeFilterAuthor"><option value="">全部人员</option>${knowledgeAuthorOptions().map(name => `<option value="${escapeHTML(name)}" ${kf.author === name ? 'selected' : ''}>${escapeHTML(name)}</option>`).join('')}</select>
-            </label>
-          </div>
+          <div class="knowledge-filters">${knowledgeFiltersHTML(kf)}</div>
           <div class="knowledge-conversation" id="knowledgeConversation">${knowledge.messages.length ? knowledge.messages.map(message => `<article class="knowledge-message ${message.role}"><div>${message.role === 'user' ? '我' : 'AI'}</div><section>${message.role === 'assistant' && message.streaming ? `<div class="knowledge-status">${escapeHTML(message.stage || '正在检索知识库…')}</div>` : ''}<div class="knowledge-answer${message.role === 'assistant' && message.streaming ? ' streaming' : ''}">${message.role === 'assistant' ? (message.text ? renderKnowledgeAnswer(message.text) : '') : escapeHTML(message.text).replace(/\n/g, '<br>')}</div>${message.sources?.length ? `<aside><span>引用报告</span>${message.sources.map(source => `<button data-action="view-report" data-id="${source.id}">《${escapeHTML(source.title)}》 · ${escapeHTML(source.author)}${source.publishedAt ? ` · ${escapeHTML(source.publishedAt)}` : ''}</button>`).join('')}</aside>` : ''}</section></article>`).join('') : `<div class="knowledge-empty"><strong>向报告库提一个问题</strong><p>例如：“近期信用利差变化的主要驱动是什么？”</p></div>`}</div>
           <form class="knowledge-form" id="knowledgeForm"><textarea id="knowledgeQuestion" maxlength="300" placeholder="输入你想从报告中了解的问题…" ${knowledge.remaining ? '' : 'disabled'}></textarea><button class="btn btn-primary" type="submit" ${knowledge.remaining && knowledge.available !== false ? '' : 'disabled'}>发送问题</button></form>${knowledge.available === false ? '<p class="knowledge-warning">服务端尚未配置 DeepSeek API 密钥，暂时无法发起问答。</p>' : ''}
         </div>
@@ -857,27 +840,92 @@
     return [...names].sort((a, b) => a.localeCompare(b, 'zh-Hans-CN'));
   }
 
+  // 多选筛选项配置：value 为 '' 的“全部”选项与具体选项互斥
+  const KNOWLEDGE_FILTER_LABELS = { reportTypes: '报告来源', categories: '报告种类', themes: '主题类型', authors: '人员' };
+
+  function knowledgeFilterOptions(key) {
+    if (key === 'reportTypes') return [['', '全部来源'], ['internal', '内部报告'], ['external', '外部报告'], ['research_visit', '调研报告'], ['roadshow', '路演报告']];
+    if (key === 'categories') return [['', '全部种类'], ...Object.entries(categories).map(([value, cat]) => [value, cat.label])];
+    if (key === 'themes') return [['', '全部主题'], ...Object.entries(themes).map(([value, theme]) => [value, theme.label])];
+    return [['', '全部人员'], ...knowledgeAuthorOptions().map(name => [name, name])];
+  }
+
+  function knowledgeFilterSummary(key) {
+    const kf = state.knowledge.filters || {};
+    const options = knowledgeFilterOptions(key);
+    const labelOf = value => (options.find(([v]) => v === value) || [, value])[1];
+    const values = kf[key] || [];
+    if (!values.length) return options[0][1];
+    if (values.length === 1) return labelOf(values[0]);
+    return `${labelOf(values[0])} 等${values.length}项`;
+  }
+
+  // 筛选栏：时间范围单选（自定义起止日期），来源/种类/主题/人员为多选下拉
+  function knowledgeFiltersHTML(kf) {
+    const multi = key => {
+      const options = knowledgeFilterOptions(key);
+      const selected = new Set(kf[key] || []);
+      return `<div class="knowledge-multi" data-filter="${key}"><span class="knowledge-multi-label">${KNOWLEDGE_FILTER_LABELS[key] || key}</span><button type="button" class="knowledge-multi-toggle">${escapeHTML(knowledgeFilterSummary(key))}<em>▾</em></button><div class="knowledge-multi-menu" hidden>${options.map(([value, text]) => `<label class="knowledge-multi-option"><input type="checkbox" value="${escapeHTML(value)}" ${selected.has(value) ? 'checked' : ''} ${value === '' ? 'data-exclusive="1"' : ''}><span>${escapeHTML(text)}</span></label>`).join('')}</div></div>`;
+    };
+    return `<label class="knowledge-filter">时间范围
+        <select id="knowledgeFilterPeriod"><option value="1m" ${kf.period === '1m' ? 'selected' : ''}>过去一个月</option><option value="3m" ${kf.period === '3m' ? 'selected' : ''}>过去三个月</option><option value="all" ${kf.period === 'all' ? 'selected' : ''}>全部时间</option><option value="custom" ${kf.period === 'custom' ? 'selected' : ''}>自定义</option></select>
+      </label>
+      <span class="knowledge-filter-dates" id="knowledgeCustomDates" ${kf.period === 'custom' ? '' : 'hidden'}><input type="date" id="knowledgeDateFrom" value="${escapeHTML(kf.dateFrom || '')}" title="开始日期"><span>至</span><input type="date" id="knowledgeDateTo" value="${escapeHTML(kf.dateTo || '')}" title="结束日期"></span>
+      ${multi('reportTypes')}${multi('categories')}${multi('themes')}${multi('authors')}`;
+  }
+
   // 筛选条件只影响下一次提问，变更时写入 state 以便视图重渲染后保持选中。
+  let knowledgeMenuCloserBound = false;
   function bindKnowledgeFilters() {
     const filters = state.knowledge.filters || (state.knowledge.filters = {});
     const period = document.getElementById('knowledgeFilterPeriod');
     const dates = document.getElementById('knowledgeCustomDates');
     const dateFrom = document.getElementById('knowledgeDateFrom');
     const dateTo = document.getElementById('knowledgeDateTo');
-    const type = document.getElementById('knowledgeFilterType');
-    const category = document.getElementById('knowledgeFilterCategory');
-    const theme = document.getElementById('knowledgeFilterTheme');
-    const author = document.getElementById('knowledgeFilterAuthor');
     period?.addEventListener('change', () => {
       filters.period = period.value;
       if (dates) dates.hidden = period.value !== 'custom';
     });
     dateFrom?.addEventListener('change', () => { filters.dateFrom = dateFrom.value; });
     dateTo?.addEventListener('change', () => { filters.dateTo = dateTo.value; });
-    type?.addEventListener('change', () => { filters.reportType = type.value; });
-    category?.addEventListener('change', () => { filters.category = category.value; });
-    theme?.addEventListener('change', () => { filters.theme = theme.value; });
-    author?.addEventListener('change', () => { filters.author = author.value; });
+    document.querySelectorAll('.knowledge-multi').forEach(container => {
+      const key = container.dataset.filter;
+      const menu = container.querySelector('.knowledge-multi-menu');
+      const toggle = container.querySelector('.knowledge-multi-toggle');
+      toggle?.addEventListener('click', () => {
+        const willOpen = menu.hidden;
+        document.querySelectorAll('.knowledge-multi-menu').forEach(item => { item.hidden = true; });
+        menu.hidden = !willOpen;
+      });
+      container.querySelectorAll('input[type=checkbox]').forEach(box => {
+        box.addEventListener('change', () => {
+          const boxes = [...container.querySelectorAll('input[type=checkbox]')];
+          // “全部”与具体选项互斥：勾选一方即取消另一方
+          if (box.checked) {
+            boxes.forEach(item => {
+              if (box.dataset.exclusive !== item.dataset.exclusive) item.checked = false;
+            });
+          }
+          filters[key] = boxes.filter(item => item.checked && !item.dataset.exclusive).map(item => item.value);
+          refreshKnowledgeFilterSummaries();
+        });
+      });
+    });
+    if (!knowledgeMenuCloserBound) {
+      knowledgeMenuCloserBound = true;
+      // 点击组件外部时收起所有多选下拉
+      document.addEventListener('click', event => {
+        if (event.target.closest('.knowledge-multi')) return;
+        document.querySelectorAll('.knowledge-multi-menu').forEach(menu => { menu.hidden = true; });
+      });
+    }
+  }
+
+  function refreshKnowledgeFilterSummaries() {
+    document.querySelectorAll('.knowledge-multi').forEach(container => {
+      const toggle = container.querySelector('.knowledge-multi-toggle');
+      if (toggle) toggle.innerHTML = `${escapeHTML(knowledgeFilterSummary(container.dataset.filter))}<em>▾</em>`;
+    });
   }
 
   function renderKnowledgeAnswer(value) {
