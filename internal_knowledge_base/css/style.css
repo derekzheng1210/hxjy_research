@@ -908,3 +908,55 @@ input::placeholder, textarea::placeholder { color: var(--text-faint); }
 }
 
 .portal-return-link{display:block;margin:0 16px 10px;padding:8px 10px;color:#64748b;text-decoration:none;font-size:12px;border-radius:6px}.portal-return-link:hover{color:#2563eb;background:#eff6ff}
+
+/* ===== 路演安排表（周历式日程图表） ===== */
+.roadshow-panel { margin-bottom: 18px; }
+.roadshow-panel-actions { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+.roadshow-cal-wrap { overflow-x: auto; }
+.roadshow-cal { min-width: 660px; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+.roadshow-cal-head { display: grid; grid-template-columns: 56px repeat(5, 1fr); background: var(--surface-muted); border-bottom: 1px solid var(--border); }
+.roadshow-cal-corner { padding: 9px 6px; color: var(--text-faint); font-size: 12px; font-weight: 700; text-align: center; }
+.roadshow-cal-day { padding: 7px 4px; text-align: center; border-left: 1px solid var(--border); }
+.roadshow-cal-day b { display: block; font-size: 13px; }
+.roadshow-cal-day span { display: inline-block; margin-top: 2px; color: var(--text-faint); font-size: 11px; }
+.roadshow-cal-day.today b, .roadshow-cal-day.today span { color: var(--primary); }
+.roadshow-cal-day.today span { background: var(--primary-soft); padding: 1px 7px; border-radius: 9px; }
+.roadshow-cal-scroll { display: grid; grid-template-columns: 56px 1fr; max-height: 540px; overflow-y: auto; }
+.roadshow-cal-times { border-right: 1px solid var(--border); background: var(--surface-muted); }
+.roadshow-cal-slot { display: flex; align-items: flex-start; justify-content: flex-end; padding: 2px 6px 0 0; color: var(--text-faint); font-size: 11px; }
+.roadshow-cal-columns { display: grid; grid-template-columns: repeat(5, 1fr); }
+.roadshow-cal-grid { position: relative; border-left: 1px solid var(--border); cursor: copy;
+  background-image: repeating-linear-gradient(to bottom, var(--border) 0 1px, transparent 1px 30px); }
+.roadshow-cal-grid:hover { background-color: rgba(37, 99, 235, .035); }
+.roadshow-event { position: absolute; overflow: hidden; display: flex; flex-direction: column; gap: 2px; padding: 4px 6px; border: 0; border-left: 3px solid var(--primary); border-radius: 6px; background: var(--primary-soft); text-align: left; cursor: pointer; transition: box-shadow .15s; }
+.roadshow-event:hover { box-shadow: var(--shadow-sm); filter: brightness(.98); }
+.roadshow-event strong { color: var(--text); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.roadshow-event span { color: var(--text-muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.roadshow-event em { color: var(--text-faint); font-size: 10.5px; font-style: normal; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.roadshow-event.fmt-online { border-left-color: var(--primary); background: var(--primary-soft); }
+.roadshow-event.fmt-offline { border-left-color: var(--success); background: var(--success-soft); }
+.roadshow-event.fmt-hybrid { border-left-color: #7c3aed; background: #f3e8ff; }
+.roadshow-cal-foot { padding: 7px 12px; color: var(--text-faint); font-size: 11.5px; background: var(--surface-muted); border-top: 1px solid var(--border); }
+.roadshow-weekend-note { padding: 8px 12px; color: var(--text-muted); font-size: 12px; background: var(--warning-soft); border-top: 1px solid #fde68a; line-height: 1.6; }
+.roadshow-detail-grid { grid-template-columns: repeat(3, 1fr); }
+.roadshow-topic-view { margin: 6px 0 0; color: var(--text-secondary); font-size: 14px; line-height: 1.65; }
+.roadshow-ai-box { display: flex; flex-direction: column; gap: 8px; padding: 14px; background: #eef2ff; border: 1px solid #c7d2fe; border-radius: var(--radius); }
+.roadshow-ai-box label { display: flex; flex-direction: column; gap: 3px; font-size: 13px; font-weight: 800; }
+.roadshow-ai-box label span { color: var(--text-muted); font-size: 11.5px; font-weight: 400; }
+.roadshow-ai-box textarea { width: 100%; min-height: 88px; padding: 10px; color: var(--text); background: var(--surface); border: 1px solid var(--border-strong); border-radius: var(--radius-sm); resize: vertical; font-size: 13px; line-height: 1.6; font-family: inherit; }
+.roadshow-ai-box textarea:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-ring); }
+.roadshow-ai-box .btn { align-self: flex-start; }
+.roadshow-form-note { margin: 12px 0 0; color: var(--text-faint); font-size: 12px; }
+
+/* ===== 外部报告上传人标识 ===== */
+.uploaded-by-line { margin-top: 6px; color: var(--text-faint); font-size: 12px; }
+.uploaded-by-line::before { content: "⬆ "; color: var(--primary); }
+
+/* ===== 待我评分：标题可点击 + 操作按钮组 ===== */
+.rating-title-link { overflow: hidden; margin: 0 0 4px; font-size: 15px; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; transition: color .15s; }
+.rating-title-link:hover { color: var(--primary); }
+.rating-item-actions { display: flex; flex-direction: column; gap: 6px; }
+@media (max-width: 1180px) {
+  .rating-list-item .rating-item-actions { flex-direction: row; }
+  .roadshow-panel-actions .btn { min-height: 38px; }
+}

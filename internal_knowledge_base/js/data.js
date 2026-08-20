@@ -17,7 +17,7 @@ const APP_CONFIG = Object.freeze({
 
 const REPORT_CATEGORIES = Object.freeze({
   weekly: { label: '周报', short: '周报', scored: false, tone: 'blue' },
-  monthly: { label: '月报', short: '月报', scored: true, tone: 'indigo' },
+  monthly: { label: '月报', short: '月报', scored: false, tone: 'indigo' },
   deep: { label: '深度报告', short: '深度', scored: true, tone: 'violet' },
   other: { label: '其他报告', short: '其他', scored: false, tone: 'slate' }
 });

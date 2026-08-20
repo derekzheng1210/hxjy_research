@@ -94,24 +94,43 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 
 # --------------------------------------------------------------------------- #
-# DeepSeek LLM 配置（智能补全关键词与摘要）
+# 大模型配置：默认 MiMo（小米开放平台，OpenAI 兼容），DeepSeek 兜底。
 # 密钥不写入文件：优先读环境变量，Windows 下回退读注册表 HKCU\Environment
 # --------------------------------------------------------------------------- #
-def _llm_api_key():
-    """Resolve the DeepSeek API key without persisting it in project files."""
-    key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
-    if key or os.name != "nt":
-        return key
+def _env_or_registry(name):
+    r"""Resolve an env var with a Windows HKCU\Environment registry fallback."""
+    value = os.environ.get(name, "").strip()
+    if value or os.name != "nt":
+        return value
     try:
         import winreg
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment") as env_key:
-            return str(winreg.QueryValueEx(env_key, "DEEPSEEK_API_KEY")[0]).strip()
+            return str(winreg.QueryValueEx(env_key, name)[0]).strip()
     except OSError:
         return ""
 
 
-LLM_BASE_URL = "https://api.deepseek.com"
-LLM_MODEL = "deepseek-chat"
+def _mimo_api_key():
+    return _env_or_registry("MIMO_API_KEY")
+
+
+def _deepseek_api_key():
+    return _env_or_registry("DEEPSEEK_API_KEY")
+
+
+def _llm_api_key():
+    """任一模型密钥可用即视为大模型已配置。"""
+    return _mimo_api_key() or _deepseek_api_key()
+
+
+# MiMo（小米开放平台 https://platform.xiaomimimo.com，OpenAI 兼容协议）。
+# mimo-v2.5 为最便宜的文本模型；它是推理模型，默认会先输出 reasoning_content
+# 再给答案，等待时间长。业务场景（信息抽取/知识问答）不需要深度思考，
+# 统一传 thinking.type=disabled 关闭思考，首 token 响应可从约 15s 降至 1-4s。
+MIMO_BASE_URL = os.environ.get("MIMO_BASE_URL", "https://api.xiaomimimo.com/v1").rstrip("/")
+MIMO_MODEL = os.environ.get("MIMO_MODEL", "mimo-v2.5")
+DEEPSEEK_BASE_URL = "https://api.deepseek.com"
+DEEPSEEK_MODEL = "deepseek-chat"
 LLM_TIMEOUT = 90
 LLM_MAX_TEXT_CHARS = 6000  # 发送给 LLM 的文档文本最大长度
 
@@ -533,52 +552,94 @@ def _extract_text(file_path):
     return text[:LLM_MAX_TEXT_CHARS]
 
 
-def _call_deepseek(prompt, system=None, max_tokens=None, json_mode=True):
-    """调用 DeepSeek（OpenAI 兼容接口），返回 message content 字符串。
+def _call_llm(prompt, system=None, max_tokens=None, json_mode=True):
+    """调用大模型（默认 MiMo，失败自动回退 DeepSeek），返回 message content。
 
     system：可选的系统消息，用于约束角色与回答风格。
     max_tokens：可选的输出长度上限，未传时由模型默认值决定。
     json_mode：是否要求 JSON 输出；知识问答需要流式展示纯文本，传 False。
-    三参数均不影响不传时的原有行为（如标签/摘要提取）。
     """
     # 每次调用时解析密钥：Windows 服务更新环境变量并重启、或管理员补充 .env
     # 后，不会因为模块导入时缓存了空值而一直不可用。
-    api_key = _llm_api_key()
-    if not api_key:
-        raise RuntimeError("未配置 DEEPSEEK_API_KEY")
     messages = _llm_messages(prompt, system=system)
-    payload = {
-        "model": LLM_MODEL,
-        "messages": messages,
-        "temperature": 0.3,
-    }
+    mimo_key = _mimo_api_key()
+    if mimo_key:
+        try:
+            return _complete_provider(MIMO_BASE_URL, MIMO_MODEL, mimo_key, messages,
+                                      max_tokens, json_mode, disable_thinking=True)
+        except Exception as exc:
+            current_app.logger.warning("MiMo 调用失败，回退 DeepSeek：%s", exc)
+    deepseek_key = _deepseek_api_key()
+    if not deepseek_key:
+        raise RuntimeError("未配置大模型 API 密钥（MIMO_API_KEY / DEEPSEEK_API_KEY）")
+    return _complete_provider(DEEPSEEK_BASE_URL, DEEPSEEK_MODEL, deepseek_key, messages,
+                              max_tokens, json_mode)
+
+
+def _stream_llm(prompt, system=None, max_tokens=None):
+    """流式调用大模型（默认 MiMo，失败自动回退 DeepSeek），逐段 yield 文本增量。
+
+    流式模式不支持 response_format，输出格式由 system 提示词约束、
+    由调用方解析。若 MiMo 已推送过内容则不再回退（回退会导致答案重复）。
+    """
+    messages = _llm_messages(prompt, system=system)
+    mimo_key = _mimo_api_key()
+    if mimo_key:
+        try:
+            produced = False
+            for delta in _stream_provider(MIMO_BASE_URL, MIMO_MODEL, mimo_key, messages,
+                                          max_tokens, disable_thinking=True):
+                produced = True
+                yield delta
+            return
+        except Exception as exc:
+            if produced:
+                raise
+            current_app.logger.warning("MiMo 流式调用失败，回退 DeepSeek：%s", exc)
+    deepseek_key = _deepseek_api_key()
+    if not deepseek_key:
+        raise RuntimeError("未配置大模型 API 密钥（MIMO_API_KEY / DEEPSEEK_API_KEY）")
+    yield from _stream_provider(DEEPSEEK_BASE_URL, DEEPSEEK_MODEL, deepseek_key, messages, max_tokens)
+
+
+def _complete_provider(base_url, model, api_key, messages, max_tokens, json_mode,
+                       disable_thinking=False):
+    """非流式调用单个 provider：读取完整响应并返回 content 字符串。"""
+    payload = {"model": model, "messages": messages, "temperature": 0.3}
     if json_mode:
         payload["response_format"] = {"type": "json_object"}
     if max_tokens:
         payload["max_tokens"] = max_tokens
-    return _open_llm_response(payload, api_key)
+    if disable_thinking:
+        # MiMo 关闭深度思考，直接输出答案，大幅降低首响应延迟
+        payload["thinking"] = {"type": "disabled"}
+    try:
+        with _open_llm_raw(base_url, payload, api_key) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")[:240]
+        raise RuntimeError(f"知识服务返回 HTTP {exc.code}{(': ' + detail) if detail else ''}") from exc
+    except urllib.error.URLError as exc:
+        reason = getattr(exc, "reason", exc)
+        if isinstance(reason, TimeoutError) or "timed out" in str(reason).lower():
+            raise RuntimeError("知识服务响应超时，请稍后重试") from exc
+        raise RuntimeError("无法连接知识服务，请检查网络连接或大模型 API 配置") from exc
+    return data["choices"][0]["message"]["content"]
 
 
-def _stream_deepseek(prompt, system=None, max_tokens=None):
-    """流式调用 DeepSeek，逐段 yield 模型输出的文本增量。
+def _stream_provider(base_url, model, api_key, messages, max_tokens, disable_thinking=False):
+    """流式调用单个 provider，逐段 yield 模型输出的文本增量。
 
-    流式模式不支持 response_format，输出格式由 system 提示词约束、
-    由调用方解析。错误消息与 _call_deepseek 保持一致。
+    MiMo 是推理模型：流中会先推送 reasoning_content 增量（此处跳过），
+    且可能出现空 choices 帧，需要防护。
     """
-    api_key = _llm_api_key()
-    if not api_key:
-        raise RuntimeError("未配置 DEEPSEEK_API_KEY")
-    payload = {
-        "model": LLM_MODEL,
-        "messages": _llm_messages(prompt, system=system),
-        "temperature": 0.3,
-        "stream": True,
-    }
+    payload = {"model": model, "messages": messages, "temperature": 0.3, "stream": True}
     if max_tokens:
         payload["max_tokens"] = max_tokens
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    if disable_thinking:
+        payload["thinking"] = {"type": "disabled"}
     try:
-        with _open_llm_raw(payload, api_key) as resp:
+        with _open_llm_raw(base_url, payload, api_key) as resp:
             for raw_line in resp:
                 line = raw_line.decode("utf-8", errors="replace").strip()
                 if not line.startswith("data:"):
@@ -590,7 +651,9 @@ def _stream_deepseek(prompt, system=None, max_tokens=None):
                     chunk = json.loads(data)
                 except json.JSONDecodeError:
                     continue
-                choices = chunk.get("choices") or [{}]
+                choices = chunk.get("choices") or []
+                if not choices:
+                    continue
                 delta = (choices[0].get("delta") or {}).get("content")
                 if delta:
                     yield delta
@@ -601,7 +664,7 @@ def _stream_deepseek(prompt, system=None, max_tokens=None):
         reason = getattr(exc, "reason", exc)
         if isinstance(reason, TimeoutError) or "timed out" in str(reason).lower():
             raise RuntimeError("知识服务响应超时，请稍后重试") from exc
-        raise RuntimeError("无法连接知识服务，请检查网络连接或 DeepSeek API 配置") from exc
+        raise RuntimeError("无法连接知识服务，请检查网络连接或大模型 API 配置") from exc
     except TimeoutError as exc:
         # 读取响应体阶段的超时不会包成 URLError，需要单独翻译。
         raise RuntimeError("知识服务响应超时，请稍后重试") from exc
@@ -615,34 +678,18 @@ def _llm_messages(prompt, system=None):
     return messages
 
 
-def _open_llm_raw(payload, api_key):
+def _open_llm_raw(base_url, payload, api_key):
     """构造并发送 chat/completions 请求，返回未读取的响应对象。"""
     req = urllib.request.Request(
-        LLM_BASE_URL.rstrip("/") + "/chat/completions",
+        base_url.rstrip("/") + "/chat/completions",
         data=json.dumps(payload).encode("utf-8"),
         headers={"Content-Type": "application/json",
                  "Authorization": f"Bearer {api_key}"},
     )
     # 系统环境可能配置了失效的本地代理（例如 127.0.0.1:9）。
-    # DeepSeek 请求显式直连，避免知识搜索因代理拒绝连接而失败。
+    # 大模型请求显式直连，避免知识搜索因代理拒绝连接而失败。
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     return opener.open(req, timeout=LLM_TIMEOUT)
-
-
-def _open_llm_response(payload, api_key):
-    """非流式调用：读取完整响应并返回 content 字符串。"""
-    try:
-        with _open_llm_raw(payload, api_key) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace")[:240]
-        raise RuntimeError(f"知识服务返回 HTTP {exc.code}{(': ' + detail) if detail else ''}") from exc
-    except urllib.error.URLError as exc:
-        reason = getattr(exc, "reason", exc)
-        if isinstance(reason, TimeoutError) or "timed out" in str(reason).lower():
-            raise RuntimeError("知识服务响应超时，请稍后重试") from exc
-        raise RuntimeError("无法连接知识服务，请检查网络连接或 DeepSeek API 配置") from exc
-    return data["choices"][0]["message"]["content"]
 
 
 def _ai_complete_tags_summary(file_path, original_name, external=False):
@@ -663,7 +710,7 @@ def _ai_complete_tags_summary(file_path, original_name, external=False):
         "5. 严格基于文档内容，不要编造\n\n"
         f"报告内容：\n{context}"
     )
-    raw = _call_deepseek(prompt)
+    raw = _call_llm(prompt)
     data = json.loads(raw)
     tags = data.get("tags", [])
     if not isinstance(tags, list):
@@ -1025,7 +1072,7 @@ def _answer_knowledge_question(question, filters=None):
     if not candidates:
         return {"answer": _knowledge_no_match_answer(filters), "sources": []}
     system, prompt = _knowledge_qa_messages(question, candidates)
-    raw = _call_deepseek(prompt, system=system, max_tokens=2800, json_mode=False)
+    raw = _call_llm(prompt, system=system, max_tokens=2800, json_mode=False)
     return _parse_knowledge_answer(raw, candidates)
 
 
@@ -1192,16 +1239,23 @@ def api_reports_upload(report_scope=None):
     tags_raw = meta.get("tags", "")
     titles = meta.get("titles", {}) or {}
 
-    # 打分部门：仅月报/深度报告生效，默认两部门均打分
+    # 打分部门：仅深度报告生效（月报打分已关闭），默认两部门均打分
     scoring_orgs_raw = meta.get("scoringOrgs", [])
     if not isinstance(scoring_orgs_raw, list):
         scoring_orgs_raw = [scoring_orgs_raw]
     scoring_orgs = [org for org in scoring_orgs_raw if org in SCORING_ORGS]
-    if report_type == "internal" and category in ("monthly", "deep"):
+    if report_type == "internal" and category == "deep":
         if not scoring_orgs:
             return json_error("请至少选择一个打分部门", 400)
     else:
         scoring_orgs = list(SCORING_ORGS)
+
+    # 路演安排表关联：从路演日程一键上传报告时携带，便于回溯关联
+    roadshow_schedule_id = ""
+    if report_type == "roadshow":
+        roadshow_schedule_id = str(meta.get("roadshowScheduleId", "")).strip()
+        if roadshow_schedule_id and not store.get_roadshow_item(roadshow_schedule_id):
+            return json_error("关联的路演安排不存在，请刷新后重试", 400)
 
     author = user
     if user.get("role") == "admin":
@@ -1257,6 +1311,9 @@ def api_reports_upload(report_scope=None):
             "title": title,
             "author": author["name"],
             "authorId": author["id"],
+            # 上传人始终记录实际操作者（行政代传时上传人=行政，署名作者不变）
+            "uploadedById": user["id"],
+            "uploadedByName": user["name"],
             "sourceAuthor": source_author if report_type == "external" else "",
             "sourceInstitution": source_institution if report_type == "external" else "",
             "org": org,
@@ -1275,6 +1332,7 @@ def api_reports_upload(report_scope=None):
             "fileStored": True,
             "preset": False,
             "scoringOrgs": scoring_orgs,
+            "roadshowScheduleId": roadshow_schedule_id,
         }
         store.add_report(report)
         created.append(report)
@@ -1392,14 +1450,14 @@ def api_report_update(rid):
         if theme not in REPORT_THEMES:
             return json_error("研究主题无效", 400)
         fields["theme"] = theme
-    # 内部报告二级分类：周报/月报/深度报告/其他报告。改为月报/深度报告时，
-    # 若未配置打分部门则默认两部门均打分（向后兼容旧报告）。
+    # 内部报告二级分类：周报/月报/深度报告/其他报告。月报打分已关闭，
+    # 仅改为深度报告时需要打分部门（未配置时默认两部门均打分）。
     if report.get("reportType") == "internal" and "category" in data:
         category = str(data["category"]).strip()
         if category not in ("weekly", "monthly", "deep", "other"):
             return json_error("分类无效", 400)
         fields["category"] = category
-        if category in ("monthly", "deep"):
+        if category == "deep":
             existing = report.get("scoringOrgs")
             if not isinstance(existing, list) or not existing:
                 fields["scoringOrgs"] = list(SCORING_ORGS)
@@ -1456,6 +1514,190 @@ def api_report_favorite(rid):
     if not store.get_report(rid):
         return json_error("报告不存在", 404)
     return jsonify({"ok": True, **store.toggle_favorite(rid, user["id"])})
+
+
+# --------------------------------------------------------------------------- #
+# 路演安排表（调研报告页上方）
+# --------------------------------------------------------------------------- #
+ROADSHOW_FORMATS = {"online": "线上", "offline": "线下", "hybrid": "线上+线下"}
+
+
+def _roadshow_week_bounds(anchor_str):
+    """返回锚点日期所在周（周一~周日）的起止日期字符串。"""
+    try:
+        anchor = datetime.strptime(anchor_str, "%Y-%m-%d").date()
+    except (TypeError, ValueError):
+        anchor = datetime.now(CST).date()
+    monday = anchor - timedelta(days=anchor.weekday())
+    sunday = monday + timedelta(days=6)
+    return monday.strftime("%Y-%m-%d"), sunday.strftime("%Y-%m-%d")
+
+
+def _validate_roadshow_fields(data):
+    """校验路演字段，返回 (event_time, end_time, fmt, room, tencent_id, presenter, topic) 或错误串。"""
+    event_time = str(data.get("eventTime", "")).strip()
+    try:
+        parsed = datetime.strptime(event_time, "%Y-%m-%dT%H:%M")
+        event_time = parsed.strftime("%Y-%m-%dT%H:%M")
+    except ValueError:
+        return "请选择有效的路演时间"
+    # 结束时间可选：为空时前端按 1 小时展示；填写时必须晚于开始时间且为同一天
+    end_time = str(data.get("endTime", "")).strip()
+    if end_time:
+        try:
+            parsed_end = datetime.strptime(end_time, "%Y-%m-%dT%H:%M")
+            end_time = parsed_end.strftime("%Y-%m-%dT%H:%M")
+        except ValueError:
+            return "请选择有效的结束时间"
+        if parsed_end.date() != parsed.date():
+            return "结束时间需与路演时间为同一天"
+        if parsed_end <= parsed:
+            return "结束时间需晚于路演开始时间"
+    fmt = str(data.get("format", "")).strip()
+    if fmt not in ROADSHOW_FORMATS:
+        return "请选择路演形式（线上/线下/线上+线下）"
+    room = str(data.get("meetingRoom", "")).strip()[:60]
+    tencent_id = str(data.get("tencentMeetingId", "")).strip()[:40]
+    presenter = str(data.get("presenter", "")).strip()[:60]
+    topic = str(data.get("topic", "")).strip()[:200]
+    if fmt in ("offline", "hybrid") and not room:
+        return "线下/混合路演请填写会议室或地点"
+    if fmt in ("online", "hybrid") and not tencent_id:
+        return "线上/混合路演请填写腾讯会议号"
+    if not presenter:
+        return "请填写路演人"
+    if not topic:
+        return "请填写路演主题"
+    return event_time, end_time, fmt, room, tencent_id, presenter, topic
+
+
+def _roadshow_ai_parse_prompt(text):
+    return (
+        "你是路演信息抽取助手。请从下面的路演通知文本中提取字段，只输出一个JSON对象：\n"
+        '{"date": "…", "time": "…", "format": "…", "tencentMeetingId": "…", '
+        '"meetingRoom": "…", "presenter": "…", "topic": "…"}\n\n'
+        "规则：\n"
+        "1. date：路演日期。文本含年份时输出 YYYY-MM-DD；没有年份（如“9月25日”）时只输出 MM-DD，年份由系统补全\n"
+        "2. time：开始时间 HH:MM（24小时制），没有则输出空字符串\n"
+        "3. format：线上路演输出 online，线下路演输出 offline，同时包含线上和线下输出 hybrid；"
+        "无法判断时，含腾讯会议号输出 online，含会议室/地点输出 offline\n"
+        "4. tencentMeetingId：腾讯会议号，如 659-689-968，保留原样；没有输出空字符串\n"
+        "5. meetingRoom：会议室或地点，如 9层一会；没有输出空字符串\n"
+        "6. presenter：路演人姓名，如“策略陈果”中的“陈果”；没有输出空字符串\n"
+        "7. topic：路演主题，如“四季度市场风格展望”；没有输出空字符串\n"
+        "8. 严格基于文本内容，不要编造；没有的字段一律输出空字符串\n\n"
+        f"路演通知文本：\n{text}"
+    )
+
+
+def _nearest_future_date(month, day):
+    """无年份的月日按最近的未来日期补全年份（如 8 月看到“9月25日”→ 今年 9 月 25 日）。"""
+    now = datetime.now(CST)
+    for year in (now.year, now.year + 1):
+        try:
+            candidate = datetime(year, month, day)
+        except ValueError:
+            return None
+        if candidate.date() >= now.date():
+            return candidate.strftime("%Y-%m-%d")
+    return None
+
+
+@app.route("/api/roadshow-schedule", methods=["GET"])
+def api_roadshow_schedule_list():
+    """按周（周一~周日）返回路演安排；不传 week 参数时返回当前周。"""
+    user = require_user()
+    if not user:
+        return json_error("未登录", 401)
+    week_start, week_end = _roadshow_week_bounds(request.args.get("week", ""))
+    items = store.roadshow_items(week_start, week_end)
+    for item in items:
+        item["formatLabel"] = ROADSHOW_FORMATS.get(item["format"], item["format"])
+    return jsonify({"items": items, "weekStart": week_start, "weekEnd": week_end})
+
+
+@app.route("/api/roadshow-schedule", methods=["POST"])
+def api_roadshow_schedule_add():
+    """新增路演安排：所有登录用户可新增，创建人=本人。"""
+    user = require_user()
+    if not user:
+        return json_error("未登录", 401)
+    data = request.get_json(silent=True) or {}
+    validated = _validate_roadshow_fields(data)
+    if isinstance(validated, str):
+        return json_error(validated, 400)
+    event_time, end_time, fmt, room, tencent_id, presenter, topic = validated
+    item = {
+        "id": f"roadshow-{int(time.time() * 1000)}-{uuid.uuid4().hex[:8]}",
+        "eventTime": event_time,
+        "endTime": end_time,
+        "format": fmt,
+        "meetingRoom": room,
+        "tencentMeetingId": tencent_id,
+        "presenter": presenter,
+        "topic": topic,
+        "createdById": user["id"],
+        "createdByName": user["name"],
+    }
+    store.add_roadshow_item(item)
+    return jsonify({"ok": True, "item": {**item, "formatLabel": ROADSHOW_FORMATS[fmt]}})
+
+
+@app.route("/api/roadshow-schedule/<item_id>", methods=["DELETE"])
+def api_roadshow_schedule_delete(item_id):
+    """删除路演安排：创建人可删自己的记录，行政可删任何人的记录。"""
+    user = require_user()
+    if not user:
+        return json_error("未登录", 401)
+    item = store.get_roadshow_item(item_id)
+    if not item:
+        return json_error("路演安排不存在", 404)
+    if item.get("created_by") != user["id"] and user.get("role") != "admin":
+        return json_error("只能删除自己创建的路演安排", 403)
+    store.delete_roadshow_item(item_id)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/roadshow-schedule/ai-parse", methods=["POST"])
+def api_roadshow_schedule_ai_parse():
+    """粘贴路演通知文本，调用大模型（MiMo 默认，DeepSeek 兜底）识别路演要素。"""
+    user = require_user()
+    if not user:
+        return json_error("未登录", 401)
+    data = request.get_json(silent=True) or {}
+    text = str(data.get("text", "")).strip()
+    if not text:
+        return json_error("请粘贴路演通知文本", 400)
+    if len(text) > 2000:
+        return json_error("文本请控制在 2000 字以内", 400)
+    try:
+        raw = _call_llm(_roadshow_ai_parse_prompt(text))
+        parsed = json.loads(raw)
+    except Exception as exc:
+        return json_error(f"自动识别失败：{exc}", 503)
+
+    # 日期无年份时按最近的未来日期补全
+    date_str = str(parsed.get("date", "")).strip()
+    if re.fullmatch(r"\d{1,2}-\d{1,2}", date_str):
+        month, day = (int(part) for part in date_str.split("-"))
+        date_str = _nearest_future_date(month, day) or ""
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date_str):
+        date_str = ""
+    time_str = str(parsed.get("time", "")).strip()
+    if not re.fullmatch(r"\d{1,2}:\d{2}", time_str):
+        time_str = ""
+    fmt = str(parsed.get("format", "")).strip()
+    if fmt not in ROADSHOW_FORMATS:
+        fmt = ""
+    result = {
+        "eventTime": f"{date_str}T{time_str}" if date_str and time_str else (date_str or ""),
+        "format": fmt,
+        "tencentMeetingId": str(parsed.get("tencentMeetingId", "")).strip()[:40],
+        "meetingRoom": str(parsed.get("meetingRoom", "")).strip()[:60],
+        "presenter": str(parsed.get("presenter", "")).strip()[:60],
+        "topic": str(parsed.get("topic", "")).strip()[:200],
+    }
+    return jsonify(result)
 
 
 @app.route("/api/work-reminders", methods=["GET"])
@@ -1542,7 +1784,7 @@ def api_knowledge_search():
     if len(question) > 300:
         return json_error("问题请控制在 300 字以内", 400)
     if not _llm_api_key():
-        return json_error("知识搜索尚未配置 DEEPSEEK_API_KEY", 503)
+        return json_error("知识搜索尚未配置大模型 API 密钥", 503)
     filters = _parse_knowledge_filters(payload)
     try:
         result = _answer_knowledge_question(question, filters=filters)
@@ -1578,7 +1820,7 @@ def api_knowledge_search_stream():
     if len(question) > 300:
         return json_error("问题请控制在 300 字以内", 400)
     if not _llm_api_key():
-        return json_error("知识搜索尚未配置 DEEPSEEK_API_KEY", 503)
+        return json_error("知识搜索尚未配置大模型 API 密钥", 503)
     filters = _parse_knowledge_filters(payload)
 
     user_id = user["id"]
@@ -1613,7 +1855,7 @@ def api_knowledge_search_stream():
         emitted = 0
         got_delta = False
         try:
-            for delta in _stream_deepseek(prompt, system=system, max_tokens=2800):
+            for delta in _stream_llm(prompt, system=system, max_tokens=2800):
                 got_delta = True
                 raw += delta
                 if KNOWLEDGE_SOURCE_MARKER in raw:
@@ -1677,8 +1919,9 @@ def api_ratings_list():
     # 应评分人员总数随报告所选打分部门变化，因此按报告分别统计。
     scorer_ids_global = {u["id"] for u in store.users() if u.get("role") != "admin"}
     report_progress = {}
+    # 月报打分已关闭：仅深度报告参与评分
     for report in active_reports:
-        if report.get("category") not in ("monthly", "deep"):
+        if report.get("category") != "deep":
             continue
         eligible_ids = {u["id"] for u in eligible_scorers(report)}
         report_rows = [r for r in all_ratings if r.get("reportId") == report["id"]]
@@ -1697,7 +1940,7 @@ def api_ratings_list():
         report["id"]
         for report in active_reports
         if report.get("authorId") == user.get("id")
-        and report.get("category") in ("monthly", "deep")
+        and report.get("category") == "deep"
     }
     report_scores = {}
     for report_id in authored_report_ids:
@@ -1776,7 +2019,7 @@ def api_rating_submit():
     report = store.get_report(report_id)
     if not report:
         return json_error("报告不存在", 404)
-    if report.get("reportType", "internal") != "internal" or report.get("category") not in ("monthly", "deep"):
+    if report.get("reportType", "internal") != "internal" or report.get("category") != "deep":
         return json_error("该报告无需评分", 400)
     # 仅所选打分部门的研究人员（及领导）具备评分资格；报告对所有人可见。
     if not is_eligible_scorer(report, user):

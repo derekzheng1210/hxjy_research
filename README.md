@@ -21,7 +21,8 @@ pip install -r requirements.txt
 $env:SITE_PASSWORD="your-password"
 $env:ADMIN_PASSWORD="your-admin-password"
 $env:SECRET_KEY="change-this-secret"
-# 启用知识搜索：从 DeepSeek 控制台获取密钥后设置；Windows 服务安装脚本会写入服务进程环境。
+# 大模型：默认 MiMo（小米开放平台，OpenAI 兼容），DeepSeek 兜底；Windows 服务安装脚本会写入服务进程环境。
+$env:MIMO_API_KEY="sk-..."
 $env:DEEPSEEK_API_KEY="sk-..."
 # 可选：数据不在项目同级时设置
 # $env:PORTAL_DATA_ROOT="D:\信用债研究\完整网页内容\juyuan_credit_data"
@@ -90,8 +91,22 @@ sudo nginx -t && sudo systemctl reload nginx
 - PDF 缓存不会自动过期，超级管理员可在后台查看占用空间并按文件、报告或全部删除。
 - Office 文档在线预览依赖本机 LibreOffice；PDF 查看和文件下载不受影响。
 - 超级管理员密码保存在数据库中并进行哈希，可在后台“安全设置”中修改。
-- 知识搜索调用 DeepSeek，设置 `DEEPSEEK_API_KEY` 后即可启用；密钥仅保存在 `.env` 或服务进程环境变量中，不会下发到浏览器。已安装的 Windows 服务需要同步更新其 NSSM 环境变量并重启服务。
-  管理员可运行 `powershell -ExecutionPolicy Bypass -File scripts/sync_windows_service_deepseek_key.ps1` 完成同步。
+- 大模型默认调用 MiMo（小米开放平台 `https://platform.xiaomimimo.com`，模型 `mimo-v2.5`，OpenAI 兼容协议），失败自动回退 DeepSeek。
+  智能补全、知识搜索、路演文本识别统一使用该配置；MiMo 调用统一关闭深度思考（`thinking.type=disabled`）以降低延迟。
+- 设置 `MIMO_API_KEY`（必需）与 `DEEPSEEK_API_KEY`（兜底，可选）后即可启用；密钥仅保存在 `.env` 或服务进程环境变量中，不会下发到浏览器。
+  已安装的 Windows 服务需要同步更新其 NSSM 环境变量并重启服务。
+  管理员可运行 `powershell -ExecutionPolicy Bypass -File scripts/sync_windows_service_deepseek_key.ps1` 同步 DeepSeek 密钥；
+  MiMo 密钥参照该脚本把 `MIMO_API_KEY` 追加到服务的 `AppEnvironmentExtra` 后重启服务。
+
+## 测试环境（隔离于正式系统）
+
+正式系统以 Windows 服务（NSSM，`CreditToolsPortal`，端口 5000）运行于本目录。
+新功能先在独立克隆目录测试，验收后再合并回正式目录：
+
+1. `git clone juyuan_credit_tools_portal juyuan_credit_tools_portal_test`（或直接使用既有克隆，切换到功能分支）
+2. `scripts\init_test_runtime.bat`：从生产数据目录复制一份快照到 `.test_runtime`（数据库用 sqlite backup API，生产目录只读不受影响）
+3. `scripts\start_test_portal.bat`：以端口 5010 启动测试实例（复用正式环境 `.venv`，独立数据目录，站点密码在测试目录 `.env` 中配置）
+4. 验收通过后在正式目录 `git merge feature/xxx` 并重启服务；启动时会自动执行数据库迁移（迁移前自动备份到 `migration_backups/`）
 
 账号迁移默认只做预检；确认结果后加 `--apply` 写入。账号迁移只保留账号和超级管理员密码，
 不会复制报告、评分或附件。专题要求使用独立命令迁移，仍不会复制任何报告、评分、附件或 PDF 缓存：

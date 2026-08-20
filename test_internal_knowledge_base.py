@@ -21,7 +21,7 @@ class InternalKnowledgeBaseTest(unittest.TestCase):
         app.config.update(TESTING=True)
         with store.transaction() as conn:
             for table in ("audit_log", "pdf_cache", "engagement", "ratings", "reports",
-                          "qa_usage", "qa_history", "users"):
+                          "roadshow_schedule", "qa_usage", "qa_history", "users"):
                 conn.execute(f"DELETE FROM {table}")
         store.add_user({
             "id": "member", "name": "测试成员", "org": "固收中心", "role": "member",

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
+import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -142,12 +143,129 @@ class SQLiteStore:
                     created_at TEXT NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_log(created_at);
+
+                CREATE TABLE IF NOT EXISTS roadshow_schedule (
+                    id TEXT PRIMARY KEY,
+                    event_time TEXT NOT NULL,
+                    end_time TEXT NOT NULL DEFAULT '',
+                    format TEXT NOT NULL CHECK(format IN ('online','offline','hybrid')),
+                    meeting_room TEXT NOT NULL DEFAULT '',
+                    tencent_meeting_id TEXT NOT NULL DEFAULT '',
+                    presenter TEXT NOT NULL DEFAULT '',
+                    topic TEXT NOT NULL DEFAULT '',
+                    created_by TEXT,
+                    created_by_name TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_roadshow_event_time ON roadshow_schedule(event_time);
                 """
             )
+            self._ensure_roadshow_end_time(conn)
             self._set_default(conn, "reminder_config", self._reminder_default)
             self._set_default(conn, "knowledge_config", {"memberLimit": 10, "leaderLimit": 100})
             self._set_default(conn, "schema_version", 1)
             conn.commit()
+        self._migrate()
+
+    def _migrate(self) -> None:
+        """按 schema_version 执行数据迁移；幂等，多进程部署下只生效一次。"""
+        version = self._get_setting("schema_version", 1)
+        if version >= 2:
+            return
+        self._backup_db()
+        with self._schema_lock, self.transaction() as conn:
+            version = json.loads(conn.execute(
+                "SELECT payload FROM settings WHERE key='schema_version'"
+            ).fetchone()["payload"])
+            if version >= 2:
+                return
+            self._delete_monthly_ratings(conn)
+            self._backfill_uploaded_by(conn)
+            conn.execute(
+                "INSERT INTO settings(key,payload,updated_at) VALUES('schema_version',?,?) "
+                "ON CONFLICT(key) DO UPDATE SET payload=excluded.payload,updated_at=excluded.updated_at",
+                (json.dumps(2), now_iso()),
+            )
+
+    def _backup_db(self) -> None:
+        """迁移前备份整个数据库（WAL 模式下用 backup API，直接拷文件不安全）。"""
+        backup_dir = self.path.parent / "migration_backups"
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        target = backup_dir / f"knowledge_base_backup_v1_{datetime.now(CST).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}.db"
+        src = sqlite3.connect(self.path)
+        dst = sqlite3.connect(target)
+        try:
+            with dst:
+                src.backup(dst)
+        finally:
+            src.close()
+            dst.close()
+
+    @staticmethod
+    def _delete_monthly_ratings(conn: sqlite3.Connection) -> int:
+        """月报打分关闭：彻底删除所有月报（含回收站）的历史评分记录。"""
+        monthly_ids = []
+        for row in conn.execute("SELECT id,payload FROM reports").fetchall():
+            try:
+                payload = json.loads(row["payload"])
+            except json.JSONDecodeError:
+                continue
+            if payload.get("reportType", "internal") == "internal" and payload.get("category") == "monthly":
+                monthly_ids.append(row["id"])
+        if not monthly_ids:
+            return 0
+        marks = ",".join("?" for _ in monthly_ids)
+        cursor = conn.execute(f"DELETE FROM ratings WHERE report_id IN ({marks})", monthly_ids)
+        return cursor.rowcount
+
+    @staticmethod
+    def _backfill_uploaded_by(conn: sqlite3.Connection) -> int:
+        """为历史报告回填"实际上传人"。
+
+        上传操作在 audit_log 中留有 actor 与时间戳（after_request 写入），
+        以"审计时间与报告 created_at 相差 ±5 秒"匹配上传人；匹配不到则留空，
+        前端展示为"未记录"。普通用户上传时报告作者即上传人，此回填同样适用。
+        """
+        users = {row["id"]: row["name"] for row in conn.execute("SELECT id,name FROM users")}
+        audits = conn.execute(
+            "SELECT actor_id,created_at FROM audit_log "
+            "WHERE actor_type='user' AND action LIKE '%api_reports_upload%' ORDER BY created_at"
+        ).fetchall()
+
+        def parse_ts(value):
+            try:
+                return datetime.fromisoformat(value)
+            except (TypeError, ValueError):
+                return None
+
+        audit_times = [(row["actor_id"], parse_ts(row["created_at"])) for row in audits]
+        changed = 0
+        for row in conn.execute("SELECT id,payload FROM reports").fetchall():
+            try:
+                payload = json.loads(row["payload"])
+            except json.JSONDecodeError:
+                continue
+            if payload.get("uploadedById"):
+                continue
+            report_ts = parse_ts(payload.get("uploadedAt") or "") or parse_ts(payload.get("createdAt") or "")
+            if not report_ts:
+                continue
+            uploader_id = ""
+            for actor_id, audit_ts in audit_times:
+                if audit_ts and abs((audit_ts - report_ts).total_seconds()) <= 5:
+                    uploader_id = actor_id
+                    break
+            if not uploader_id:
+                continue
+            payload["uploadedById"] = uploader_id
+            payload["uploadedByName"] = users.get(uploader_id, "")
+            conn.execute(
+                "UPDATE reports SET payload=?,updated_at=? WHERE id=?",
+                (json.dumps(payload, ensure_ascii=False), now_iso(), row["id"]),
+            )
+            changed += 1
+        return changed
 
     @staticmethod
     def _set_default(conn: sqlite3.Connection, key: str, value) -> None:
@@ -461,6 +579,49 @@ class SQLiteStore:
             keys = [row[0] for row in conn.execute("SELECT cache_key FROM pdf_cache")]
             conn.execute("DELETE FROM pdf_cache")
             return keys
+
+    @staticmethod
+    def _ensure_roadshow_end_time(conn: sqlite3.Connection) -> None:
+        """旧库的 roadshow_schedule 表没有 end_time 列，按需补齐（幂等）。"""
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(roadshow_schedule)")}
+        if columns and "end_time" not in columns:
+            conn.execute("ALTER TABLE roadshow_schedule ADD COLUMN end_time TEXT NOT NULL DEFAULT ''")
+
+    # Roadshow schedule（路演安排表）
+    def roadshow_items(self, date_from, date_to):
+        """返回窗口 [date_from, date_to]（含端点，格式 YYYY-MM-DD）内的路演安排。"""
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM roadshow_schedule "
+                "WHERE substr(event_time,1,10) BETWEEN ? AND ? ORDER BY event_time",
+                (date_from, date_to),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def get_roadshow_item(self, item_id):
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM roadshow_schedule WHERE id=?", (item_id,)
+            ).fetchone()
+        return dict(row) if row else None
+
+    def add_roadshow_item(self, item):
+        stamp = now_iso()
+        with self.transaction() as conn:
+            conn.execute(
+                "INSERT INTO roadshow_schedule"
+                "(id,event_time,end_time,format,meeting_room,tencent_meeting_id,presenter,topic,"
+                "created_by,created_by_name,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                (item["id"], item["eventTime"], item.get("endTime", ""), item["format"],
+                 item.get("meetingRoom", ""), item.get("tencentMeetingId", ""),
+                 item.get("presenter", ""), item.get("topic", ""),
+                 item.get("createdById", ""), item.get("createdByName", ""), stamp, stamp),
+            )
+
+    def delete_roadshow_item(self, item_id):
+        with self.transaction() as conn:
+            cursor = conn.execute("DELETE FROM roadshow_schedule WHERE id=?", (item_id,))
+            return cursor.rowcount > 0
 
     def audit(self, actor_type, actor_id, action, target_type=None, target_id=None,
               detail=None, ip_address=None):
