@@ -72,7 +72,7 @@
     roadshowSchedule: (week) => apiFetch(`/api/roadshow-schedule${week ? `?week=${encodeURIComponent(week)}` : ''}`, { credentials: 'same-origin' }).then(handleJson),
     roadshowAdd: (data) => apiFetch('/api/roadshow-schedule', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify(data) }).then(handleJson),
     roadshowDelete: (id) => apiFetch(`/api/roadshow-schedule/${id}`, { method: 'DELETE', credentials: 'same-origin' }).then(handleJson),
-    roadshowAiParse: (text) => apiFetch('/api/roadshow-schedule/ai-parse', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ text }) }).then(handleJson),
+    roadshowAiParse: (text, weekStart) => apiFetch('/api/roadshow-schedule/ai-parse', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ text, weekStart }) }).then(handleJson),
   };
 
   async function handleJson(res) {
@@ -457,8 +457,10 @@
           <div class="recent-list hot-list" id="hotReportList">${renderHotReports('all')}</div>
         </div>
       </section>
+      ${renderRoadshowPanel()}
       ${renderWorkReminder()}
       ${renderAdminStatsPanel()}`;
+    loadRoadshowSchedule();
   }
 
   function renderWorkReminder() {
@@ -724,6 +726,8 @@
     const searchResult = Boolean(options.searchResult);
     const category = categories[report.category] || categories.other;
     const external = report.reportType === 'external';
+    // 外部报告与路演报告均展示报告作者/机构与内部上传人
+    const extLike = external || report.reportType === 'roadshow';
     const typed = ['research_visit', 'roadshow'].includes(report.reportType);
     const stats = reportRatingStats(report.id);
     const mine = userRating(report.id);
@@ -738,8 +742,8 @@
       <p class="report-summary">${escapeHTML(report.summary || '暂无摘要')}</p>
       <div class="report-tags">${(report.tags || []).slice(0, 3).map(tag => `<span>${escapeHTML(tag)}</span>`).join('')}</div>
       ${searchResult ? `<div class="search-result-card-pills">${themePill(report.theme)}</div>` : ''}
-      <div class="report-meta"><span><b>${escapeHTML(external ? (report.sourceAuthor || report.author) : report.author)}</b> · ${escapeHTML(external ? (report.sourceInstitution || report.org) : report.org)}</span><span>${formatDate(report.reportDate)}</span></div>
-      ${external ? `<div class="uploaded-by-line">上传人：${escapeHTML(report.uploadedByName || '未记录')}</div>` : ''}
+      <div class="report-meta"><span><b>${escapeHTML(extLike ? (report.sourceAuthor || report.author) : report.author)}</b> · ${escapeHTML(extLike ? (report.sourceInstitution || report.org) : report.org)}</span><span>${formatDate(report.reportDate)}</span></div>
+      ${extLike ? `<div class="uploaded-by-line">上传人：${escapeHTML(report.uploadedByName || '未记录')}</div>` : ''}
       <div class="external-engagement">${external || typed ? `<button class="like-button ${report.likedByMe ? 'liked' : ''}" data-action="toggle-like" data-id="${report.id}">♥ <span>${report.likeCount || 0}</span></button>` : ''}<button class="favorite-button ${report.favoritedByMe ? 'favorited' : ''}" data-action="toggle-favorite" data-id="${report.id}">★ <span>${report.favoriteCount || 0}</span></button><span>浏览 ${report.viewCount || 0}</span><em>${reportTypeLabel(report.reportType)}</em></div>
       ${!external && !typed && category.scored ? `<div class="report-score-strip">
         ${canViewReportTotal(report) ? `<span class="score-value ${stats.count ? '' : 'empty'}" title="团队评分总分">${stats.overall ?? '—'}</span>` : ''}
@@ -769,7 +773,7 @@
       : '<span class="report-list-empty">—</span>';
     return `<article class="report-list-row">
       <button class="report-file-icon" data-action="view-report" data-id="${report.id}">${escapeHTML(report.fileType || 'FILE')}</button>
-      <button class="report-list-main" data-action="view-report" data-id="${report.id}"><strong>${escapeHTML(report.title)}</strong><span>${escapeHTML(report.reportType === 'external' ? (report.sourceAuthor || report.author) : report.author)} · ${escapeHTML(report.reportType === 'external' ? (report.sourceInstitution || report.org) : report.org)}${report.reportType === 'external' ? ` · 上传人：${escapeHTML(report.uploadedByName || '未记录')}` : ''}</span></button>
+      <button class="report-list-main" data-action="view-report" data-id="${report.id}"><strong>${escapeHTML(report.title)}</strong><span>${escapeHTML(['external', 'roadshow'].includes(report.reportType) ? (report.sourceAuthor || report.author) : report.author)} · ${escapeHTML(['external', 'roadshow'].includes(report.reportType) ? (report.sourceInstitution || report.org) : report.org)}${['external', 'roadshow'].includes(report.reportType) ? ` · 上传人：${escapeHTML(report.uploadedByName || '未记录')}` : ''}</span></button>
       <time class="report-list-date" datetime="${escapeHTML(report.reportDate || '')}">${formatDate(report.reportDate)}</time>
       <div class="report-list-badges">${typeBadge}${themePill(report.theme)}</div>
       <div class="report-list-rating-cell">${ratingAction}</div>
@@ -800,8 +804,7 @@
     const all = state.reports.filter(report => report.reportType === type);
     const filtered = all.filter(report => [report.title, report.author, report.org, report.summary, ...(report.tags || [])].join(' ').toLowerCase().includes(query)).sort((a, b) => reportDateValue(b) - reportDateValue(a));
     const label = reportTypeLabel(type);
-    els.viewRoot.innerHTML = `<section class="page-heading"><div><span class="page-kicker">专项归档</span><h1>${label}</h1></div><div class="heading-actions">${renderViewToggle()}<button class="btn btn-primary" data-action="open-upload"><svg viewBox="0 0 24 24" fill="none"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>上传${label}</button></div></section>${type === 'research_visit' ? renderRoadshowPanel() : ''}<section class="filter-panel"><label class="search-field"><svg viewBox="0 0 24 24" fill="none"><circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="1.8"/><path d="m16.5 16.5 4 4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg><input id="typedReportSearch" value="${escapeHTML(state.filters.query)}" placeholder="搜索${label}标题、作者或关键词"></label></section><div class="result-bar"><span>共 <strong>${filtered.length}</strong> 份${label}</span><span>按更新时间排序</span></div><section class="report-grid ${state.reportView === 'list' ? 'report-list-view' : ''}">${renderReportCollection(filtered, '暂无报告', `上传第一份${label}后会显示在这里。`)}</section>`;
-    if (type === 'research_visit') loadRoadshowSchedule();
+    els.viewRoot.innerHTML = `<section class="page-heading"><div><span class="page-kicker">专项归档</span><h1>${label}</h1></div><div class="heading-actions">${renderViewToggle()}<button class="btn btn-primary" data-action="open-upload"><svg viewBox="0 0 24 24" fill="none"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>上传${label}</button></div></section><section class="filter-panel"><label class="search-field"><svg viewBox="0 0 24 24" fill="none"><circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="1.8"/><path d="m16.5 16.5 4 4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg><input id="typedReportSearch" value="${escapeHTML(state.filters.query)}" placeholder="搜索${label}标题、作者或关键词"></label></section><div class="result-bar"><span>共 <strong>${filtered.length}</strong> 份${label}</span><span>按更新时间排序</span></div><section class="report-grid ${state.reportView === 'list' ? 'report-list-view' : ''}">${renderReportCollection(filtered, '暂无报告', `上传第一份${label}后会显示在这里。`)}</section>`;
   }
 
   // ----------------------------------------------------------------------- //
@@ -947,10 +950,14 @@
       const meta = item.format === 'online'
         ? `线上 · ${item.tencent_meeting_id || ''}`
         : item.format === 'offline' ? `线下 · ${item.meeting_room || ''}` : '线上+线下';
-      return `<button class="roadshow-event fmt-${escapeHTML(item.format)}" style="top:${top}px;height:${height}px;left:calc(${(block.track * width).toFixed(3)}% + 2px);width:calc(${width.toFixed(3)}% - 4px)" data-action="roadshow-detail" data-id="${escapeHTML(item.id)}" title="${escapeHTML(item.topic || '')}">
+      const institutionPrefix = item.institution ? `${item.institution} · ` : '';
+      // 已归档路演报告：右上角低调小标记（浅色小点），避免"督促上传"的观感
+      const archivedMark = item.reportId ? '<span class="roadshow-archived-mark" title="已归档路演报告"></span>' : '';
+      return `<button class="roadshow-event fmt-${escapeHTML(item.format)}${item.reportId ? ' archived' : ''}" style="top:${top}px;height:${height}px;left:calc(${(block.track * width).toFixed(3)}% + 2px);width:calc(${width.toFixed(3)}% - 4px)" data-action="roadshow-detail" data-id="${escapeHTML(item.id)}" title="${escapeHTML(item.topic || '')}">
+        ${archivedMark}
         <strong>${escapeHTML(item.topic || '未填主题')}</strong>
         <span>${escapeHTML(roadshowTimeLabel(item))} · ${escapeHTML(item.presenter || '')}</span>
-        ${compact ? '' : `<em>${escapeHTML(meta)}</em>`}
+        ${compact ? '' : `<em>${escapeHTML(institutionPrefix + meta)}</em>`}
       </button>`;
     }).join('');
   }
@@ -971,6 +978,10 @@
 
   function showRoadshowFormModal(prefill = {}) {
     const presetTime = prefill.date && prefill.time ? `${prefill.date}T${prefill.time}` : '';
+    // 主约人默认为账户本人；行政可从团队成员中选择（该字段不做 AI 识别）
+    const organizerField = isAdminRole()
+      ? `<div class="form-field"><label for="roadshowOrganizer">主约人 <em>*</em></label><select id="roadshowOrganizer" name="organizer">${state.reportAuthors.map(author => `<option value="${escapeHTML(author.name)}" ${author.name === state.currentUser.name ? 'selected' : ''}>${escapeHTML(author.name)}${author.org ? ' · ' + escapeHTML(author.org) : ''}</option>`).join('')}</select></div>`
+      : `<div class="form-field"><label>主约人</label><div class="upload-scope-lock"><strong>${escapeHTML(state.currentUser.name)}</strong><span>默认为本人</span></div></div>`;
     openModal(`<section class="modal-card">
       ${modalHeader('路演安排', '新增路演')}
       <form id="roadshowForm">
@@ -991,6 +1002,8 @@
               <option value="offline">线下（会议室）</option>
               <option value="hybrid">线上+线下</option>
             </select></div>
+            <div class="form-field"><label for="roadshowInstitution">路演机构 <span>选填</span></label><input id="roadshowInstitution" name="institution" maxlength="80" autocomplete="off" placeholder="例如：兴业证券"></div>
+            ${organizerField}
             <div class="form-field" id="roadshowTencentField"><label for="roadshowTencent">腾讯会议号 <em>*</em></label><input id="roadshowTencent" name="tencentMeetingId" maxlength="40" autocomplete="off" placeholder="例如：659-689-968"></div>
             <div class="form-field" id="roadshowRoomField" hidden><label for="roadshowRoom">会议室/地点 <em>*</em></label><input id="roadshowRoom" name="meetingRoom" maxlength="60" autocomplete="off" placeholder="例如：9层一会"></div>
             <div class="form-field"><label for="roadshowPresenter">路演人 <em>*</em></label><input id="roadshowPresenter" name="presenter" maxlength="60" autocomplete="off" required placeholder="例如：陈果"></div>
@@ -1027,6 +1040,9 @@
       eventTime: startTime,
       endTime: endTimeRaw ? `${startTime.slice(0, 10)}T${endTimeRaw}` : '',
       format: String(data.get('format') || ''),
+      institution: String(data.get('institution') || '').trim(),
+      // 主约人：行政从下拉选择，其他角色固定为本人
+      organizer: isAdminRole() ? String(data.get('organizer') || '').trim() : state.currentUser.name,
       tencentMeetingId: String(data.get('tencentMeetingId') || '').trim(),
       meetingRoom: String(data.get('meetingRoom') || '').trim(),
       presenter: String(data.get('presenter') || '').trim(),
@@ -1056,15 +1072,29 @@
     btn.disabled = true;
     btn.textContent = '识别中…';
     try {
-      const parsed = await API.roadshowAiParse(text);
+      // 携带当前显示周的周一：只有"周几"的日期按这一周推算
+      const parsed = await API.roadshowAiParse(text, state.roadshow.weekStart || '');
       const timeInput = document.getElementById('roadshowTime');
+      const endTimeInput = document.getElementById('roadshowEndTime');
       const formatSelect = document.getElementById('roadshowFormat');
       if (parsed.eventTime) timeInput.value = parsed.eventTime.slice(0, 16);
       if (parsed.format) { formatSelect.value = parsed.format; formatSelect.dispatchEvent(new Event('change')); }
       if (parsed.tencentMeetingId) document.getElementById('roadshowTencent').value = parsed.tencentMeetingId;
       if (parsed.meetingRoom) document.getElementById('roadshowRoom').value = parsed.meetingRoom;
+      if (parsed.institution) document.getElementById('roadshowInstitution').value = parsed.institution;
       if (parsed.presenter) document.getElementById('roadshowPresenter').value = parsed.presenter;
       if (parsed.topic) document.getElementById('roadshowTopic').value = parsed.topic;
+      // 路演通知一般不含结束时间：默认按 1 小时预填，可自行修改
+      const start = timeInput.value;
+      if (start && !endTimeInput.value) {
+        const [, hhmm] = start.split('T');
+        const [hh, mm] = hhmm.split(':').map(Number);
+        const endMinutes = hh * 60 + mm + ROADSHOW_DEFAULT_DURATION;
+        if (endMinutes < 24 * 60) {
+          const pad = n => String(n).padStart(2, '0');
+          endTimeInput.value = `${pad(Math.floor(endMinutes / 60))}:${pad(endMinutes % 60)}`;
+        }
+      }
       notify('识别完成，请核对信息（未识别出的字段显示为空）');
     } catch (error) {
       notify(error.message || '自动识别失败，请手动填写', 'error');
@@ -1079,22 +1109,30 @@
     if (!item) return notify('未找到该路演安排', 'error');
     const canDelete = isAdminRole() || (state.currentUser && item.created_by === state.currentUser.id);
     const endTime = item.end_time ? ` - ${escapeHTML(String(item.end_time).slice(11, 16))}` : '';
+    // 已上传路演报告：提供查看/下载入口；未上传：提供预填信息的上传入口
+    const reportActions = item.reportId
+      ? `<button class="btn btn-secondary" data-action="view-report" data-id="${escapeHTML(item.reportId)}">查看报告</button>
+         <button class="btn btn-secondary" data-action="download" data-id="${escapeHTML(item.reportId)}">下载报告</button>`
+      : `<button class="btn btn-secondary" data-action="roadshow-upload" data-id="${escapeHTML(item.id)}">上传报告</button>`;
     openModal(`<section class="modal-card">
       ${modalHeader('路演详情', item.topic || '路演安排')}
       <div class="modal-body">
         <div class="detail-meta-grid roadshow-detail-grid">
           <div><span>时间</span><strong>${escapeHTML(formatDateTime(item.event_time))}${endTime}</strong></div>
           <div><span>形式</span><strong>${escapeHTML(item.formatLabel || '')}</strong></div>
+          <div><span>路演机构</span><strong>${escapeHTML(item.institution || '—')}</strong></div>
           <div><span>路演人</span><strong>${escapeHTML(item.presenter || '—')}</strong></div>
+          <div><span>主约人</span><strong>${escapeHTML(item.organizer || '—')}</strong></div>
           <div><span>腾讯会议号</span><strong>${escapeHTML(item.tencent_meeting_id || '—')}</strong></div>
           <div><span>会议室/地点</span><strong>${escapeHTML(item.meeting_room || '—')}</strong></div>
           <div><span>创建人</span><strong>${escapeHTML(item.created_by_name || '—')}</strong></div>
+          <div><span>路演报告</span><strong>${item.reportId ? '已归档' : '未上传'}</strong></div>
         </div>
         <div class="detail-section"><span class="detail-label">主题</span><p class="roadshow-topic-view">${escapeHTML(item.topic || '')}</p></div>
       </div>
       <div class="modal-footer">
         <button class="btn btn-ghost" data-close="modal">关闭</button>
-        <button class="btn btn-secondary" data-action="roadshow-upload" data-id="${escapeHTML(item.id)}">上传报告</button>
+        ${reportActions}
         ${canDelete ? `<button class="btn btn-danger danger-action" data-action="roadshow-delete" data-id="${escapeHTML(item.id)}">删除</button>` : ''}
       </div>
     </section>`);
@@ -1128,6 +1166,7 @@
   }
 
   // 从路演安排一键上传报告：锁定路演报告类型并自动预填信息
+  // 报告作者=路演人、报告机构=路演机构，行政可按路演人预选署名作者
   function openRoadshowUpload(itemId) {
     const item = (state.roadshow.items || []).find(row => row.id === itemId);
     if (!item) return notify('未找到该路演安排', 'error');
@@ -1137,6 +1176,8 @@
       reportDate: String(item.event_time || '').slice(0, 10),
       roadshowScheduleId: item.id,
       authorName: item.presenter || '',
+      sourceAuthor: item.presenter || '',
+      sourceInstitution: item.institution || '',
     });
   }
 
@@ -1682,6 +1723,8 @@
     const report = getReport(reportId);
     if (!report) return notify('未找到该报告', 'error');
     const external = report.reportType === 'external';
+    // 外部报告与路演报告均展示报告作者/机构与内部上传人
+    const extLike = external || report.reportType === 'roadshow';
     const typed = ['research_visit', 'roadshow'].includes(report.reportType);
     recordExternalView(report);
     const meta = categories[report.category] || categories.other;
@@ -1695,13 +1738,13 @@
           <div><div class="detail-pills">${external || typed ? `<span class="external-badge">${reportTypeLabel(report.reportType)}</span>` : categoryPill(report.category)}${themePill(report.theme)}</div><h3>${escapeHTML(report.title)}</h3>${external && report.recommendation ? `<div class="detail-recommendation"><span>推荐语</span><strong>${escapeHTML(report.recommendation)}</strong></div>` : ''}<p>${escapeHTML(report.summary || '暂无报告摘要')}</p></div>
         </div>
         <div class="detail-meta-grid">
-          <div><span>${external ? '报告原作者' : '报告作者'}</span><strong>${escapeHTML(external ? (report.sourceAuthor || report.author) : report.author)}</strong></div>
-          <div><span>${external ? '报告机构' : '所属部门'}</span><strong>${escapeHTML(external ? (report.sourceInstitution || report.org) : report.org)}</strong></div>
+          <div><span>报告作者</span><strong>${escapeHTML(extLike ? (report.sourceAuthor || report.author) : report.author)}</strong></div>
+          <div><span>${extLike ? '报告机构' : '所属部门'}</span><strong>${escapeHTML(extLike ? (report.sourceInstitution || report.org) : report.org)}</strong></div>
           <div><span>研究主题</span><strong>${escapeHTML(themes[report.theme]?.label || '—')}</strong></div>
           <div><span>报告日期</span><strong>${formatDate(report.reportDate)}</strong></div>
           <div><span>文件信息</span><strong>${escapeHTML(report.fileType || '文件')} · ${escapeHTML(report.fileSize || '本地上传')}</strong></div>
           <div><span>上传时间</span><strong>${formatDateTime(report.uploadedAt)}</strong></div>
-          ${external ? `<div><span>内部上传人</span><strong>${escapeHTML(report.uploadedByName || '未记录')}</strong></div>` : ''}
+          ${extLike ? `<div><span>内部上传人</span><strong>${escapeHTML(report.uploadedByName || '未记录')}</strong></div>` : ''}
           <div><span>互动数据</span><strong>${external || typed ? `${report.likeCount || 0} 赞 · ` : ''}${report.viewCount || 0} 浏览 · ${report.favoriteCount || 0} 收藏</strong></div>
         </div>
         <div class="detail-section"><span class="detail-label">关键词</span><div class="report-tags large">${(report.tags || []).map(tag => `<span>${escapeHTML(tag)}</span>`).join('') || '<span>暂无标签</span>'}</div></div>
@@ -1764,8 +1807,8 @@
       ? `<div class="form-field"><label for="editCategory">报告分类 <em>*</em></label><select id="editCategory" name="category" required><option value="">请选择分类</option>${Object.entries(categories).map(([key, meta]) => `<option value="${key}" ${report.category === key ? 'selected' : ''}>${meta.label}</option>`).join('')}</select></div>`
       : '';
     // 行政可改报告作者：内部报告从团队成员中选择，外部报告编辑原作者
-    const authorField = !adminEditing ? '' : (external
-      ? `<div class="form-field"><label for="editSourceAuthor">报告原作者 <em>*</em></label><input id="editSourceAuthor" name="sourceAuthor" maxlength="100" value="${escapeHTML(report.sourceAuthor || report.author || '')}" placeholder="例如：某机构研究团队或作者姓名"></div>`
+    const authorField = !adminEditing ? '' : (external || report.reportType === 'roadshow'
+      ? `<div class="form-field"><label for="editSourceAuthor">报告作者 <em>*</em></label><input id="editSourceAuthor" name="sourceAuthor" maxlength="100" value="${escapeHTML(report.sourceAuthor || report.author || '')}" placeholder="路演人或外部机构作者"></div>`
       : `<div class="form-field"><label for="editAuthor">报告作者 <em>*</em></label><select id="editAuthor" name="authorId" required>${state.reportAuthors.map(author => `<option value="${escapeHTML(author.id)}" ${author.id === report.authorId ? 'selected' : ''}>${escapeHTML(author.name)} · ${escapeHTML(author.org || roleLabel(author.role))}</option>`).join('')}</select></div>`);
     // 研究主题：所有报告均可改（内部报告置于报告日期右侧，非内部报告与报告作者同行）
     const themeField = `<div class="form-field"><label for="editTheme">研究主题 <em>*</em></label><select id="editTheme" name="theme" required><option value="">请选择主题</option>${Object.entries(themes).map(([key, meta]) => `<option value="${key}" ${report.theme === key ? 'selected' : ''}>${meta.label}</option>`).join('')}</select></div>`;
@@ -1826,9 +1869,9 @@
     // 行政可改报告作者
     if (isAdminRole()) {
       const report = getReport(id);
-      if (report && report.reportType === 'external') {
+      if (report && ['external', 'roadshow'].includes(report.reportType)) {
         fields.sourceAuthor = String(data.get('sourceAuthor') || '').trim();
-        if (!fields.sourceAuthor) return notify('请填写外部报告原作者', 'error');
+        if (!fields.sourceAuthor) return notify('请填写报告作者', 'error');
       } else {
         fields.authorId = String(data.get('authorId') || '').trim();
         if (!fields.authorId) return notify('请选择报告作者', 'error');
@@ -2124,8 +2167,8 @@
             <div class="form-field"><label for="uploadTheme">研究主题 <em>*</em></label><select id="uploadTheme" name="theme" required><option value="">请选择主题</option>${Object.entries(themes).map(([key, meta]) => `<option value="${key}">${meta.label}</option>`).join('')}</select></div>
             <div class="form-field"><label for="uploadOrg">所属部门 <em>*</em></label><select id="uploadOrg" name="org" required><option value="资产配置部" ${state.currentUser.org === '资产配置部' ? 'selected' : ''}>资产配置部</option><option value="固收中心" ${state.currentUser.org === '固收中心' ? 'selected' : ''}>固收中心</option></select></div>
             ${authorField}
-            <div class="form-field external-only-field" id="externalSourceAuthorField" ${initialType === 'external' ? '' : 'hidden'}><label for="uploadSourceAuthor">报告原作者 <em>*</em></label><input id="uploadSourceAuthor" name="sourceAuthor" maxlength="100" autocomplete="off" placeholder="例如：某机构研究团队或作者姓名"></div>
-            <div class="form-field external-only-field" id="externalSourceInstitutionField" ${initialType === 'external' ? '' : 'hidden'}><label for="uploadSourceInstitution">报告机构 <em>*</em></label><input id="uploadSourceInstitution" name="sourceInstitution" maxlength="120" autocomplete="off" placeholder="例如：中信证券、某高校研究院"></div>
+            <div class="form-field external-only-field" id="externalSourceAuthorField" ${['external', 'roadshow'].includes(initialType) ? '' : 'hidden'}><label for="uploadSourceAuthor">报告作者 <em>*</em></label><input id="uploadSourceAuthor" name="sourceAuthor" maxlength="100" autocomplete="off" placeholder="外部报告原作者，或路演报告的路演人"></div>
+            <div class="form-field external-only-field" id="externalSourceInstitutionField" ${['external', 'roadshow'].includes(initialType) ? '' : 'hidden'}><label for="uploadSourceInstitution">报告机构 <em>*</em></label><input id="uploadSourceInstitution" name="sourceInstitution" maxlength="120" autocomplete="off" placeholder="例如：兴业证券、中信证券"></div>
             ${scoringOrgField}
             <div class="form-field"><label for="uploadDate">报告日期 <em>*</em></label><input id="uploadDate" name="reportDate" type="date" value="${escapeHTML(defaultDate)}" autocomplete="off" required></div>
             <div class="form-field"><label for="uploadTags">关键词</label><input id="uploadTags" name="tags" maxlength="100" autocomplete="off" placeholder="多个关键词用逗号分隔"></div>
@@ -2158,6 +2201,15 @@
     document.getElementById('uploadOrg')?.addEventListener('change', populateUploadAuthors);
     updateUploadTypeFields(initialType);
     populateUploadAuthors();
+    // 路演安排一键上传：预填报告作者（路演人）与报告机构（路演机构）
+    if (preset?.sourceAuthor) {
+      const input = document.getElementById('uploadSourceAuthor');
+      if (input) input.value = preset.sourceAuthor;
+    }
+    if (preset?.sourceInstitution) {
+      const input = document.getElementById('uploadSourceInstitution');
+      if (input) input.value = preset.sourceInstitution;
+    }
     // 路演安排一键上传：行政按路演人预选署名作者（按姓名匹配团队成员）
     if (preset?.authorName && isAdminRole()) {
       const match = state.reportAuthors.find(author => author.name === preset.authorName);
@@ -2193,14 +2245,16 @@
 
   function updateUploadTypeFields(reportType) {
     const external = reportType === 'external';
+    // 外部报告与路演报告都需要填写报告作者/报告机构
+    const extLike = external || reportType === 'roadshow';
     const internal = reportType === 'internal';
     const categoryField = document.getElementById('uploadCategoryField');
     const category = document.getElementById('uploadCategory');
     if (categoryField) categoryField.hidden = !internal;
     if (category) category.required = internal;
     document.getElementById('recommendationField')?.toggleAttribute('hidden', !external);
-    document.getElementById('externalSourceAuthorField')?.toggleAttribute('hidden', !external);
-    document.getElementById('externalSourceInstitutionField')?.toggleAttribute('hidden', !external);
+    document.getElementById('externalSourceAuthorField')?.toggleAttribute('hidden', !extLike);
+    document.getElementById('externalSourceInstitutionField')?.toggleAttribute('hidden', !extLike);
     updateUploadScoringVisibility();
   }
 
@@ -2282,8 +2336,8 @@
     if (!org) return notify('请选择所属部门', 'error');
     if (!reportDate) return notify('请选择报告日期', 'error');
     if (isAdminRole() && !authorId) return notify('请选择报告作者', 'error');
-    if (reportType === 'external' && !sourceAuthor) return notify('请填写外部报告原作者', 'error');
-    if (reportType === 'external' && !sourceInstitution) return notify('请填写外部报告机构', 'error');
+    if (['external', 'roadshow'].includes(reportType) && !sourceAuthor) return notify('请填写报告作者', 'error');
+    if (['external', 'roadshow'].includes(reportType) && !sourceInstitution) return notify('请填写报告机构', 'error');
     if (reportType === 'internal' && ['monthly', 'deep'].includes(category) && !scoringOrgs.length) return notify('请至少选择一个打分部门', 'error');
 
     const titles = {};
@@ -2717,9 +2771,9 @@
     else if (action === 'export-external-upload-stats') exportExternalUploadStatsExcel();
     else if (action === 'roadshow-add') showRoadshowFormModal();
     else if (action === 'roadshow-detail') showRoadshowDetailModal(reportId);
-    else if (action === 'roadshow-prev-week') { state.roadshow.weekOffset = (state.roadshow.weekOffset || 0) - 1; renderTypedReports(state.reportType); }
-    else if (action === 'roadshow-next-week') { state.roadshow.weekOffset = (state.roadshow.weekOffset || 0) + 1; renderTypedReports(state.reportType); }
-    else if (action === 'roadshow-this-week') { state.roadshow.weekOffset = 0; renderTypedReports(state.reportType); }
+    else if (action === 'roadshow-prev-week') { state.roadshow.weekOffset = (state.roadshow.weekOffset || 0) - 1; loadRoadshowSchedule(); }
+    else if (action === 'roadshow-next-week') { state.roadshow.weekOffset = (state.roadshow.weekOffset || 0) + 1; loadRoadshowSchedule(); }
+    else if (action === 'roadshow-this-week') { state.roadshow.weekOffset = 0; loadRoadshowSchedule(); }
     else if (action === 'roadshow-delete') showRoadshowDeleteConfirm(reportId);
     else if (action === 'confirm-roadshow-delete') deleteRoadshowItem(reportId);
     else if (action === 'roadshow-upload') openRoadshowUpload(reportId);

@@ -960,3 +960,7 @@ input::placeholder, textarea::placeholder { color: var(--text-faint); }
   .rating-list-item .rating-item-actions { flex-direction: row; }
   .roadshow-panel-actions .btn { min-height: 38px; }
 }
+
+/* 已归档路演报告的低调标识：日程块右上角小圆点 */
+.roadshow-archived-mark { position: absolute; top: 5px; right: 6px; width: 6px; height: 6px; background: var(--success); border-radius: 50%; opacity: .55; }
+.roadshow-event.archived strong { padding-right: 10px; }

@@ -123,12 +123,16 @@ class Updates2026Test(unittest.TestCase):
         """路演安排表：所有人可新增，按周读取，本人可删，他人不可删。"""
         token = self.login_member()
         created = self.client.post("/internal-knowledge-base/api/roadshow-schedule", json={
-            "eventTime": "2026-08-20T14:30", "format": "hybrid",
+            "eventTime": "2026-08-20T14:30", "endTime": "2026-08-20T16:30",
+            "format": "hybrid", "institution": "兴业证券",
             "tencentMeetingId": "659-689-968", "meetingRoom": "9层一会",
             "presenter": "陈果", "topic": "四季度市场风格展望",
         }, headers={"X-CSRF-Token": token})
         self.assertEqual(created.status_code, 200)
         item_id = created.get_json()["item"]["id"]
+        self.assertEqual(created.get_json()["item"]["institution"], "兴业证券")
+        # 主约人不传时默认为账户本人
+        self.assertEqual(created.get_json()["item"]["organizer"], "测试成员")
 
         listing = self.client.get(
             "/internal-knowledge-base/api/roadshow-schedule?week=2026-08-19")
@@ -137,6 +141,8 @@ class Updates2026Test(unittest.TestCase):
         self.assertEqual(data["weekEnd"], "2026-08-23")
         self.assertEqual(len(data["items"]), 1)
         self.assertEqual(data["items"][0]["formatLabel"], "线上+线下")
+        self.assertEqual(data["items"][0]["institution"], "兴业证券")
+        self.assertEqual(data["items"][0]["reportId"], "")
 
         # 校验：线下路演必须填会议室
         bad = self.client.post("/internal-knowledge-base/api/roadshow-schedule", json={
@@ -205,7 +211,7 @@ class Updates2026Test(unittest.TestCase):
         meta = json.dumps({
             "reportType": "roadshow", "category": "other", "theme": "credit",
             "org": "固收中心", "reportDate": "2026-08-20", "summary": "",
-            "recommendation": "", "sourceAuthor": "", "sourceInstitution": "",
+            "recommendation": "", "sourceAuthor": "陈果", "sourceInstitution": "兴业证券",
             "tags": "", "titles": {}, "roadshowScheduleId": schedule_id,
         }, ensure_ascii=False)
         data = {
@@ -219,6 +225,14 @@ class Updates2026Test(unittest.TestCase):
         report = upload.get_json()["reports"][0]
         self.assertEqual(report["roadshowScheduleId"], schedule_id)
         self.assertEqual(report["uploadedByName"], "测试成员")
+        self.assertEqual(report["sourceAuthor"], "陈果")
+        self.assertEqual(report["sourceInstitution"], "兴业证券")
+
+        # 周历接口应返回该安排关联的报告 id，供前端区分"已归档/未归档"
+        listing = self.client.get(
+            "/internal-knowledge-base/api/roadshow-schedule?week=2026-08-17")
+        items = {item["id"]: item for item in listing.get_json()["items"]}
+        self.assertEqual(items[schedule_id]["reportId"], report["id"])
 
 
 if __name__ == "__main__":

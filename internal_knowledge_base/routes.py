@@ -1279,10 +1279,10 @@ def api_reports_upload(report_scope=None):
         return json_error("请选择有效的所属部门", 400)
     if not report_date:
         return json_error("请选择报告日期", 400)
-    if report_type == "external" and not source_author:
-        return json_error("请填写外部报告作者", 400)
-    if report_type == "external" and not source_institution:
-        return json_error("请填写外部报告机构", 400)
+    if report_type in ("external", "roadshow") and not source_author:
+        return json_error("请填写报告作者", 400)
+    if report_type in ("external", "roadshow") and not source_institution:
+        return json_error("请填写报告机构", 400)
 
     tags = [t.strip() for t in re.split(r"[,，]", tags_raw) if t.strip()][:8]
 
@@ -1314,8 +1314,8 @@ def api_reports_upload(report_scope=None):
             # 上传人始终记录实际操作者（行政代传时上传人=行政，署名作者不变）
             "uploadedById": user["id"],
             "uploadedByName": user["name"],
-            "sourceAuthor": source_author if report_type == "external" else "",
-            "sourceInstitution": source_institution if report_type == "external" else "",
+            "sourceAuthor": source_author if report_type in ("external", "roadshow") else "",
+            "sourceInstitution": source_institution if report_type in ("external", "roadshow") else "",
             "org": org,
             "category": category,
             "theme": theme,
@@ -1361,7 +1361,7 @@ def api_reports_ai_complete():
     os.close(tmp_fd)
     try:
         f.save(tmp_path)
-        external = str(request.form.get("reportType", "internal")).strip() == "external"
+        external = str(request.form.get("reportType", "internal")).strip() in ("external", "roadshow")
         result = _ai_complete_tags_summary(tmp_path, f.filename, external=external)
         return jsonify(result)
     except Exception as e:
@@ -1462,9 +1462,9 @@ def api_report_update(rid):
             if not isinstance(existing, list) or not existing:
                 fields["scoringOrgs"] = list(SCORING_ORGS)
 
-    # 仅行政可改报告作者
+    # 仅行政可改报告作者：外部/路演报告改报告作者（sourceAuthor），其余按署名作者处理
     if is_admin:
-        if report.get("reportType") == "external":
+        if report.get("reportType") in ("external", "roadshow"):
             if "sourceAuthor" in data:
                 fields["sourceAuthor"] = str(data["sourceAuthor"] or "").strip()
         else:
@@ -1534,7 +1534,7 @@ def _roadshow_week_bounds(anchor_str):
 
 
 def _validate_roadshow_fields(data):
-    """校验路演字段，返回 (event_time, end_time, fmt, room, tencent_id, presenter, topic) 或错误串。"""
+    """校验路演字段，返回 (event_time, end_time, fmt, institution, room, tencent_id, presenter, topic) 或错误串。"""
     event_time = str(data.get("eventTime", "")).strip()
     try:
         parsed = datetime.strptime(event_time, "%Y-%m-%dT%H:%M")
@@ -1556,6 +1556,8 @@ def _validate_roadshow_fields(data):
     fmt = str(data.get("format", "")).strip()
     if fmt not in ROADSHOW_FORMATS:
         return "请选择路演形式（线上/线下/线上+线下）"
+    institution = str(data.get("institution", "")).strip()[:80]
+    organizer = str(data.get("organizer", "")).strip()[:60]
     room = str(data.get("meetingRoom", "")).strip()[:60]
     tencent_id = str(data.get("tencentMeetingId", "")).strip()[:40]
     presenter = str(data.get("presenter", "")).strip()[:60]
@@ -1568,51 +1570,29 @@ def _validate_roadshow_fields(data):
         return "请填写路演人"
     if not topic:
         return "请填写路演主题"
-    return event_time, end_time, fmt, room, tencent_id, presenter, topic
-
-
-def _roadshow_ai_parse_prompt(text):
-    return (
-        "你是路演信息抽取助手。请从下面的路演通知文本中提取字段，只输出一个JSON对象：\n"
-        '{"date": "…", "time": "…", "format": "…", "tencentMeetingId": "…", '
-        '"meetingRoom": "…", "presenter": "…", "topic": "…"}\n\n'
-        "规则：\n"
-        "1. date：路演日期。文本含年份时输出 YYYY-MM-DD；没有年份（如“9月25日”）时只输出 MM-DD，年份由系统补全\n"
-        "2. time：开始时间 HH:MM（24小时制），没有则输出空字符串\n"
-        "3. format：线上路演输出 online，线下路演输出 offline，同时包含线上和线下输出 hybrid；"
-        "无法判断时，含腾讯会议号输出 online，含会议室/地点输出 offline\n"
-        "4. tencentMeetingId：腾讯会议号，如 659-689-968，保留原样；没有输出空字符串\n"
-        "5. meetingRoom：会议室或地点，如 9层一会；没有输出空字符串\n"
-        "6. presenter：路演人姓名，如“策略陈果”中的“陈果”；没有输出空字符串\n"
-        "7. topic：路演主题，如“四季度市场风格展望”；没有输出空字符串\n"
-        "8. 严格基于文本内容，不要编造；没有的字段一律输出空字符串\n\n"
-        f"路演通知文本：\n{text}"
-    )
-
-
-def _nearest_future_date(month, day):
-    """无年份的月日按最近的未来日期补全年份（如 8 月看到“9月25日”→ 今年 9 月 25 日）。"""
-    now = datetime.now(CST)
-    for year in (now.year, now.year + 1):
-        try:
-            candidate = datetime(year, month, day)
-        except ValueError:
-            return None
-        if candidate.date() >= now.date():
-            return candidate.strftime("%Y-%m-%d")
-    return None
+    return event_time, end_time, fmt, institution, organizer, room, tencent_id, presenter, topic
 
 
 @app.route("/api/roadshow-schedule", methods=["GET"])
 def api_roadshow_schedule_list():
-    """按周（周一~周日）返回路演安排；不传 week 参数时返回当前周。"""
+    """按周（周一~周日）返回路演安排；不传 week 参数时返回当前周。
+
+    每条安排附带 reportId：该路演已上传的路演报告 id（取最新一篇），
+    供前端区分"已归档/未归档"并提供查看/下载入口。
+    """
     user = require_user()
     if not user:
         return json_error("未登录", 401)
     week_start, week_end = _roadshow_week_bounds(request.args.get("week", ""))
     items = store.roadshow_items(week_start, week_end)
+    report_by_schedule = {}
+    for report in store.reports():
+        schedule_id = str(report.get("roadshowScheduleId") or "")
+        if schedule_id:
+            report_by_schedule[schedule_id] = report.get("id", "")
     for item in items:
         item["formatLabel"] = ROADSHOW_FORMATS.get(item["format"], item["format"])
+        item["reportId"] = report_by_schedule.get(item["id"], "")
     return jsonify({"items": items, "weekStart": week_start, "weekEnd": week_end})
 
 
@@ -1626,12 +1606,16 @@ def api_roadshow_schedule_add():
     validated = _validate_roadshow_fields(data)
     if isinstance(validated, str):
         return json_error(validated, 400)
-    event_time, end_time, fmt, room, tencent_id, presenter, topic = validated
+    event_time, end_time, fmt, institution, organizer, room, tencent_id, presenter, topic = validated
+    # 主约人默认为账户本人；行政可在前端选择其他成员代为登记
+    organizer = organizer or user["name"]
     item = {
         "id": f"roadshow-{int(time.time() * 1000)}-{uuid.uuid4().hex[:8]}",
         "eventTime": event_time,
         "endTime": end_time,
         "format": fmt,
+        "institution": institution,
+        "organizer": organizer,
         "meetingRoom": room,
         "tencentMeetingId": tencent_id,
         "presenter": presenter,
@@ -1658,14 +1642,73 @@ def api_roadshow_schedule_delete(item_id):
     return jsonify({"ok": True})
 
 
+# 路演机构常见简称 → 全称映射（识别提示词用，命中即返回全称）
+ROADSHOW_INSTITUTION_ALIASES = {
+    "兴证": "兴业证券", "中金": "中金公司", "中信": "中信证券", "广发": "广发证券",
+    "国君": "国泰君安证券", "国泰君安": "国泰君安证券", "海通": "海通证券",
+    "华泰": "华泰证券", "招商证券": "招商证券", "招商固收": "招商证券", "招商": "招商证券",
+    "申万": "申万宏源证券", "申万宏源": "申万宏源证券",
+    "中信建投": "中信建投证券", "建投": "中信建投证券", "国信": "国信证券",
+    "东方": "东方证券", "光大": "光大证券", "浙商": "浙商证券", "民生": "民生证券",
+    "安信": "国投证券", "天风": "天风证券", "兴业研究": "兴业研究",
+    "国盛": "国盛证券", "华西": "华西证券", "东吴": "东吴证券", "国金": "国金证券",
+    "长江": "长江证券", "开源": "开源证券", "信达": "信达证券", "华福": "华福证券",
+    "易方达": "易方达基金", "华夏": "华夏基金", "嘉实": "嘉实基金", "南方基金": "南方基金",
+    "博时": "博时基金", "富国": "富国基金", "中欧": "中欧基金", "汇添富": "汇添富基金",
+    "鹏华": "鹏华基金", "兴全": "兴证全球基金",
+}
+
+
+def _roadshow_ai_parse_prompt(text):
+    aliases = "、".join(f"{short}→{full}" for short, full in ROADSHOW_INSTITUTION_ALIASES.items())
+    return (
+        "你是路演信息抽取助手。请从下面的路演通知文本中提取字段，只输出一个JSON对象：\n"
+        '{"date": "…", "weekday": "…", "time": "…", "format": "…", "institution": "…", '
+        '"tencentMeetingId": "…", "meetingRoom": "…", "presenter": "…", "topic": "…"}\n\n'
+        "规则：\n"
+        "1. date：路演日期。文本含年份时输出 YYYY-MM-DD；没有年份（如“9月25日”）时只输出 MM-DD；"
+        "只有星期（如“周四”）没有具体日期时 date 输出空字符串，并把星期写到 weekday（1=周一 … 5=周五，无则空字符串）\n"
+        "2. time：开始时间 HH:MM（24小时制），没有则输出空字符串\n"
+        "3. format：线上路演输出 online，线下路演输出 offline，同时包含线上和线下输出 hybrid；"
+        "无法判断时，含腾讯会议号输出 online，含会议室/地点输出 offline\n"
+        "4. institution：路演机构。文本中的机构简称要换成全称，常见对照：" + aliases + "；"
+        "不在对照中的简称按常识补全为全称；无法确定输出空字符串\n"
+        "5. tencentMeetingId：腾讯会议号，如 659-689-968，保留原样；没有输出空字符串\n"
+        "6. meetingRoom：会议室或地点，如 9层一会；没有输出空字符串\n"
+        "7. presenter：路演人姓名；没有输出空字符串\n"
+        "8. topic：路演主题；没有输出空字符串\n"
+        "9. 严格基于文本内容，不要编造；没有的字段一律输出空字符串\n\n"
+        f"路演通知文本：\n{text}"
+    )
+
+
+def _nearest_future_date(month, day):
+    """无年份的月日按最近的未来日期补全年份（如 8 月看到“9月25日”→ 今年 9 月 25 日）。"""
+    now = datetime.now(CST)
+    for year in (now.year, now.year + 1):
+        try:
+            candidate = datetime(year, month, day)
+        except ValueError:
+            return None
+        if candidate.date() >= now.date():
+            return candidate.strftime("%Y-%m-%d")
+    return None
+
+
 @app.route("/api/roadshow-schedule/ai-parse", methods=["POST"])
 def api_roadshow_schedule_ai_parse():
-    """粘贴路演通知文本，调用大模型（MiMo 默认，DeepSeek 兜底）识别路演要素。"""
+    """粘贴路演通知文本，调用大模型（MiMo 默认，DeepSeek 兜底）识别路演要素。
+
+    日期补全：完整日期直接用；只有月日按最近的未来日期补全年份；只有星期几时
+    按 weekStart（当前显示周的周一）推算，默认落在正在查看的这一周。
+    无结束时间由前端默认按 1 小时处理。
+    """
     user = require_user()
     if not user:
         return json_error("未登录", 401)
     data = request.get_json(silent=True) or {}
     text = str(data.get("text", "")).strip()
+    week_start = str(data.get("weekStart", "")).strip()
     if not text:
         return json_error("请粘贴路演通知文本", 400)
     if len(text) > 2000:
@@ -1676,13 +1719,21 @@ def api_roadshow_schedule_ai_parse():
     except Exception as exc:
         return json_error(f"自动识别失败：{exc}", 503)
 
-    # 日期无年份时按最近的未来日期补全
+    # 日期补全：完整日期 > 月日（最近未来）> 星期几（按显示周推算）
     date_str = str(parsed.get("date", "")).strip()
     if re.fullmatch(r"\d{1,2}-\d{1,2}", date_str):
         month, day = (int(part) for part in date_str.split("-"))
         date_str = _nearest_future_date(month, day) or ""
     if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date_str):
         date_str = ""
+    if not date_str and week_start:
+        try:
+            weekday = int(str(parsed.get("weekday", "")).strip())
+            monday = datetime.strptime(week_start, "%Y-%m-%d")
+            if 1 <= weekday <= 5:
+                date_str = (monday + timedelta(days=weekday - 1)).strftime("%Y-%m-%d")
+        except (TypeError, ValueError):
+            pass
     time_str = str(parsed.get("time", "")).strip()
     if not re.fullmatch(r"\d{1,2}:\d{2}", time_str):
         time_str = ""
@@ -1692,6 +1743,7 @@ def api_roadshow_schedule_ai_parse():
     result = {
         "eventTime": f"{date_str}T{time_str}" if date_str and time_str else (date_str or ""),
         "format": fmt,
+        "institution": str(parsed.get("institution", "")).strip()[:80],
         "tencentMeetingId": str(parsed.get("tencentMeetingId", "")).strip()[:40],
         "meetingRoom": str(parsed.get("meetingRoom", "")).strip()[:60],
         "presenter": str(parsed.get("presenter", "")).strip()[:60],

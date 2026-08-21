@@ -149,6 +149,8 @@ class SQLiteStore:
                     event_time TEXT NOT NULL,
                     end_time TEXT NOT NULL DEFAULT '',
                     format TEXT NOT NULL CHECK(format IN ('online','offline','hybrid')),
+                    institution TEXT NOT NULL DEFAULT '',
+                    organizer TEXT NOT NULL DEFAULT '',
                     meeting_room TEXT NOT NULL DEFAULT '',
                     tencent_meeting_id TEXT NOT NULL DEFAULT '',
                     presenter TEXT NOT NULL DEFAULT '',
@@ -161,7 +163,7 @@ class SQLiteStore:
                 CREATE INDEX IF NOT EXISTS idx_roadshow_event_time ON roadshow_schedule(event_time);
                 """
             )
-            self._ensure_roadshow_end_time(conn)
+            self._ensure_roadshow_columns(conn)
             self._set_default(conn, "reminder_config", self._reminder_default)
             self._set_default(conn, "knowledge_config", {"memberLimit": 10, "leaderLimit": 100})
             self._set_default(conn, "schema_version", 1)
@@ -581,11 +583,14 @@ class SQLiteStore:
             return keys
 
     @staticmethod
-    def _ensure_roadshow_end_time(conn: sqlite3.Connection) -> None:
-        """旧库的 roadshow_schedule 表没有 end_time 列，按需补齐（幂等）。"""
+    def _ensure_roadshow_columns(conn: sqlite3.Connection) -> None:
+        """旧库的 roadshow_schedule 表缺少后续新增列，按需补齐（幂等）。"""
         columns = {row["name"] for row in conn.execute("PRAGMA table_info(roadshow_schedule)")}
-        if columns and "end_time" not in columns:
-            conn.execute("ALTER TABLE roadshow_schedule ADD COLUMN end_time TEXT NOT NULL DEFAULT ''")
+        if not columns:
+            return
+        for column in ("end_time", "institution", "organizer"):
+            if column not in columns:
+                conn.execute(f"ALTER TABLE roadshow_schedule ADD COLUMN {column} TEXT NOT NULL DEFAULT ''")
 
     # Roadshow schedule（路演安排表）
     def roadshow_items(self, date_from, date_to):
@@ -610,11 +615,11 @@ class SQLiteStore:
         with self.transaction() as conn:
             conn.execute(
                 "INSERT INTO roadshow_schedule"
-                "(id,event_time,end_time,format,meeting_room,tencent_meeting_id,presenter,topic,"
-                "created_by,created_by_name,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                "(id,event_time,end_time,format,institution,organizer,meeting_room,tencent_meeting_id,presenter,topic,"
+                "created_by,created_by_name,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (item["id"], item["eventTime"], item.get("endTime", ""), item["format"],
-                 item.get("meetingRoom", ""), item.get("tencentMeetingId", ""),
-                 item.get("presenter", ""), item.get("topic", ""),
+                 item.get("institution", ""), item.get("organizer", ""), item.get("meetingRoom", ""),
+                 item.get("tencentMeetingId", ""), item.get("presenter", ""), item.get("topic", ""),
                  item.get("createdById", ""), item.get("createdByName", ""), stamp, stamp),
             )
 
