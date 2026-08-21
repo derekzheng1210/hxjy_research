@@ -914,14 +914,14 @@ input::placeholder, textarea::placeholder { color: var(--text-faint); }
 .roadshow-panel-actions { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
 .roadshow-cal-wrap { overflow-x: auto; }
 .roadshow-cal { min-width: 660px; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
-.roadshow-cal-head { display: grid; grid-template-columns: 56px repeat(5, 1fr); background: var(--surface-muted); border-bottom: 1px solid var(--border); }
+.roadshow-cal-head { display: grid; grid-template-columns: 56px repeat(5, 1fr); background: var(--surface-muted); border-bottom: 1px solid var(--border); overflow: hidden; scrollbar-gutter: stable; }
 .roadshow-cal-corner { padding: 9px 6px; color: var(--text-faint); font-size: 12px; font-weight: 700; text-align: center; }
 .roadshow-cal-day { padding: 7px 4px; text-align: center; border-left: 1px solid var(--border); }
 .roadshow-cal-day b { display: block; font-size: 13px; }
 .roadshow-cal-day span { display: inline-block; margin-top: 2px; color: var(--text-faint); font-size: 11px; }
 .roadshow-cal-day.today b, .roadshow-cal-day.today span { color: var(--primary); }
 .roadshow-cal-day.today span { background: var(--primary-soft); padding: 1px 7px; border-radius: 9px; }
-.roadshow-cal-scroll { display: grid; grid-template-columns: 56px 1fr; max-height: 540px; overflow-y: auto; }
+.roadshow-cal-scroll { display: grid; grid-template-columns: 56px 1fr; max-height: 570px; overflow-y: auto; scrollbar-gutter: stable; }
 .roadshow-cal-times { border-right: 1px solid var(--border); background: var(--surface-muted); }
 .roadshow-cal-slot { display: flex; align-items: flex-start; justify-content: flex-end; padding: 2px 6px 0 0; color: var(--text-faint); font-size: 11px; }
 .roadshow-cal-columns { display: grid; grid-template-columns: repeat(5, 1fr); }

@@ -70,6 +70,7 @@
     updateReport: (id, data) => apiFetch(`/api/reports/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify(data) }).then(handleJson),
     // 路演安排表：按周（周一~周日）读取，所有人可新增，本人/行政可删除
     roadshowSchedule: (week) => apiFetch(`/api/roadshow-schedule${week ? `?week=${encodeURIComponent(week)}` : ''}`, { credentials: 'same-origin' }).then(handleJson),
+    roadshowExport: (week) => apiFetch(`/api/roadshow-schedule/export${week ? `?week=${encodeURIComponent(week)}` : ''}`, { credentials: 'same-origin' }),
     roadshowAdd: (data) => apiFetch('/api/roadshow-schedule', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify(data) }).then(handleJson),
     roadshowDelete: (id) => apiFetch(`/api/roadshow-schedule/${id}`, { method: 'DELETE', credentials: 'same-origin' }).then(handleJson),
     roadshowAiParse: (text, weekStart) => apiFetch('/api/roadshow-schedule/ai-parse', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ text, weekStart }) }).then(handleJson),
@@ -830,9 +831,10 @@
     const range = rs.weekStart && rs.weekEnd ? `（${formatDate(rs.weekStart)} - ${formatDate(rs.weekEnd)}）` : '';
     return `<section class="panel-card roadshow-panel" id="roadshowPanel">
       <div class="panel-header">
-        <div><h2>路演安排</h2><p>一周路演日程${range}，点击空白时间格快速登记，所有人可新增，本人与行政可删除</p></div>
+        <div><h2>路演安排</h2><p>一周路演日程${range}，点击空白时间格快速登记</p></div>
         <div class="roadshow-panel-actions">
           <button class="btn btn-ghost btn-small" data-action="roadshow-prev-week" title="上一周">←</button>
+          ${isAdminRole() ? '<button class="btn btn-ghost btn-small" data-action="roadshow-export" title="导出当前周路演安排 Excel">导出Excel</button>' : ''}
           <button class="btn btn-ghost btn-small" data-action="roadshow-this-week">本周</button>
           <button class="btn btn-ghost btn-small" data-action="roadshow-next-week" title="下一周">→</button>
           <button class="btn btn-primary btn-small" data-action="roadshow-add"><svg viewBox="0 0 24 24" fill="none" width="14" height="14"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>新增路演</button>
@@ -851,11 +853,36 @@
       state.roadshow.weekStart = data.weekStart || '';
       state.roadshow.weekEnd = data.weekEnd || '';
       const desc = document.querySelector('#roadshowPanel .panel-header p');
-      if (desc) desc.textContent = `一周路演日程（${formatDate(state.roadshow.weekStart)} - ${formatDate(state.roadshow.weekEnd)}），点击空白时间格快速登记，所有人可新增，本人与行政可删除`;
+      if (desc) desc.textContent = `一周路演日程（${formatDate(state.roadshow.weekStart)} - ${formatDate(state.roadshow.weekEnd)}），点击空白时间格快速登记`;
       body.innerHTML = roadshowCalendarHTML(state.roadshow.items);
       bindRoadshowQuickAdd(body);
     } catch (error) {
       body.innerHTML = `<div class="detail-loading">路演安排加载失败：${escapeHTML(error.message || '请稍后重试')}</div>`;
+    }
+  }
+
+  // 行政导出当前周路演安排 Excel：取 Blob 后触发浏览器下载，失败时提示服务端错误信息
+  async function downloadRoadshowExcel() {
+    try {
+      const res = await API.roadshowExport(roadshowWeekAnchor());
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || `导出失败 (${res.status})`);
+      }
+      const blob = await res.blob();
+      const disposition = res.headers.get('content-disposition') || '';
+      const match = disposition.match(/filename\*?=(?:UTF-8'')?"?([^";]+)/i);
+      const fileName = match ? decodeURIComponent(match[1]) : `路演安排_${state.roadshow.weekStart || ''}.xlsx`;
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = fileName;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      notify(error.message || '导出失败', 'error');
     }
   }
 
@@ -2772,6 +2799,7 @@
     else if (action === 'roadshow-add') showRoadshowFormModal();
     else if (action === 'roadshow-detail') showRoadshowDetailModal(reportId);
     else if (action === 'roadshow-prev-week') { state.roadshow.weekOffset = (state.roadshow.weekOffset || 0) - 1; loadRoadshowSchedule(); }
+    else if (action === 'roadshow-export') downloadRoadshowExcel();
     else if (action === 'roadshow-next-week') { state.roadshow.weekOffset = (state.roadshow.weekOffset || 0) + 1; loadRoadshowSchedule(); }
     else if (action === 'roadshow-this-week') { state.roadshow.weekOffset = 0; loadRoadshowSchedule(); }
     else if (action === 'roadshow-delete') showRoadshowDeleteConfirm(reportId);

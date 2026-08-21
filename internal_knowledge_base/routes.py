@@ -2,6 +2,7 @@
 """内部知识库 Flask Blueprint。"""
 
 import hashlib
+import io
 import json
 import os
 import re
@@ -21,6 +22,9 @@ from flask import (Blueprint, current_app, request, send_file, send_from_directo
                    jsonify, session, redirect, url_for, abort, Response,
                    stream_with_context)
 from werkzeug.security import check_password_hash, generate_password_hash
+from openpyxl import Workbook
+from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.utils import get_column_letter
 
 from paths import (INTERNAL_KNOWLEDGE_BASE_DIR, INTERNAL_KNOWLEDGE_BASE_DB,
                    INTERNAL_KNOWLEDGE_BASE_UPLOADS, INTERNAL_KNOWLEDGE_BASE_PDF_CACHE,
@@ -1594,6 +1598,53 @@ def api_roadshow_schedule_list():
         item["formatLabel"] = ROADSHOW_FORMATS.get(item["format"], item["format"])
         item["reportId"] = report_by_schedule.get(item["id"], "")
     return jsonify({"items": items, "weekStart": week_start, "weekEnd": week_end})
+
+
+@app.route("/api/roadshow-schedule/export", methods=["GET"])
+def api_roadshow_schedule_export():
+    """导出一周路演安排 Excel（仅行政角色），week 参数与列表接口一致。"""
+    user = require_user()
+    if not user:
+        return json_error("未登录", 401)
+    if user.get("role") != "admin":
+        return json_error("仅行政角色可导出", 403)
+    week_start, week_end = _roadshow_week_bounds(request.args.get("week", ""))
+    items = store.roadshow_items(week_start, week_end)
+    weekdays = "一二三四五六日"
+
+    def hm(value):
+        return str(value or "")[11:16]
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "路演安排"
+    ws.append(["日期", "星期", "开始时间", "结束时间", "形式", "路演机构", "主约人",
+               "路演人", "路演主题", "会议室/地点", "腾讯会议号", "登记人"])
+    for item in items:
+        event_time = str(item.get("event_time", ""))
+        try:
+            day = datetime.strptime(event_time[:10], "%Y-%m-%d").date()
+            weekday = f"周{weekdays[day.weekday()]}"
+        except ValueError:
+            weekday = ""
+        ws.append([event_time[:10], weekday, hm(event_time), hm(item.get("end_time")),
+                   ROADSHOW_FORMATS.get(item.get("format"), str(item.get("format", ""))),
+                   item.get("institution", ""), item.get("organizer", ""), item.get("presenter", ""),
+                   item.get("topic", ""), item.get("meeting_room", ""), item.get("tencent_meeting_id", ""),
+                   item.get("created_by_name", "")])
+    for cell in ws[1]:
+        cell.font = Font(bold=True)
+        cell.fill = PatternFill("solid", fgColor="EEF2FF")
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+    for idx, width in enumerate([12, 7, 10, 10, 11, 16, 10, 10, 50, 14, 16, 10], start=1):
+        ws.column_dimensions[get_column_letter(idx)].width = width
+    ws.freeze_panes = "A2"
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return send_file(buf, as_attachment=True,
+                     download_name=f"路演安排_{week_start}_{week_end}.xlsx",
+                     mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 
 @app.route("/api/roadshow-schedule", methods=["POST"])
