@@ -112,7 +112,7 @@
     uploadFiles: [],  // 待上传文件列表 {file, title}
     uploadPreset: null,  // 预填信息（路演安排一键上传）：{reportType,title,reportDate,roadshowScheduleId,authorName}
     reportAuthors: [],
-    roadshow: { weekOffset: 0, weekStart: '', weekEnd: '', items: [] },
+    roadshow: { weekOffset: 0, weekStart: '', weekEnd: '', items: [], wide: false },
     reminders: null,
     knowledge: { limit: 10, used: 0, remaining: 10, available: true, messages: [], filters: { period: '1m', dateFrom: '', dateTo: '', reportTypes: ['internal'], categories: [], themes: [], authors: [] } }
   };
@@ -935,8 +935,8 @@
     const weekendNote = weekendItems.length
       ? `<div class="roadshow-weekend-note">周末另有 ${weekendItems.length} 场路演：${weekendItems.map(item => `${escapeHTML(formatDateTime(item.event_time))} ${escapeHTML(item.presenter || '')}《${escapeHTML(item.topic || '')}》`).join('；')}</div>`
       : '';
-    return `<div class="roadshow-cal-wrap"><div class="roadshow-cal">
-      <div class="roadshow-cal-head"><div class="roadshow-cal-corner">时间</div>${headCells}</div>
+    return `<div class="roadshow-cal-wrap"><div class="roadshow-cal" style="min-width:${state.roadshow.wide ? 1100 : 660}px">
+      <div class="roadshow-cal-head"><div class="roadshow-cal-corner"><span>时间</span><button type="button" class="roadshow-cal-widen-btn" data-action="roadshow-toggle-wide" title="并排路演较多时建议加宽查看">${state.roadshow.wide ? '还原' : '加宽'}</button></div>${headCells}</div>
       <div class="roadshow-cal-scroll">
         <div class="roadshow-cal-times">${timesHTML}</div>
         <div class="roadshow-cal-columns">${columnsHTML}</div>
@@ -2827,6 +2827,15 @@
     else if (action === 'roadshow-detail') showRoadshowDetailModal(reportId);
     else if (action === 'roadshow-prev-week') { state.roadshow.weekOffset = (state.roadshow.weekOffset || 0) - 1; loadRoadshowSchedule(); }
     else if (action === 'roadshow-export') downloadRoadshowExcel();
+    else if (action === 'roadshow-toggle-wide') {
+      // 加宽/还原：翻转后用已有数据本地重渲染，不重新请求接口
+      state.roadshow.wide = !state.roadshow.wide;
+      const body = document.getElementById('roadshowPanelBody');
+      if (body && state.roadshow.weekStart) {
+        body.innerHTML = roadshowCalendarHTML(state.roadshow.items);
+        bindRoadshowQuickAdd(body);
+      }
+    }
     else if (action === 'roadshow-next-week') { state.roadshow.weekOffset = (state.roadshow.weekOffset || 0) + 1; loadRoadshowSchedule(); }
     else if (action === 'roadshow-this-week') { state.roadshow.weekOffset = 0; loadRoadshowSchedule(); }
     else if (action === 'roadshow-delete') showRoadshowDeleteConfirm(reportId);

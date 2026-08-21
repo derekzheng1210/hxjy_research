@@ -918,7 +918,10 @@ input::placeholder, textarea::placeholder { color: var(--text-faint); }
 .roadshow-cal-wrap { overflow-x: auto; }
 .roadshow-cal { min-width: 660px; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
 .roadshow-cal-head { display: grid; grid-template-columns: 56px repeat(5, 1fr); background: var(--surface-muted); border-bottom: 1px solid var(--border); overflow: hidden; scrollbar-gutter: stable; }
-.roadshow-cal-corner { padding: 9px 6px; color: var(--text-faint); font-size: 12px; font-weight: 700; text-align: center; }
+.roadshow-cal-corner { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; padding: 4px 3px; color: var(--text-faint); font-size: 12px; font-weight: 700; text-align: center; }
+/* 左上角格子内嵌的加宽/还原小开关：并排路演较多时加宽日历查看 */
+.roadshow-cal-widen-btn { padding: 1px 8px; color: var(--text-muted); font-size: 10.5px; font-weight: 600; background: var(--surface); border: 1px solid var(--border-strong); border-radius: 9px; cursor: pointer; }
+.roadshow-cal-widen-btn:hover { color: var(--primary); border-color: var(--primary); background: var(--primary-soft); }
 .roadshow-cal-day { padding: 7px 4px; text-align: center; border-left: 1px solid var(--border); }
 .roadshow-cal-day b { display: block; font-size: 13px; }
 .roadshow-cal-day span { display: inline-block; margin-top: 2px; color: var(--text-faint); font-size: 11px; }
