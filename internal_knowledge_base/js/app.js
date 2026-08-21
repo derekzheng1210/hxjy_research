@@ -1001,12 +1001,16 @@
         ? `线上 · ${item.tencent_meeting_id || ''}`
         : item.format === 'offline' ? `线下 · ${item.meeting_room || ''}` : '线上+线下';
       const institutionPrefix = item.institution ? `${item.institution} · ` : '';
+      // 主约人以括号补充在路演人后；悬停提示含主约人，避免窄色块省略号截断后看不到
+      const organizerSuffix = item.organizer ? `（主约:${escapeHTML(item.organizer)}）` : '';
+      const tip = [item.topic || '未填主题', `${roadshowTimeLabel(item)} · ${item.presenter || ''}`,
+        ...(item.organizer ? [`主约：${item.organizer}`] : []), institutionPrefix + meta].filter(Boolean).join('\n');
       // 已归档路演报告：右上角低调小标记（浅色小点），避免"督促上传"的观感
       const archivedMark = item.reportId ? '<span class="roadshow-archived-mark" title="已归档路演报告"></span>' : '';
-      return `<button class="roadshow-event fmt-${escapeHTML(item.format)}${item.reportId ? ' archived' : ''}" style="top:${top}px;height:${height}px;left:calc(${(block.track * width).toFixed(3)}% + 2px);width:calc(${width.toFixed(3)}% - 4px)" data-action="roadshow-detail" data-id="${escapeHTML(item.id)}" title="${escapeHTML(item.topic || '')}">
+      return `<button class="roadshow-event fmt-${escapeHTML(item.format)}${item.reportId ? ' archived' : ''}" style="top:${top}px;height:${height}px;left:calc(${(block.track * width).toFixed(3)}% + 2px);width:calc(${width.toFixed(3)}% - 4px)" data-action="roadshow-detail" data-id="${escapeHTML(item.id)}" title="${escapeHTML(tip)}">
         ${archivedMark}
         <strong>${escapeHTML(item.topic || '未填主题')}</strong>
-        <span>${escapeHTML(roadshowTimeLabel(item))} · ${escapeHTML(item.presenter || '')}</span>
+        <span>${escapeHTML(roadshowTimeLabel(item))} · ${escapeHTML(item.presenter || '')}${organizerSuffix}</span>
         ${compact ? '' : `<em>${escapeHTML(institutionPrefix + meta)}</em>`}
       </button>`;
     }).join('');

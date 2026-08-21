@@ -1730,9 +1730,10 @@ def _append_roadshow_calendar_sheet(wb, items, week_start):
             meta = item.get("format") in ("online", "hybrid") and item.get("tencent_meeting_id") \
                 or item.get("meeting_room") or ""
             institution = item.get("institution", "")
+            organizer_suffix = f"（主约:{item['organizer']}）" if item.get("organizer") else ""
             lines = [item.get("topic") or "未填主题",
                      f"{block['start'] // 60:02d}:{block['start'] % 60:02d}"
-                     f"-{block['end'] // 60:02d}:{block['end'] % 60:02d} · {item.get('presenter', '')}",
+                     f"-{block['end'] // 60:02d}:{block['end'] % 60:02d} · {item.get('presenter', '')}{organizer_suffix}",
                      " · ".join(part for part in (institution, ROADSHOW_FORMATS.get(item.get("format"), ""), meta) if part)]
             accent = Side(style="thick", color=style["accent"])
             for row in range(r0, r1 + 1):
