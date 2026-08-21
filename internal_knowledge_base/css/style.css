@@ -929,7 +929,7 @@ input::placeholder, textarea::placeholder { color: var(--text-faint); }
 .roadshow-cal-day span { display: inline-block; margin-top: 2px; color: var(--text-faint); font-size: 11px; }
 .roadshow-cal-day.today b, .roadshow-cal-day.today span { color: var(--primary); }
 .roadshow-cal-day.today span { background: var(--primary-soft); padding: 1px 7px; border-radius: 9px; }
-.roadshow-cal-scroll { display: grid; grid-template-columns: 56px 1fr; max-height: calc(var(--roadshow-row-h) * 19); overflow-y: auto; scrollbar-gutter: stable; }
+.roadshow-cal-scroll { display: grid; grid-template-columns: 56px 1fr; max-height: calc(var(--roadshow-row-h) * 19); overflow-y: auto; overflow-x: hidden; scrollbar-gutter: stable; }
 .roadshow-cal-times { border-right: 1px solid var(--border); background: var(--surface-muted); }
 .roadshow-cal-slot { display: flex; align-items: flex-start; justify-content: flex-end; padding: 2px 6px 0 0; color: var(--text-faint); font-size: 11px; }
 .roadshow-cal-columns { display: grid; grid-template-columns: repeat(5, 1fr); }

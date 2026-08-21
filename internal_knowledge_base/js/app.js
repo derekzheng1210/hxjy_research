@@ -935,7 +935,9 @@
     const wide = state.roadshow.wide;
     const needsWide = dayTracks.some(t => t > 1);
     const wideCols = dayTracks.map(t => (t > 1 ? `${t * 200}px` : 'minmax(200px,1fr)')).join(' ');
-    const calMinWidth = wide ? Math.max(660, 56 + dayTracks.reduce((sum, t) => sum + t * 200, 0)) : 660;
+    // 预留约 20px 纵向滚动条槽位：scrollbar-gutter 会在内层滚动区右侧占位，
+    // 不补足会挤爆固定列宽、让内层也出一条横向滚动条（与外层 wrap 重复）
+    const calMinWidth = wide ? Math.max(660, 76 + dayTracks.reduce((sum, t) => sum + t * 200, 0)) : 660;
     const headStyle = wide ? ` style="grid-template-columns:56px ${wideCols}"` : '';
     const columnsStyle = wide ? ` style="grid-template-columns:${wideCols}"` : '';
     const widenBtn = `<button type="button" class="roadshow-cal-widen-btn" data-action="roadshow-toggle-wide" ${needsWide ? '' : 'disabled'} title="${needsWide ? '按并排路演数量加宽日历，超出屏幕宽度时可横向滚动查看' : '本周没有并排路演，无需加宽'}">${wide ? '还原' : '加宽'}</button>`;
