@@ -928,16 +928,17 @@
       const key = roadshowLocalDateKey(day);
       return `<div class="roadshow-cal-day${key === todayKey ? ' today' : ''}"><b>周${ROADSHOW_DAY_NAMES[i]}</b><span>${pad(day.getMonth() + 1)}.${pad(day.getDate())}</span></div>`;
     }).join('');
-    // 各天实际并行栏数：加宽时只给有并排路演的星期列固定列宽（每栏 200px），
-    // 其余天保持 1fr 均分——显式列宽才能突破面板自然宽度真正加宽，超出后由底部横向滚动承接
+    // 各天实际并行栏数：加宽时每天按"栏数×200px"给足固定列宽（无并排的天至少 200px，
+    // 屏幕有富余时拉伸占满），日历总宽随内容动态增长、超出屏幕由底部横向滚动承接，
+    // 不因某天并排多而挤压其他星期列
     const dayTracks = days.map(day => roadshowAssignTracks(byDay[roadshowLocalDateKey(day)]).tracks);
     const wide = state.roadshow.wide;
     const needsWide = dayTracks.some(t => t > 1);
-    const wideCols = dayTracks.map(t => (t > 1 ? `${t * 200}px` : '1fr')).join(' ');
-    const calMinWidth = wide ? Math.max(660, 56 + dayTracks.reduce((sum, t) => sum + (t > 1 ? t * 200 : 120), 0)) : 660;
+    const wideCols = dayTracks.map(t => (t > 1 ? `${t * 200}px` : 'minmax(200px,1fr)')).join(' ');
+    const calMinWidth = wide ? Math.max(660, 56 + dayTracks.reduce((sum, t) => sum + t * 200, 0)) : 660;
     const headStyle = wide ? ` style="grid-template-columns:56px ${wideCols}"` : '';
     const columnsStyle = wide ? ` style="grid-template-columns:${wideCols}"` : '';
-    const widenBtn = `<button type="button" class="roadshow-cal-widen-btn" data-action="roadshow-toggle-wide" ${needsWide ? '' : 'disabled'} title="${needsWide ? '按并排路演数量加宽对应星期列，无并排的天保持均分' : '本周没有并排路演，无需加宽'}">${wide ? '还原' : '加宽'}</button>`;
+    const widenBtn = `<button type="button" class="roadshow-cal-widen-btn" data-action="roadshow-toggle-wide" ${needsWide ? '' : 'disabled'} title="${needsWide ? '按并排路演数量加宽日历，超出屏幕宽度时可横向滚动查看' : '本周没有并排路演，无需加宽'}">${wide ? '还原' : '加宽'}</button>`;
     const columnsHTML = days.map(day => {
       const key = roadshowLocalDateKey(day);
       return `<div class="roadshow-cal-grid" data-date="${key}" style="height:${gridHeight}px">${roadshowEventBlocksHTML(byDay[key])}</div>`;
