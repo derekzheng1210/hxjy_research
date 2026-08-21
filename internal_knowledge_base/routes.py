@@ -23,7 +23,7 @@ from flask import (Blueprint, current_app, request, send_file, send_from_directo
                    stream_with_context)
 from werkzeug.security import check_password_hash, generate_password_hash
 from openpyxl import Workbook
-from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
 from paths import (INTERNAL_KNOWLEDGE_BASE_DIR, INTERNAL_KNOWLEDGE_BASE_DB,
@@ -1600,6 +1600,169 @@ def api_roadshow_schedule_list():
     return jsonify({"items": items, "weekStart": week_start, "weekEnd": week_end})
 
 
+ROADSHOW_CAL_START_MIN = 8 * 60   # 周历视图网格 08:00–20:00（与前端一致）
+ROADSHOW_CAL_END_MIN = 20 * 60
+ROADSHOW_CAL_SLOT_MIN = 30
+# 周历视图配色（与前端色块一致）：线上蓝 / 线下绿 / 线上+线下紫
+ROADSHOW_CAL_STYLES = {
+    "online": {"fill": "EFF6FF", "accent": "2563EB"},
+    "offline": {"fill": "ECFDF5", "accent": "059669"},
+    "hybrid": {"fill": "F3E8FF", "accent": "7C3AED"},
+}
+
+
+def _roadshow_cal_minutes(value):
+    """'2026-08-21T09:30' → 570；解析失败返回 None。"""
+    text = str(value or "")
+    try:
+        return int(text[11:13]) * 60 + int(text[14:16])
+    except (ValueError, IndexError):
+        return None
+
+
+def _append_roadshow_calendar_sheet(wb, items, week_start):
+    """在导出工作簿追加"周历视图" sheet：布局仿前端路演安排界面——
+    周一~周五 × 8:00–20:00 半小时格，重叠路演并排分栏（不重叠的占整行宽），
+    色块按形式配色并带左侧色条，单元格合并后可直接编辑文字。"""
+    ws = wb.create_sheet("周历视图")
+    thin = Side(style="thin", color="D1D5DB")
+    grid_border = Border(left=thin, right=thin, top=thin, bottom=thin)
+    slot_count = (ROADSHOW_CAL_END_MIN - ROADSHOW_CAL_START_MIN) // ROADSHOW_CAL_SLOT_MIN
+    header_row, first_slot_row = 1, 2
+
+    start_date = datetime.strptime(week_start, "%Y-%m-%d").date()
+    weekdays = "一二三四五六日"
+    day_items, weekend_items = [[] for _ in range(5)], []
+    for item in items:
+        try:
+            day = datetime.strptime(str(item.get("event_time", ""))[:10], "%Y-%m-%d").date()
+        except ValueError:
+            continue
+        offset = (day - start_date).days
+        if 0 <= offset < 5:
+            day_items[offset].append(item)
+        elif 0 <= offset < 7:
+            weekend_items.append(item)
+
+    # 每天先算重叠分栏（与前端聚簇逻辑一致）：返回 [{item, track, tracks}] 及该天栏数
+    def day_blocks(day_list):
+        blocks = []
+        for item in day_list:
+            start = _roadshow_cal_minutes(item.get("event_time"))
+            if start is None:
+                continue
+            end = _roadshow_cal_minutes(item.get("end_time"))
+            end = end if end and end > start else start + 60  # 未填结束时间默认 1 小时
+            blocks.append({"item": item,
+                           "start": max(start, ROADSHOW_CAL_START_MIN),
+                           "end": min(end, ROADSHOW_CAL_END_MIN)})
+        blocks.sort(key=lambda b: (b["start"], -b["end"]))
+        clusters, tracks = [], 1
+        for block in blocks:
+            if clusters and block["start"] < clusters[-1]["end"]:
+                clusters[-1]["blocks"].append(block)
+                clusters[-1]["end"] = max(clusters[-1]["end"], block["end"])
+            else:
+                clusters.append({"blocks": [block], "end": block["end"]})
+        for cluster in clusters:
+            track_ends = []
+            for block in cluster["blocks"]:
+                idx = next((i for i, end in enumerate(track_ends) if end <= block["start"]), None)
+                if idx is None:
+                    track_ends.append(block["end"])
+                    idx = len(track_ends) - 1
+                else:
+                    track_ends[idx] = block["end"]
+                block["track"] = idx
+            for block in cluster["blocks"]:
+                block["tracks"] = len(track_ends)
+            tracks = max(tracks, len(track_ends))
+        return blocks, tracks
+
+    layout = [day_blocks(day_list) for day_list in day_items]
+
+    # 表头与时间轴
+    header_font = Font(bold=True, size=11)
+    center = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    ws.cell(row=header_row, column=1, value="时间").font = header_font
+    ws.cell(row=header_row, column=1).alignment = center
+    ws.cell(row=header_row, column=1).border = grid_border
+    for slot in range(slot_count):
+        row = first_slot_row + slot
+        minutes = ROADSHOW_CAL_START_MIN + slot * ROADSHOW_CAL_SLOT_MIN
+        label = ws.cell(row=row, column=1, value=f"{minutes // 60:02d}:{minutes % 60:02d}"
+                        if minutes % 60 == 0 else None)
+        label.border = grid_border
+        label.font = Font(size=9, color="6B7280")
+        label.alignment = Alignment(horizontal="right", vertical="top")
+        ws.row_dimensions[row].height = 20
+    ws.column_dimensions["A"].width = 7
+    ws.row_dimensions[header_row].height = 32
+
+    # 周一~周五列：按各天栏数切分，铺网格底纹后放置路演色块
+    left_align = Alignment(horizontal="left", vertical="top", wrap_text=True)
+    col = 2
+    for offset, (blocks, tracks) in enumerate(layout):
+        day = start_date + timedelta(days=offset)
+        for t in range(tracks):
+            ws.column_dimensions[get_column_letter(col + t)].width = 26 if tracks == 1 else 13
+        header = ws.cell(row=header_row, column=col,
+                         value=f"周{weekdays[offset]}\n{day.month}.{day.day}")
+        header.font = header_font
+        header.alignment = center
+        for t in range(tracks):
+            ws.cell(row=header_row, column=col + t).border = grid_border
+        if tracks > 1:
+            ws.merge_cells(start_row=header_row, start_column=col,
+                           end_row=header_row, end_column=col + tracks - 1)
+        for row in range(first_slot_row, first_slot_row + slot_count):
+            for t in range(tracks):
+                ws.cell(row=row, column=col + t).border = grid_border
+        for block in blocks:
+            item = block["item"]
+            # 横向：按所在簇的栏数占当天宽度的等分（栏数少于当天总栏数时合并多列占满）
+            c0 = col + block["track"] * tracks // block["tracks"]
+            c1 = col + (block["track"] + 1) * tracks // block["tracks"] - 1
+            # 纵向：跨半小时行合并
+            r0 = first_slot_row + (block["start"] - ROADSHOW_CAL_START_MIN) // ROADSHOW_CAL_SLOT_MIN
+            r1 = first_slot_row + (block["end"] - ROADSHOW_CAL_START_MIN) // ROADSHOW_CAL_SLOT_MIN - 1
+            style = ROADSHOW_CAL_STYLES.get(item.get("format"), {"fill": "F3F4F6", "accent": "6B7280"})
+            meta = item.get("format") in ("online", "hybrid") and item.get("tencent_meeting_id") \
+                or item.get("meeting_room") or ""
+            institution = item.get("institution", "")
+            lines = [item.get("topic") or "未填主题",
+                     f"{block['start'] // 60:02d}:{block['start'] % 60:02d}"
+                     f"-{block['end'] // 60:02d}:{block['end'] % 60:02d} · {item.get('presenter', '')}",
+                     " · ".join(part for part in (institution, ROADSHOW_FORMATS.get(item.get("format"), ""), meta) if part)]
+            accent = Side(style="thick", color=style["accent"])
+            for row in range(r0, r1 + 1):
+                for column in range(c0, c1 + 1):
+                    cell = ws.cell(row=row, column=column)
+                    cell.fill = PatternFill("solid", fgColor=style["fill"])
+                    cell.border = Border(left=accent if column == c0 else thin,
+                                         right=thin, top=thin, bottom=thin)
+            cell = ws.cell(row=r0, column=c0, value="\n".join(lines))
+            cell.font = Font(size=9)
+            cell.alignment = left_align
+            ws.merge_cells(start_row=r0, start_column=c0, end_row=r1, end_column=c1)
+        col += tracks
+
+    ws.freeze_panes = "B2"
+
+    # 周末路演：仿前端，在网格下方列出
+    if weekend_items:
+        note_row = first_slot_row + slot_count + 1
+        parts = [f"{str(it.get('event_time', ''))[5:16].replace('T', ' ')} {it.get('presenter', '')}《{it.get('topic', '')}》"
+                 for it in weekend_items]
+        ws.merge_cells(start_row=note_row, start_column=1,
+                       end_row=note_row, end_column=max(col - 1, 6))
+        note = ws.cell(row=note_row, column=1,
+                       value=f"周末另有 {len(weekend_items)} 场路演：" + "；".join(parts))
+        note.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+        note.font = Font(size=10, color="92400E")
+        note.fill = PatternFill("solid", fgColor="FFFBEB")
+
+
 @app.route("/api/roadshow-schedule/export", methods=["GET"])
 def api_roadshow_schedule_export():
     """导出一周路演安排 Excel（仅行政角色），week 参数与列表接口一致。"""
@@ -1639,6 +1802,7 @@ def api_roadshow_schedule_export():
     for idx, width in enumerate([12, 7, 10, 10, 11, 16, 10, 10, 50, 14, 16, 10], start=1):
         ws.column_dimensions[get_column_letter(idx)].width = width
     ws.freeze_panes = "A2"
+    _append_roadshow_calendar_sheet(wb, items, week_start)
     buf = io.BytesIO()
     wb.save(buf)
     buf.seek(0)
