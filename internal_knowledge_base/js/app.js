@@ -815,9 +815,15 @@
   const ROADSHOW_CAL_START = 8 * 60;     // 网格开始时间 08:00（分钟）
   const ROADSHOW_CAL_END = 20 * 60;      // 网格结束时间 20:00
   const ROADSHOW_SLOT_MIN = 30;          // 每格 30 分钟
-  const ROADSHOW_ROW_H = 30;             // 每格高度 px
   const ROADSHOW_DEFAULT_DURATION = 60;  // 未填结束时间时默认占 1 小时
   const ROADSHOW_DAY_NAMES = ['一', '二', '三', '四', '五'];
+
+  // 行高来自 CSS 变量 --roadshow-row-h（随视口高度自适应，矮屏收缩保证 8:00–17:30 一屏放下），
+  // 渲染时实时读取，读不到时回退 30px
+  function roadshowRowHeight() {
+    const value = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--roadshow-row-h'));
+    return value > 0 ? value : 30;
+  }
 
   function roadshowWeekAnchor() {
     const date = new Date();
@@ -893,6 +899,7 @@
 
   function roadshowCalendarHTML(items) {
     const pad = n => String(n).padStart(2, '0');
+    const rowH = roadshowRowHeight();
     const weekStart = new Date(`${state.roadshow.weekStart}T00:00:00`);
     const days = [];
     for (let i = 0; i < ROADSHOW_DAY_NAMES.length; i++) {
@@ -913,10 +920,10 @@
     // 左侧时间轴（每小时一个标签，每格 30 分钟）
     let timesHTML = '';
     for (let m = ROADSHOW_CAL_START; m < ROADSHOW_CAL_END; m += 60) {
-      timesHTML += `<div class="roadshow-cal-slot" style="height:${ROADSHOW_ROW_H * 2}px">${pad(m / 60)}:00</div>`;
+      timesHTML += `<div class="roadshow-cal-slot" style="height:${rowH * 2}px">${pad(m / 60)}:00</div>`;
     }
     const slots = (ROADSHOW_CAL_END - ROADSHOW_CAL_START) / ROADSHOW_SLOT_MIN;
-    const gridHeight = slots * ROADSHOW_ROW_H;
+    const gridHeight = slots * rowH;
     const headCells = days.map((day, i) => {
       const key = roadshowLocalDateKey(day);
       return `<div class="roadshow-cal-day${key === todayKey ? ' today' : ''}"><b>周${ROADSHOW_DAY_NAMES[i]}</b><span>${pad(day.getMonth() + 1)}.${pad(day.getDate())}</span></div>`;
@@ -958,20 +965,36 @@
       const end = item.end_time ? roadshowMinutes(item.end_time) : start + ROADSHOW_DEFAULT_DURATION;
       return { item, start, end: Math.max(end, start + ROADSHOW_SLOT_MIN) };
     }).sort((a, b) => a.start - b.start || b.end - a.end);
-    // 重叠轨道：同一时间段多个路演并排显示
-    const trackEnds = [];
+    // 按时间重叠聚簇：只有相互重叠的路演之间并排分栏（簇内算轨道数），
+    // 不重叠的时段（含首尾相接）各自占满整行宽度，不因当天别处出现并行而被压窄
+    const clusters = [];
     blocks.forEach(block => {
-      let track = trackEnds.findIndex(end => end <= block.start);
-      if (track === -1) { trackEnds.push(block.end); track = trackEnds.length - 1; }
-      else trackEnds[track] = block.end;
-      block.track = track;
+      const current = clusters[clusters.length - 1];
+      if (current && block.start < current.end) {
+        current.blocks.push(block);
+        current.end = Math.max(current.end, block.end);
+      } else {
+        clusters.push({ blocks: [block], end: block.end });
+      }
     });
-    const trackCount = trackEnds.length;
+    clusters.forEach(cluster => {
+      const trackEnds = [];
+      cluster.blocks.forEach(block => {
+        let track = trackEnds.findIndex(end => end <= block.start);
+        if (track === -1) { trackEnds.push(block.end); track = trackEnds.length - 1; }
+        else trackEnds[track] = block.end;
+        block.track = track;
+      });
+      // 轨道数须在簇内全部分配完后统一回写：先到的事件分配时轨道数可能尚未增长
+      const tracks = trackEnds.length;
+      cluster.blocks.forEach(block => { block.tracks = tracks; });
+    });
+    const rowH = roadshowRowHeight();
     return blocks.map(block => {
-      const top = ((Math.max(block.start, ROADSHOW_CAL_START) - ROADSHOW_CAL_START) / ROADSHOW_SLOT_MIN) * ROADSHOW_ROW_H;
-      const bottom = ((Math.min(block.end, ROADSHOW_CAL_END) - ROADSHOW_CAL_START) / ROADSHOW_SLOT_MIN) * ROADSHOW_ROW_H;
-      const height = Math.max(bottom - top - 4, ROADSHOW_ROW_H - 8);
-      const width = 100 / trackCount;
+      const top = ((Math.max(block.start, ROADSHOW_CAL_START) - ROADSHOW_CAL_START) / ROADSHOW_SLOT_MIN) * rowH;
+      const bottom = ((Math.min(block.end, ROADSHOW_CAL_END) - ROADSHOW_CAL_START) / ROADSHOW_SLOT_MIN) * rowH;
+      const height = Math.max(bottom - top - 4, rowH - 8);
+      const width = 100 / block.tracks;
       const item = block.item;
       const compact = height < 50;
       const meta = item.format === 'online'
@@ -996,7 +1019,7 @@
       grid.addEventListener('click', event => {
         if (event.target.closest('.roadshow-event')) return;
         const rect = grid.getBoundingClientRect();
-        const slot = Math.max(0, Math.floor((event.clientY - rect.top) / ROADSHOW_ROW_H));
+        const slot = Math.max(0, Math.floor((event.clientY - rect.top) / roadshowRowHeight()));
         const minutes = ROADSHOW_CAL_START + slot * ROADSHOW_SLOT_MIN;
         showRoadshowFormModal({ date: grid.dataset.date, time: `${pad(Math.floor(minutes / 60))}:${pad(minutes % 60)}` });
       });
@@ -2876,6 +2899,19 @@
     document.addEventListener('keydown', event => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k' && state.currentUser) { event.preventDefault(); els.globalSearch.focus(); }
       if (event.key === 'Escape') { if (els.modalLayer.classList.contains('open')) closeModal(); else closeSidebar(); }
+    });
+    // 视口高度变化（换屏/系统或浏览器缩放）时行高随 CSS 变量变化，按已有数据重渲染路演周历，避免刻度错位
+    let roadshowResizeTimer = null;
+    window.addEventListener('resize', () => {
+      if (!document.getElementById('roadshowPanelBody')) return;
+      clearTimeout(roadshowResizeTimer);
+      roadshowResizeTimer = setTimeout(() => {
+        const body = document.getElementById('roadshowPanelBody');
+        if (body && state.roadshow.items.length) {
+          body.innerHTML = roadshowCalendarHTML(state.roadshow.items);
+          bindRoadshowQuickAdd(body);
+        }
+      }, 150);
     });
   }
 
