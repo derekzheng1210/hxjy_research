@@ -928,6 +928,16 @@
       const key = roadshowLocalDateKey(day);
       return `<div class="roadshow-cal-day${key === todayKey ? ' today' : ''}"><b>周${ROADSHOW_DAY_NAMES[i]}</b><span>${pad(day.getMonth() + 1)}.${pad(day.getDate())}</span></div>`;
     }).join('');
+    // 各天实际并行栏数：加宽时只给有并排路演的星期列固定列宽（每栏 200px），
+    // 其余天保持 1fr 均分——显式列宽才能突破面板自然宽度真正加宽，超出后由底部横向滚动承接
+    const dayTracks = days.map(day => roadshowAssignTracks(byDay[roadshowLocalDateKey(day)]).tracks);
+    const wide = state.roadshow.wide;
+    const needsWide = dayTracks.some(t => t > 1);
+    const wideCols = dayTracks.map(t => (t > 1 ? `${t * 200}px` : '1fr')).join(' ');
+    const calMinWidth = wide ? Math.max(660, 56 + dayTracks.reduce((sum, t) => sum + (t > 1 ? t * 200 : 120), 0)) : 660;
+    const headStyle = wide ? ` style="grid-template-columns:56px ${wideCols}"` : '';
+    const columnsStyle = wide ? ` style="grid-template-columns:${wideCols}"` : '';
+    const widenBtn = `<button type="button" class="roadshow-cal-widen-btn" data-action="roadshow-toggle-wide" ${needsWide ? '' : 'disabled'} title="${needsWide ? '按并排路演数量加宽对应星期列，无并排的天保持均分' : '本周没有并排路演，无需加宽'}">${wide ? '还原' : '加宽'}</button>`;
     const columnsHTML = days.map(day => {
       const key = roadshowLocalDateKey(day);
       return `<div class="roadshow-cal-grid" data-date="${key}" style="height:${gridHeight}px">${roadshowEventBlocksHTML(byDay[key])}</div>`;
@@ -935,11 +945,11 @@
     const weekendNote = weekendItems.length
       ? `<div class="roadshow-weekend-note">周末另有 ${weekendItems.length} 场路演：${weekendItems.map(item => `${escapeHTML(formatDateTime(item.event_time))} ${escapeHTML(item.presenter || '')}《${escapeHTML(item.topic || '')}》`).join('；')}</div>`
       : '';
-    return `<div class="roadshow-cal-wrap"><div class="roadshow-cal" style="min-width:${state.roadshow.wide ? 1100 : 660}px">
-      <div class="roadshow-cal-head"><div class="roadshow-cal-corner"><span>时间</span><button type="button" class="roadshow-cal-widen-btn" data-action="roadshow-toggle-wide" title="并排路演较多时建议加宽查看">${state.roadshow.wide ? '还原' : '加宽'}</button></div>${headCells}</div>
+    return `<div class="roadshow-cal-wrap"><div class="roadshow-cal" style="min-width:${calMinWidth}px">
+      <div class="roadshow-cal-head"${headStyle}><div class="roadshow-cal-corner"><span>时间</span>${widenBtn}</div>${headCells}</div>
       <div class="roadshow-cal-scroll">
         <div class="roadshow-cal-times">${timesHTML}</div>
-        <div class="roadshow-cal-columns">${columnsHTML}</div>
+        <div class="roadshow-cal-columns"${columnsStyle}>${columnsHTML}</div>
       </div>
       <div class="roadshow-cal-foot">提示：点击空白时间格可快速登记该时段的路演；色块左侧蓝=线上、绿=线下、紫=线上+线下。</div>
       ${weekendNote}
@@ -958,9 +968,10 @@
     return end ? `${start}-${end}` : start;
   }
 
-  function roadshowEventBlocksHTML(dayItems) {
-    if (!dayItems || !dayItems.length) return '';
-    const blocks = dayItems.map(item => {
+  // 时间区间与重叠轨道分配：返回 { blocks, tracks }
+  // tracks = 当天最大并行栏数（无路演记 1），供色块渲染与"加宽"列宽计算共用
+  function roadshowAssignTracks(dayItems) {
+    const blocks = (dayItems || []).map(item => {
       const start = roadshowMinutes(item.event_time);
       const end = item.end_time ? roadshowMinutes(item.end_time) : start + ROADSHOW_DEFAULT_DURATION;
       return { item, start, end: Math.max(end, start + ROADSHOW_SLOT_MIN) };
@@ -977,6 +988,7 @@
         clusters.push({ blocks: [block], end: block.end });
       }
     });
+    let tracks = 1;
     clusters.forEach(cluster => {
       const trackEnds = [];
       cluster.blocks.forEach(block => {
@@ -986,9 +998,16 @@
         block.track = track;
       });
       // 轨道数须在簇内全部分配完后统一回写：先到的事件分配时轨道数可能尚未增长
-      const tracks = trackEnds.length;
-      cluster.blocks.forEach(block => { block.tracks = tracks; });
+      const clusterTracks = trackEnds.length;
+      cluster.blocks.forEach(block => { block.tracks = clusterTracks; });
+      tracks = Math.max(tracks, clusterTracks);
     });
+    return { blocks, tracks };
+  }
+
+  function roadshowEventBlocksHTML(dayItems) {
+    const blocks = roadshowAssignTracks(dayItems).blocks;
+    if (!blocks.length) return '';
     const rowH = roadshowRowHeight();
     return blocks.map(block => {
       const top = ((Math.max(block.start, ROADSHOW_CAL_START) - ROADSHOW_CAL_START) / ROADSHOW_SLOT_MIN) * rowH;

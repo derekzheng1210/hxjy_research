@@ -922,6 +922,8 @@ input::placeholder, textarea::placeholder { color: var(--text-faint); }
 /* 左上角格子内嵌的加宽/还原小开关：并排路演较多时加宽日历查看 */
 .roadshow-cal-widen-btn { padding: 1px 8px; color: var(--text-muted); font-size: 10.5px; font-weight: 600; background: var(--surface); border: 1px solid var(--border-strong); border-radius: 9px; cursor: pointer; }
 .roadshow-cal-widen-btn:hover { color: var(--primary); border-color: var(--primary); background: var(--primary-soft); }
+.roadshow-cal-widen-btn:disabled { opacity: .45; cursor: default; }
+.roadshow-cal-widen-btn:disabled:hover { color: var(--text-muted); border-color: var(--border-strong); background: var(--surface); }
 .roadshow-cal-day { padding: 7px 4px; text-align: center; border-left: 1px solid var(--border); }
 .roadshow-cal-day b { display: block; font-size: 13px; }
 .roadshow-cal-day span { display: inline-block; margin-top: 2px; color: var(--text-faint); font-size: 11px; }
