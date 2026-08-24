@@ -4,17 +4,21 @@
 import hashlib
 import io
 import json
+import math
 import os
 import re
 import secrets
 import shutil
+import struct
 import subprocess
 import tempfile
 import threading
 import time
+import unicodedata
 import urllib.request
 import urllib.error
 import uuid
+from collections import Counter
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
@@ -137,6 +141,12 @@ DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 DEEPSEEK_MODEL = "deepseek-chat"
 LLM_TIMEOUT = 90
 LLM_MAX_TEXT_CHARS = 6000  # 发送给 LLM 的文档文本最大长度
+KNOWLEDGE_INDEX_TEXT_CHARS = 60000
+KNOWLEDGE_VECTOR_DIM = 512
+KNOWLEDGE_VECTOR_VERSION = "local-char-ngram-v1-d512"
+KNOWLEDGE_CHUNK_CHARS = 1800
+KNOWLEDGE_CHUNK_OVERLAP = 240
+_knowledge_index_lock = threading.Lock()
 
 
 # --------------------------------------------------------------------------- #
@@ -504,8 +514,8 @@ def stored_filename(report_id, original_name):
 # --------------------------------------------------------------------------- #
 # 文档文本抽取 & DeepSeek 智能补全
 # --------------------------------------------------------------------------- #
-def _extract_text(file_path):
-    """从 PDF/DOCX/PPTX/XLSX 中抽取纯文本，截断到 LLM_MAX_TEXT_CHARS。
+def _extract_text(file_path, max_chars=LLM_MAX_TEXT_CHARS):
+    """从 PDF/DOCX/PPTX/XLSX 中抽取纯文本，截断到 max_chars。
     抽取失败时返回空串，由调用方用文件名兜底。
     """
     ext = os.path.splitext(file_path)[1].lower()
@@ -516,7 +526,7 @@ def _extract_text(file_path):
             with pymupdf.open(file_path) as doc:
                 for page in doc:
                     parts.append(page.get_text("text"))
-                    if sum(len(p) for p in parts) > LLM_MAX_TEXT_CHARS:
+                    if sum(len(p) for p in parts) > max_chars:
                         break
             text = "\n".join(parts)
         elif ext == ".docx":
@@ -531,7 +541,7 @@ def _extract_text(file_path):
                 for shape in slide.shapes:
                     if shape.has_text_frame:
                         parts.append(shape.text_frame.text)
-                if sum(len(p) for p in parts) > LLM_MAX_TEXT_CHARS:
+                if sum(len(p) for p in parts) > max_chars:
                     break
             text = "\n".join(parts)
         elif ext in (".xlsx", ".xls"):
@@ -543,9 +553,9 @@ def _extract_text(file_path):
                     cells = [str(c) for c in row if c is not None]
                     if cells:
                         parts.append("\t".join(cells))
-                    if sum(len(p) for p in parts) > LLM_MAX_TEXT_CHARS:
+                    if sum(len(p) for p in parts) > max_chars:
                         break
-                if sum(len(p) for p in parts) > LLM_MAX_TEXT_CHARS:
+                if sum(len(p) for p in parts) > max_chars:
                     break
             wb.close()
             text = "\n".join(parts)
@@ -553,7 +563,7 @@ def _extract_text(file_path):
             text = ""
     except Exception:
         text = ""
-    return text[:LLM_MAX_TEXT_CHARS]
+    return text[:max_chars]
 
 
 def _call_llm(prompt, system=None, max_tokens=None, json_mode=True):
@@ -766,7 +776,7 @@ def _parse_knowledge_filters(data):
 
     时间范围为单选（1m/3m/all/custom + 自定义起止日期）；
     来源/种类/主题/人员支持多选，报告属性命中任一即可，
-    空列表表示该维度不过滤。整体缺省为“过去一个月的内部报告”。
+    空列表表示该维度不过滤。整体缺省为“过去一个月的全部报告”。
     """
     data = data or {}
 
@@ -804,12 +814,12 @@ def _parse_knowledge_filters(data):
     if isinstance(raw_types, str):
         raw_types = [raw_types]
     if raw_types is None:
-        report_types = ["internal"]
+        report_types = []
     elif isinstance(raw_types, list):
         report_types = [str(item).strip() for item in raw_types
                         if str(item).strip() in KNOWLEDGE_REPORT_TYPES][:KNOWLEDGE_FILTER_MAX_VALUES]
     else:
-        report_types = ["internal"]
+        report_types = []
 
     raw_authors = data.get("authors")
     if isinstance(raw_authors, str):
@@ -867,11 +877,175 @@ def _knowledge_no_match_answer(filters=None):
     return "未找到相关报告"
 
 
-def _iter_knowledge_candidates(question, limit=6, filters=None):
-    """与 _knowledge_candidates 相同的检索逻辑，但每解析完一份报告 yield (已解析, 总数) 进度。
+KNOWLEDGE_SYNONYM_GROUPS = (
+    ("城投", "平台公司", "地方政府融资平台"),
+    ("地产", "房地产", "房企"),
+    ("资金面", "流动性", "银行间资金"),
+    ("债市", "债券市场", "固定收益市场"),
+    ("利差", "信用利差", "spread"),
+    ("收益率", "到期收益率", "yield"),
+    ("二永债", "二级资本债", "永续债"),
+)
 
-    全文抽取是本地检索的主要耗时，流式接口借此逐份推送进度；
-    迭代结束后通过 StopIteration.value 返回候选列表。
+
+def _knowledge_metadata(report):
+    """Build a stable searchable metadata block shared by indexing and ranking."""
+    theme_key = str(report.get("theme", ""))
+    category_key = str(report.get("category", ""))
+    return "\n".join(filter(None, [
+        str(report.get("title", "")), str(report.get("summary", "")),
+        str(report.get("recommendation", "")), " ".join(report.get("tags") or []),
+        str(report.get("author", "")), str(report.get("sourceAuthor", "")),
+        str(report.get("sourceInstitution", "")), str(report.get("org", "")),
+        theme_key, REPORT_THEME_LABELS.get(theme_key, ""),
+        category_key, REPORT_CATEGORY_LABELS.get(category_key, ""),
+    ]))
+
+
+def _knowledge_fingerprint(report):
+    """Fingerprint searchable metadata plus immutable upload file state."""
+    path = report_file_path(report)
+    file_state = None
+    if path:
+        stat = os.stat(path)
+        file_state = [stat.st_size, stat.st_mtime_ns]
+    payload = {
+        "version": KNOWLEDGE_VECTOR_VERSION,
+        "metadata": _knowledge_metadata(report),
+        "file": file_state,
+    }
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
+
+def _knowledge_vector_tokens(value):
+    """Tokenize Chinese text into character n-grams and ASCII terms."""
+    text = unicodedata.normalize("NFKC", str(value or "")).lower()
+    tokens = re.findall(r"[a-z][a-z0-9_+.-]{1,}|\d+(?:\.\d+)?", text)
+    for run in re.findall(r"[\u3400-\u9fff]+", text):
+        for size in (2, 3, 4):
+            tokens.extend(run[index:index + size] for index in range(len(run) - size + 1))
+    for group in KNOWLEDGE_SYNONYM_GROUPS:
+        if any(term in text for term in group):
+            tokens.extend(group)
+    return tokens
+
+
+def _knowledge_vector(value):
+    """Create a deterministic, normalized feature-hashed vector without network calls."""
+    counts = Counter(_knowledge_vector_tokens(value))
+    vector = [0.0] * KNOWLEDGE_VECTOR_DIM
+    for token, count in counts.items():
+        digest = hashlib.blake2b(token.encode("utf-8"), digest_size=8,
+                                 person=b"ikb-vector-v1").digest()
+        hashed = int.from_bytes(digest, "little")
+        index = hashed % KNOWLEDGE_VECTOR_DIM
+        sign = -1.0 if hashed & (1 << 63) else 1.0
+        length_weight = 1.0 + min(max(len(token) - 2, 0), 3) * 0.12
+        vector[index] += sign * (1.0 + math.log(count)) * length_weight
+    norm = math.sqrt(sum(item * item for item in vector))
+    if norm:
+        vector = [item / norm for item in vector]
+    return vector
+
+
+def _knowledge_pack_vector(vector):
+    return struct.pack(f"<{KNOWLEDGE_VECTOR_DIM}f", *vector)
+
+
+def _knowledge_unpack_vector(payload):
+    expected = KNOWLEDGE_VECTOR_DIM * 4
+    if not payload or len(payload) != expected:
+        return None
+    return struct.unpack(f"<{KNOWLEDGE_VECTOR_DIM}f", payload)
+
+
+def _knowledge_text_chunks(text):
+    value = re.sub(r"\n{3,}", "\n\n", str(text or "")).strip()
+    if not value:
+        return []
+    chunks = []
+    start = 0
+    while start < len(value):
+        end = min(start + KNOWLEDGE_CHUNK_CHARS, len(value))
+        if end < len(value):
+            boundary = max(value.rfind("\n", start + KNOWLEDGE_CHUNK_CHARS // 2, end),
+                           value.rfind("。", start + KNOWLEDGE_CHUNK_CHARS // 2, end))
+            if boundary > start:
+                end = boundary + 1
+        chunks.append(value[start:end].strip())
+        if end >= len(value):
+            break
+        start = max(end - KNOWLEDGE_CHUNK_OVERLAP, start + 1)
+    return [item for item in chunks if item]
+
+
+def _index_knowledge_report(report, force=False):
+    """Extract, chunk and persist one report; return True when rebuilt."""
+    report_id = report["id"]
+    fingerprint = _knowledge_fingerprint(report)
+    current = store.knowledge_index_fingerprints([report_id]).get(report_id)
+    if (not force and current and current.get("fingerprint") == fingerprint and
+            current.get("vector_version") == KNOWLEDGE_VECTOR_VERSION):
+        return False
+    with _knowledge_index_lock:
+        current = store.knowledge_index_fingerprints([report_id]).get(report_id)
+        if (not force and current and current.get("fingerprint") == fingerprint and
+                current.get("vector_version") == KNOWLEDGE_VECTOR_VERSION):
+            return False
+        metadata = _knowledge_metadata(report)
+        path = report_file_path(report)
+        body = _extract_text(path, max_chars=KNOWLEDGE_INDEX_TEXT_CHARS) if path else ""
+        chunks = _knowledge_text_chunks(body) or [metadata or report.get("title", "未命名报告")]
+        store.replace_knowledge_chunks(
+            report_id, fingerprint, KNOWLEDGE_VECTOR_VERSION,
+            [{"content": chunk, "vector": _knowledge_pack_vector(
+                _knowledge_vector(metadata + "\n" + chunk))} for chunk in chunks],
+        )
+    return True
+
+
+def rebuild_knowledge_vector_index(force=False, progress=None):
+    """Operational backfill entry point used by the isolated test and deployment script."""
+    reports = store.reports()
+    rebuilt = 0
+    for index, report in enumerate(reports, 1):
+        rebuilt += int(_index_knowledge_report(report, force=force))
+        if progress:
+            progress(index, len(reports), report)
+    return {**store.knowledge_index_stats(), "rebuilt": rebuilt, "total": len(reports),
+            "vectorVersion": KNOWLEDGE_VECTOR_VERSION}
+
+
+def _knowledge_lexical_score(query, terms, subterms, report, content):
+    title = str(report.get("title", ""))
+    metadata_compact = re.sub(r"\s+", "", _knowledge_metadata(report)).lower()
+    title_compact = re.sub(r"\s+", "", title).lower()
+    content_compact = re.sub(r"\s+", "", content).lower()
+    full_compact = metadata_compact + content_compact
+    score = 0
+    if query and len(query) >= 3 and query in full_compact:
+        score += 18
+    for term in terms:
+        if term in title_compact:
+            score += 14
+        elif term in metadata_compact:
+            score += 6
+        if term in content_compact:
+            score += 4
+    for sub in subterms:
+        if sub in metadata_compact:
+            score += max(6, min(len(sub) * 2, 8))
+        elif sub in content_compact:
+            score += max(3, min(len(sub), 4))
+    return score
+
+
+def _iter_knowledge_candidates(question, limit=6, filters=None):
+    """Hybrid vector/keyword retrieval with persistent chunk embeddings.
+
+    Each report is extracted only when its source fingerprint changes. Subsequent searches
+    rank persisted vectors and therefore avoid reparsing every PDF/Office file.
     filters：可选的范围筛选（_parse_knowledge_filters 的结果），检索前先过滤报告。
     """
     reports = [report for report in store.reports()
@@ -887,55 +1061,55 @@ def _iter_knowledge_candidates(question, limit=6, filters=None):
         for report in reports
     )
     query, terms, subterms = _knowledge_query_terms(question, metadata_corpus)
-    ranked = []
+    reports_by_id = {report["id"]: report for report in reports}
+    indexed = store.knowledge_index_fingerprints(reports_by_id)
     for idx, report in enumerate(reports, 1):
-        title = str(report.get("title", ""))
-        summary = str(report.get("summary", ""))
-        recommendation = str(report.get("recommendation", ""))
-        tags = " ".join(report.get("tags") or [])
-        theme_key = str(report.get("theme", ""))
-        category_key = str(report.get("category", ""))
-        metadata = " ".join([title, summary, recommendation, tags, str(report.get("author", "")),
-                             theme_key, REPORT_THEME_LABELS.get(theme_key, ""),
-                             category_key, REPORT_CATEGORY_LABELS.get(category_key, "")])
-        path = report_file_path(report)
-        text = _extract_text(path) if path else ""
+        current = indexed.get(report["id"])
+        fingerprint = _knowledge_fingerprint(report)
+        if (not current or current.get("fingerprint") != fingerprint or
+                current.get("vector_version") != KNOWLEDGE_VECTOR_VERSION):
+            _index_knowledge_report(report)
         yield idx, len(reports)
-        fallback = "\n".join(filter(None, [recommendation, summary]))
-        content = text.strip() or fallback
-        metadata_compact = re.sub(r"\s+", "", metadata).lower()
-        content_compact = re.sub(r"\s+", "", content).lower()
-        full_compact = metadata_compact + content_compact
+    if not reports:
+        return []
 
-        score = 0
-        if query and len(query) >= 3 and query in full_compact:
-            score += 18
-        for term in terms:
-            if term in re.sub(r"\s+", "", title).lower():
-                score += 14
-            elif term in metadata_compact:
-                score += 6
-            if term in content_compact:
-                score += 4
-        for sub in subterms:
-            if sub in metadata_compact:
-                # 元信息中的 2~4 字主题词是高置信命中，例如“权益”“信用”“利差”。
-                score += max(6, min(len(sub) * 2, 8))
-            elif sub in content_compact:
-                score += max(3, min(len(sub), 4))
-        # 至少需要一个明确主题词/短语命中，避免仅凭“市场、表现”等泛词召回报告。
-        if score < 6:
+    query_vector = _knowledge_vector(question)
+    ranked_by_report = {}
+    title_affinity = {}
+    for report_id, report in reports_by_id.items():
+        title = re.sub(r"\s+", "", str(report.get("title", ""))).lower()
+        title_vector = _knowledge_vector(title)
+        title_cosine = sum(left * right for left, right in zip(query_vector, title_vector))
+        title_hits = sum((len(term) - 1) ** 2 for term in subterms if term in title)
+        title_affinity[report_id] = max(title_cosine, 0) * 55.0 + min(title_hits * 1.8, 45.0)
+    for row in store.knowledge_chunks(reports_by_id):
+        vector = _knowledge_unpack_vector(row["vector"])
+        if vector is None:
             continue
-
-        published_at = str(report.get("reportDate") or report.get("uploadedAt", ""))
-        ranked.append({
-            "score": score,
-            "published_at": published_at,
-            "report": report,
-            "content": content[:5500],
+        report = reports_by_id.get(row["report_id"])
+        if not report:
+            continue
+        content = row["content"]
+        cosine = sum(left * right for left, right in zip(query_vector, vector))
+        lexical = _knowledge_lexical_score(query, terms, subterms, report, content)
+        # Hybrid score keeps exact title/metadata matches decisive while vector similarity
+        # recalls wording variants and ranks the best source passage.
+        hybrid = (cosine * 100.0 + min(lexical, 40) * 1.5 +
+                  title_affinity.get(report["id"], 0.0))
+        if lexical < 6 and cosine < 0.115:
+            continue
+        entry = ranked_by_report.setdefault(report["id"], {
+            "score": float("-inf"), "vector_score": cosine, "lexical_score": lexical,
+            "published_at": str(report.get("reportDate") or report.get("uploadedAt", "")),
+            "report": report, "chunks": [],
         })
+        entry["score"] = max(entry["score"], hybrid)
+        entry["vector_score"] = max(entry["vector_score"], cosine)
+        entry["lexical_score"] = max(entry["lexical_score"], lexical)
+        entry["chunks"].append((hybrid, content))
 
-    ranked.sort(key=lambda item: (item["score"], item["published_at"]), reverse=True)
+    ranked = sorted(ranked_by_report.values(),
+                    key=lambda item: (item["score"], item["published_at"]), reverse=True)
     # 同标题报告只保留一份，优先保留相关度更高、发布时间更晚的版本。
     unique = []
     seen_titles = set()
@@ -952,6 +1126,13 @@ def _iter_knowledge_candidates(question, limit=6, filters=None):
     for item in unique:
         report = item["report"]
         published_at = item["published_at"]
+        passages = []
+        for _, passage in sorted(item["chunks"], reverse=True):
+            if passage in passages:
+                continue
+            passages.append(passage)
+            if sum(len(part) for part in passages) >= 5200 or len(passages) >= 3:
+                break
         candidates.append({
             "id": report["id"],
             "title": report.get("title", "未命名报告"),
@@ -959,7 +1140,7 @@ def _iter_knowledge_candidates(question, limit=6, filters=None):
             "published_at": published_at[:10] if published_at else "原文未提及",
             "theme": REPORT_THEME_LABELS.get(report.get("theme"), report.get("theme", "原文未提及")),
             "category": REPORT_CATEGORY_LABELS.get(report.get("category"), report.get("category", "原文未提及")),
-            "content": item["content"],
+            "content": "\n\n".join(passages)[:5500],
         })
     return candidates
 
@@ -976,49 +1157,115 @@ def _knowledge_candidates(question, limit=6, filters=None):
 
 KNOWLEDGE_SOURCE_MARKER = "===SOURCE_IDS==="
 
+KNOWLEDGE_INTENT_RETRIEVAL = "report_retrieval"
+KNOWLEDGE_INTENT_GENERAL = "general_work"
 
-def _knowledge_qa_messages(question, candidates):
+_KNOWLEDGE_GENERAL_INTENT_PATTERNS = (
+    # 数量、占比、分布等统计任务，需要跨报告汇总而不是逐篇摘要。
+    r"统计|计数|多少篇|数量|占比|比例|分布|频次|排名|排行|均值|平均|中位数",
+    # 多报告综合与观点关系分析。
+    r"比较|对比|异同|共同点|共识|分歧|一致性|交叉验证|观点演变|趋势演变|横向|纵向",
+    r"汇总|归纳|分类|聚类|矩阵|整体观点|综合观点|全部报告|所有报告|多份报告|各份报告|不同报告",
+    # 基于材料继续完成工作成果或发散任务。
+    r"撰写|起草|拟一份|写一份|生成.*(?:提纲|框架|清单|表格|方案)|制作.*(?:提纲|框架|清单|表格)",
+    r"头脑风暴|发散|启示|研究方向|下一步|情景推演|策略框架|行动建议|工作建议",
+)
+
+
+def _knowledge_intent(question):
+    """本地判断知识问答意图，避免为路由提示词额外消耗一次模型调用。
+
+    统计、跨报告综合、成果撰写和发散任务进入通用框架；其余事实型问题、
+    报告查找和核心观点查询继续使用原有报告检索框架。无法明确判断时回退
+    到原有框架，以保持既有问答行为稳定。
+    """
+    text = re.sub(r"\s+", "", str(question or "")).lower()
+    # “归纳这篇报告的核心观点”仍属于原有核心观点查询；只有同时出现统计、
+    # 跨报告比较或成果制作等目标时，才进入通用工作框架。
+    if re.search(r"核心观点|主要观点|核心结论|主要结论", text):
+        advanced_core_task = re.search(
+            r"统计|计数|多少篇|数量|占比|分布|频次|排名|比较|对比|异同|共同点|共识|分歧|"
+            r"一致性|交叉验证|演变|全部报告|所有报告|多份报告|各份报告|不同报告|矩阵|聚类|"
+            r"撰写|起草|拟一份|写一份|生成|制作|头脑风暴|发散|推演|建议",
+            text,
+        )
+        if not advanced_core_task:
+            return KNOWLEDGE_INTENT_RETRIEVAL
+    if any(re.search(pattern, text) for pattern in _KNOWLEDGE_GENERAL_INTENT_PATTERNS):
+        return KNOWLEDGE_INTENT_GENERAL
+    return KNOWLEDGE_INTENT_RETRIEVAL
+
+
+def _knowledge_qa_messages(question, candidates, intent=None):
     """构建知识问答的 system 与用户 prompt，供流式与非流式两条路径共用。
 
     输出格式为“答案正文 + 单独一行的标记 + JSON 数组”，使流式接口可以
     把标记之前的正文实时推送给前端，标记之后只留机器可读的引用 ID。
     """
+    intent = intent or _knowledge_intent(question)
     ordered_candidates = sorted(candidates, key=lambda item: item["published_at"], reverse=True)
+    content_limit = 3200 if intent == KNOWLEDGE_INTENT_GENERAL else None
     material = "\n\n".join(
         f"[REPORT_ID:{item['id']}]\n"
         f"报告完整标题：{item['title']}\n"
         f"报告时间：{item['published_at']}\n"
         f"报告元数据方向：{item['theme']} / {item['category']}\n"
         f"报告作者：{item['author'] or '原文未提及'}\n"
-        f"报告正文：\n{item['content']}"
+        f"报告正文：\n{item['content'][:content_limit] if content_limit else item['content']}"
         for item in ordered_candidates
     )
-    system = (
-        "你是一个专业的知识库报告检索与分析助手。你的核心任务是根据用户问题，"
-        "从给定的【参考上下文】中精准筛选相关报告，并按指定结构输出摘要。\n\n"
-        "严格规则：\n"
-        "1. 仅使用【参考上下文】回答，禁止使用外部知识、常识补全或编造；上下文没有实质相关报告时，answer 必须严格为“未找到相关报告”。\n"
-        "2. 客观中立，忠实还原报告原文观点，不添加个人评价、推测或总结性升华。\n"
-        "3. 每篇报告必须包含发布时间、主要方向、主要观点；上下文缺失时对应字段写“原文未提及”。\n"
-        "4. 合并重复报告，按发布时间倒序排列；只引用实际入选且支持答案的报告 ID。\n"
-        "5. 逐一判断报告与问题是否实质相关，剔除仅关键词匹配但内容无关的报告。\n"
-        "6. 每条主要观点精炼至 100 字以内，最多输出 3 条；不要输出上下文没有明确支持的数字、因果关系或结论。\n\n"
-        "answer 必须严格使用以下模板，不要添加任何开场白、结束语或模板外内容：\n"
-        "共检索到 {N} 篇相关报告：\n\n"
-        "### 1. 《{报告完整标题}》\n"
-        "- **发布时间**：{YYYY-MM-DD / YYYY年MM月}\n"
-        "- **主要方向**：{用1句话概括报告研究的核心领域或主题}\n"
-        "- **主要观点**：\n"
-        "  - {核心观点1，精炼至100字以内}\n"
-        "  - {核心观点2，精炼至100字以内}\n"
-        "  - {核心观点3（如有），精炼至100字以内}\n\n"
-        "依此类推。\n\n"
-        "输出格式：先直接输出 answer 正文（严格按上述模板，不要用引号或代码块包裹），"
-        f"然后另起一行只输出 {KNOWLEDGE_SOURCE_MARKER}，"
-        "紧接着再起一行输出一个 JSON 数组，数组内只包含实际入选且支持答案的报告 ID，"
-        "例如 [\"r001\",\"r002\"]；没有引用任何报告时输出 []。除此之外不要输出任何内容。"
-    )
-    prompt = f"用户问题：{question}\n\n【参考上下文】\n{material}"
+    if intent == KNOWLEDGE_INTENT_GENERAL:
+        system = (
+            "你是一个专业的内部研究知识工作助手。你的任务不是机械罗列报告，而是仅依据给定的"
+            "【参考上下文】，完成用户要求的统计、归纳、比较、组织材料、形成框架或其他研究工作。\n\n"
+            "严格规则：\n"
+            "1. 仅使用【参考上下文】中的事实和观点，禁止引入外部资料或编造；可以进行必要的归纳推理，"
+            "但必须明确区分“报告原文观点”和“基于多份报告的综合判断”。\n"
+            "2. 先识别用户真正要完成的工作，再选择最合适的结构；可使用小标题、项目符号、编号或表格，"
+            "不强制套用逐篇报告摘要模板。\n"
+            "3. 统计任务必须先说明统计口径、样本范围和样本数量，所有数字都须能由上下文逐项核验；"
+            "本次上下文是相关报告样本时，不得声称统计覆盖整个报告库。\n"
+            "4. 比较或归纳任务应优先呈现共识、分歧、变化和证据，并注明支撑结论的报告标题或时间。\n"
+            "5. 提纲、框架、建议或发散任务可以在报告观点之上继续组织，但不得把延伸建议伪装成报告原文结论。\n"
+            "6. 合并重复信息，保持专业、简洁、可直接用于工作；上下文不足以完成任务时，明确指出缺口。\n"
+            "7. 只引用实际支持答案的报告 ID，不要引用仅关键词相似但没有提供证据的报告。\n\n"
+            "输出格式：先直接输出适合该任务的中文答案正文，不要添加无意义的开场白或结束语；"
+            f"然后另起一行只输出 {KNOWLEDGE_SOURCE_MARKER}，"
+            "紧接着再起一行输出一个 JSON 数组，数组内只包含实际支持答案的报告 ID，"
+            "例如 [\"r001\",\"r002\"]；没有引用任何报告时输出 []。除此之外不要输出任何内容。"
+        )
+        task_hint = (
+            f"系统已将该问题识别为综合工作任务。本次提供 {len(ordered_candidates)} 篇相关报告样本，"
+            "请根据用户目标灵活组织答案。"
+        )
+    else:
+        system = (
+            "你是一个专业的知识库报告检索与分析助手。你的核心任务是根据用户问题，"
+            "从给定的【参考上下文】中精准筛选相关报告，并按指定结构输出摘要。\n\n"
+            "严格规则：\n"
+            "1. 仅使用【参考上下文】回答，禁止使用外部知识、常识补全或编造；上下文没有实质相关报告时，answer 必须严格为“未找到相关报告”。\n"
+            "2. 客观中立，忠实还原报告原文观点，不添加个人评价、推测或总结性升华。\n"
+            "3. 每篇报告必须包含发布时间、主要方向、主要观点；上下文缺失时对应字段写“原文未提及”。\n"
+            "4. 合并重复报告，按发布时间倒序排列；只引用实际入选且支持答案的报告 ID。\n"
+            "5. 逐一判断报告与问题是否实质相关，剔除仅关键词匹配但内容无关的报告。\n"
+            "6. 每条主要观点精炼至 100 字以内，最多输出 3 条；不要输出上下文没有明确支持的数字、因果关系或结论。\n\n"
+            "answer 必须严格使用以下模板，不要添加任何开场白、结束语或模板外内容：\n"
+            "共检索到 {N} 篇相关报告：\n\n"
+            "### 1. 《{报告完整标题}》\n"
+            "- **发布时间**：{YYYY-MM-DD / YYYY年MM月}\n"
+            "- **主要方向**：{用1句话概括报告研究的核心领域或主题}\n"
+            "- **主要观点**：\n"
+            "  - {核心观点1，精炼至100字以内}\n"
+            "  - {核心观点2，精炼至100字以内}\n"
+            "  - {核心观点3（如有），精炼至100字以内}\n\n"
+            "依此类推。\n\n"
+            "输出格式：先直接输出 answer 正文（严格按上述模板，不要用引号或代码块包裹），"
+            f"然后另起一行只输出 {KNOWLEDGE_SOURCE_MARKER}，"
+            "紧接着再起一行输出一个 JSON 数组，数组内只包含实际入选且支持答案的报告 ID，"
+            "例如 [\"r001\",\"r002\"]；没有引用任何报告时输出 []。除此之外不要输出任何内容。"
+        )
+        task_hint = "系统已将该问题识别为报告检索或核心观点查询，请严格筛选相关报告。"
+    prompt = f"{task_hint}\n\n用户问题：{question}\n\n【参考上下文】\n{material}"
     return system, prompt
 
 
@@ -1072,11 +1319,14 @@ def _parse_knowledge_answer(raw, candidates):
 
 
 def _answer_knowledge_question(question, filters=None):
-    candidates = _knowledge_candidates(question, filters=filters)
+    intent = _knowledge_intent(question)
+    candidate_limit = 12 if intent == KNOWLEDGE_INTENT_GENERAL else 6
+    candidates = _knowledge_candidates(question, limit=candidate_limit, filters=filters)
     if not candidates:
         return {"answer": _knowledge_no_match_answer(filters), "sources": []}
-    system, prompt = _knowledge_qa_messages(question, candidates)
-    raw = _call_llm(prompt, system=system, max_tokens=2800, json_mode=False)
+    system, prompt = _knowledge_qa_messages(question, candidates, intent=intent)
+    max_tokens = 3600 if intent == KNOWLEDGE_INTENT_GENERAL else 2800
+    raw = _call_llm(prompt, system=system, max_tokens=max_tokens, json_mode=False)
     return _parse_knowledge_answer(raw, candidates)
 
 
@@ -1339,6 +1589,12 @@ def api_reports_upload(report_scope=None):
             "roadshowScheduleId": roadshow_schedule_id,
         }
         store.add_report(report)
+        try:
+            # 新报告在上传完成时立即进入本地向量索引，后续检索无需再次解析文件。
+            _index_knowledge_report(report)
+        except Exception:
+            # 索引可由运维脚本幂等补建，不能因单个文档抽取异常阻断上传。
+            current_app.logger.exception("报告向量化失败，将在下次检索时重试：%s", report_id)
         created.append(report)
 
     if not created:
@@ -2099,15 +2355,17 @@ def api_knowledge_search_stream():
 
     def generate():
         # 阶段一：本地检索。全文抽取是本地主要耗时，逐份报告推送解析进度。
+        intent = _knowledge_intent(question)
+        candidate_limit = 12 if intent == KNOWLEDGE_INTENT_GENERAL else 6
         candidates = []
-        retrieval = _iter_knowledge_candidates(question, filters=filters)
+        retrieval = _iter_knowledge_candidates(question, limit=candidate_limit, filters=filters)
         while True:
             try:
                 done_count, total = next(retrieval)
             except StopIteration as stop:
                 candidates = stop.value or []
                 break
-            yield event({"type": "stage", "text": f"正在解析报告库（{done_count}/{total}）…"})
+            yield event({"type": "stage", "text": f"正在检索向量索引（{done_count}/{total}）…"})
         if not candidates:
             answer = _knowledge_no_match_answer(filters)
             store.add_qa_usage(user_id, day, question)
@@ -2115,15 +2373,17 @@ def api_knowledge_search_stream():
             yield event({"type": "done", "answer": answer, "sources": [],
                          "limit": limit, "used": used + 1, "remaining": remaining})
             return
-        yield event({"type": "stage", "text": f"已定位 {len(candidates)} 篇相关报告，正在生成回答…"})
-        system, prompt = _knowledge_qa_messages(question, candidates)
+        task_name = "综合分析" if intent == KNOWLEDGE_INTENT_GENERAL else "报告检索"
+        yield event({"type": "stage", "text": f"已识别为{task_name}任务，正在基于 {len(candidates)} 篇相关报告生成回答…"})
+        system, prompt = _knowledge_qa_messages(question, candidates, intent=intent)
+        max_tokens = 3600 if intent == KNOWLEDGE_INTENT_GENERAL else 2800
         # 阶段二：流式生成。标记可能跨 chunk 分裂，扣留缓冲保证
         # ===SOURCE_IDS=== 之后的内容不会混入推送给前端的答案正文。
         raw = ""
         emitted = 0
         got_delta = False
         try:
-            for delta in _stream_llm(prompt, system=system, max_tokens=2800):
+            for delta in _stream_llm(prompt, system=system, max_tokens=max_tokens):
                 got_delta = True
                 raw += delta
                 if KNOWLEDGE_SOURCE_MARKER in raw:

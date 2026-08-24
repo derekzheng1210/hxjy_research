@@ -13,7 +13,11 @@ os.environ["SECRET_KEY"] = "internal-kb-test-secret"
 os.environ["SITE_PASSWORD"] = "portal-test-password"
 
 from app import app  # noqa: E402
-from internal_knowledge_base.routes import PREVIEW_CACHE_DIR, store  # noqa: E402
+from internal_knowledge_base.routes import (  # noqa: E402
+    KNOWLEDGE_INTENT_GENERAL, KNOWLEDGE_INTENT_RETRIEVAL, KNOWLEDGE_SOURCE_MARKER,
+    PREVIEW_CACHE_DIR, _index_knowledge_report, _knowledge_candidates, _knowledge_intent,
+    _knowledge_qa_messages, _parse_knowledge_filters, _report_matches_knowledge_filters, store,
+)
 
 
 class InternalKnowledgeBaseTest(unittest.TestCase):
@@ -120,6 +124,84 @@ class InternalKnowledgeBaseTest(unittest.TestCase):
         self.assertEqual(deleted.status_code, 200)
         self.assertFalse(cache_path.exists())
         self.assertEqual(store.pdf_caches(), [])
+
+    def test_knowledge_search_defaults_to_all_report_types(self):
+        filters = _parse_knowledge_filters({"period": "all"})
+        self.assertEqual(filters["report_types"], [])
+        self.assertTrue(_report_matches_knowledge_filters(
+            {"reportType": "external", "reportDate": "2026-08-20"}, filters
+        ))
+        self.assertTrue(_report_matches_knowledge_filters(
+            {"reportType": "roadshow", "reportDate": "2026-08-20"}, filters
+        ))
+
+    def test_knowledge_intent_routes_report_lookup_and_general_work(self):
+        retrieval_questions = (
+            "有哪些报告讨论了城投利差？",
+            "请归纳这篇报告的核心观点",
+            "信用利差近期有什么变化？",
+        )
+        general_questions = (
+            "统计最近一个月报告中看多债市的观点数量和占比",
+            "比较不同报告核心观点的共同点和分歧",
+            "基于这些报告拟一份路演提纲",
+            "汇总所有报告的观点并按主题分类",
+        )
+        for question in retrieval_questions:
+            self.assertEqual(_knowledge_intent(question), KNOWLEDGE_INTENT_RETRIEVAL)
+        for question in general_questions:
+            self.assertEqual(_knowledge_intent(question), KNOWLEDGE_INTENT_GENERAL)
+
+    def test_knowledge_prompt_switches_between_two_frameworks(self):
+        candidates = [{
+            "id": "r001", "title": "信用利差周度观察", "author": "研究员甲",
+            "published_at": "2026-08-20", "theme": "信用", "category": "周报",
+            "content": "本周信用利差整体收窄，短端表现更为明显。",
+        }]
+        retrieval_system, retrieval_prompt = _knowledge_qa_messages(
+            "这篇报告的核心观点是什么？", candidates,
+        )
+        general_system, general_prompt = _knowledge_qa_messages(
+            "统计并比较这批报告的观点", candidates,
+        )
+        self.assertIn("严格使用以下模板", retrieval_system)
+        self.assertIn("不强制套用逐篇报告摘要模板", general_system)
+        self.assertIn("统计口径、样本范围和样本数量", general_system)
+        self.assertIn(KNOWLEDGE_SOURCE_MARKER, retrieval_system)
+        self.assertIn(KNOWLEDGE_SOURCE_MARKER, general_system)
+        self.assertIn("识别为报告检索或核心观点查询", retrieval_prompt)
+        self.assertIn("识别为综合工作任务", general_prompt)
+        self.assertIn("[REPORT_ID:r001]", retrieval_prompt)
+        self.assertIn("[REPORT_ID:r001]", general_prompt)
+
+    def test_persistent_vector_index_recalls_relevant_external_report(self):
+        relevant = {
+            "id": "report-vector-relevant", "title": "城投平台流动性跟踪",
+            "summary": "地方政府融资平台再融资改善，信用利差出现收窄。",
+            "tags": ["城投", "资金面"], "author": "研究员甲", "authorId": "member",
+            "sourceAuthor": "外部作者", "sourceInstitution": "研究机构",
+            "reportType": "external", "category": "other", "theme": "credit",
+            "reportDate": "2026-08-20", "uploadedAt": "2026-08-20T10:00:00+08:00",
+            "fileStored": False, "fileUrl": "",
+        }
+        unrelated = {
+            **relevant, "id": "report-vector-unrelated", "title": "消费行业盈利观察",
+            "summary": "食品饮料企业盈利增速与渠道库存分析。", "tags": ["消费"],
+        }
+        store.add_report(relevant)
+        store.add_report(unrelated)
+        self.assertTrue(_index_knowledge_report(relevant))
+        self.assertTrue(_index_knowledge_report(unrelated))
+        self.assertEqual(store.knowledge_index_stats()["reports"], 2)
+
+        candidates = _knowledge_candidates(
+            "城投公司的资金面和信用利差有什么变化？",
+            filters=_parse_knowledge_filters({"period": "all"}),
+        )
+        self.assertTrue(candidates)
+        self.assertEqual(candidates[0]["id"], relevant["id"])
+        # Unchanged content uses the persisted vector rather than rebuilding.
+        self.assertFalse(_index_knowledge_report(relevant))
 
 
 if __name__ == "__main__":

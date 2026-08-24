@@ -78,6 +78,19 @@ class SQLiteStore:
                 CREATE INDEX IF NOT EXISTS idx_reports_author ON reports(author_id);
                 CREATE INDEX IF NOT EXISTS idx_reports_deleted ON reports(deleted_at);
 
+                CREATE TABLE IF NOT EXISTS knowledge_chunks (
+                    report_id TEXT NOT NULL REFERENCES reports(id) ON DELETE CASCADE,
+                    chunk_index INTEGER NOT NULL,
+                    fingerprint TEXT NOT NULL,
+                    vector_version TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    vector BLOB NOT NULL,
+                    created_at TEXT NOT NULL,
+                    PRIMARY KEY(report_id, chunk_index)
+                );
+                CREATE INDEX IF NOT EXISTS idx_knowledge_chunks_fingerprint
+                    ON knowledge_chunks(report_id, fingerprint, vector_version);
+
                 CREATE TABLE IF NOT EXISTS ratings (
                     id TEXT PRIMARY KEY,
                     report_id TEXT NOT NULL REFERENCES reports(id) ON DELETE CASCADE,
@@ -387,6 +400,80 @@ class SQLiteStore:
         report.pop("deletedAt", None)
         report.pop("deletedBy", None)
         return self.update_report(rid, report)
+
+    # Persistent local vector index
+    def knowledge_index_fingerprints(self, report_ids=None):
+        """Return one persisted fingerprint/version pair for every indexed report."""
+        params = []
+        where = ""
+        if report_ids is not None:
+            ids = list(dict.fromkeys(str(item) for item in report_ids if item))
+            if not ids:
+                return {}
+            where = f" WHERE report_id IN ({','.join('?' for _ in ids)})"
+            params.extend(ids)
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT report_id,fingerprint,vector_version,COUNT(*) AS chunk_count "
+                "FROM knowledge_chunks" + where +
+                " GROUP BY report_id,fingerprint,vector_version",
+                params,
+            ).fetchall()
+        return {
+            row["report_id"]: {
+                "fingerprint": row["fingerprint"],
+                "vector_version": row["vector_version"],
+                "chunk_count": row["chunk_count"],
+            }
+            for row in rows
+        }
+
+    def replace_knowledge_chunks(self, report_id, fingerprint, vector_version, chunks):
+        """Atomically replace all vector chunks for a report."""
+        stamp = now_iso()
+        with self.transaction() as conn:
+            conn.execute("DELETE FROM knowledge_chunks WHERE report_id=?", (report_id,))
+            conn.executemany(
+                "INSERT INTO knowledge_chunks"
+                "(report_id,chunk_index,fingerprint,vector_version,content,vector,created_at) "
+                "VALUES(?,?,?,?,?,?,?)",
+                [
+                    (report_id, index, fingerprint, vector_version,
+                     item["content"], item["vector"], stamp)
+                    for index, item in enumerate(chunks)
+                ],
+            )
+
+    def knowledge_chunks(self, report_ids):
+        """Load vector chunks for active reports in the requested candidate set."""
+        ids = list(dict.fromkeys(str(item) for item in report_ids if item))
+        if not ids:
+            return []
+        marks = ",".join("?" for _ in ids)
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT kc.report_id,kc.chunk_index,kc.content,kc.vector "
+                "FROM knowledge_chunks kc JOIN reports r ON r.id=kc.report_id "
+                f"WHERE r.deleted_at IS NULL AND kc.report_id IN ({marks}) "
+                "ORDER BY kc.report_id,kc.chunk_index",
+                ids,
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def delete_knowledge_chunks(self, report_id):
+        with self.transaction() as conn:
+            cursor = conn.execute(
+                "DELETE FROM knowledge_chunks WHERE report_id=?", (report_id,)
+            )
+            return cursor.rowcount
+
+    def knowledge_index_stats(self):
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT COUNT(DISTINCT report_id) AS reports,COUNT(*) AS chunks,"
+                "COALESCE(SUM(LENGTH(vector)),0) AS vector_bytes FROM knowledge_chunks"
+            ).fetchone()
+        return dict(row)
 
     # Ratings
     def ratings(self):

@@ -777,6 +777,8 @@ def industry_prosperity():
 @login_required
 def credit_std_dev():
     local_echarts = url_for("static", filename="vendor/echarts.min.js")
+    today_focus_css = url_for("static", filename="credit_std_dev/today_focus.css")
+    today_focus_js = url_for("static", filename="credit_std_dev/today_focus.js")
     return html_response(
         STD_DEV_HTML,
         "credit_std_dev",
@@ -785,6 +787,8 @@ def credit_std_dev():
             'src="data/spread_data.js"': f'src="{url_for("credit_std_dev_data_js")}"',
             "src='data/spread_data.js'": f"src='{url_for('credit_std_dev_data_js')}'",
             "https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js": local_echarts,
+            "</head>": f'<link rel="stylesheet" href="{today_focus_css}">\n</head>',
+            "</body>": f'<script src="{today_focus_js}"></script>\n</body>',
         },
     )
 

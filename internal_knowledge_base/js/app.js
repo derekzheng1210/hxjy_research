@@ -114,7 +114,7 @@
     reportAuthors: [],
     roadshow: { weekOffset: 0, weekStart: '', weekEnd: '', items: [], wide: false },
     reminders: null,
-    knowledge: { limit: 10, used: 0, remaining: 10, available: true, messages: [], filters: { period: '1m', dateFrom: '', dateTo: '', reportTypes: ['internal'], categories: [], themes: [], authors: [] } }
+    knowledge: { limit: 10, used: 0, remaining: 10, available: true, messages: [], filters: { period: '1m', dateFrom: '', dateTo: '', reportTypes: [], categories: [], themes: [], authors: [] } }
   };
 
   const els = {};
@@ -1335,7 +1335,7 @@
     const multi = key => {
       const options = knowledgeFilterOptions(key);
       const selected = new Set(kf[key] || []);
-      return `<div class="knowledge-multi" data-filter="${key}"><span class="knowledge-multi-label">${KNOWLEDGE_FILTER_LABELS[key] || key}</span><button type="button" class="knowledge-multi-toggle">${escapeHTML(knowledgeFilterSummary(key))}<em>▾</em></button><div class="knowledge-multi-menu" hidden>${options.map(([value, text]) => `<label class="knowledge-multi-option"><input type="checkbox" value="${escapeHTML(value)}" ${selected.has(value) ? 'checked' : ''} ${value === '' ? 'data-exclusive="1"' : ''}><span>${escapeHTML(text)}</span></label>`).join('')}</div></div>`;
+      return `<div class="knowledge-multi" data-filter="${key}"><span class="knowledge-multi-label">${KNOWLEDGE_FILTER_LABELS[key] || key}</span><button type="button" class="knowledge-multi-toggle">${escapeHTML(knowledgeFilterSummary(key))}<em>▾</em></button><div class="knowledge-multi-menu" hidden>${options.map(([value, text]) => `<label class="knowledge-multi-option"><input type="checkbox" value="${escapeHTML(value)}" ${(value === '' ? selected.size === 0 : selected.has(value)) ? 'checked' : ''} ${value === '' ? 'data-exclusive="1"' : ''}><span>${escapeHTML(text)}</span></label>`).join('')}</div></div>`;
     };
     return `<label class="knowledge-filter">时间范围
         <select id="knowledgeFilterPeriod"><option value="1m" ${kf.period === '1m' ? 'selected' : ''}>过去一个月</option><option value="3m" ${kf.period === '3m' ? 'selected' : ''}>过去三个月</option><option value="all" ${kf.period === 'all' ? 'selected' : ''}>全部时间</option><option value="custom" ${kf.period === 'custom' ? 'selected' : ''}>自定义</option></select>

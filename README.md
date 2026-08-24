@@ -93,6 +93,10 @@ sudo nginx -t && sudo systemctl reload nginx
 - 超级管理员密码保存在数据库中并进行哈希，可在后台“安全设置”中修改。
 - 大模型默认调用 MiMo（小米开放平台 `https://platform.xiaomimimo.com`，模型 `mimo-v2.5`，OpenAI 兼容协议），失败自动回退 DeepSeek。
   智能补全、知识搜索、路演文本识别统一使用该配置；MiMo 调用统一关闭深度思考（`thinking.type=disabled`）以降低延迟。
+- 知识搜索使用持久化本地向量索引与关键词混合召回；新上传或内容有变化的报告自动增量建索引。首次部署可运行
+  `python scripts/rebuild_knowledge_vectors.py --data-root "D:\path\to\juyuan_credit_data"` 完成全量回填。
+- 知识问答会先在本地判断任务意图：报告查找和核心观点查询沿用逐篇报告框架，统计、比较、归纳、提纲和推演等任务使用通用工作框架。
+- 知识搜索默认覆盖全部报告来源，用户仍可在筛选器中限制报告类型、主题、作者和时间范围。
 - 设置 `MIMO_API_KEY`（必需）与 `DEEPSEEK_API_KEY`（兜底，可选）后即可启用；密钥仅保存在 `.env` 或服务进程环境变量中，不会下发到浏览器。
   已安装的 Windows 服务需要同步更新其 NSSM 环境变量并重启服务。
   管理员可运行 `powershell -ExecutionPolicy Bypass -File scripts/sync_windows_service_deepseek_key.ps1` 同步 DeepSeek 密钥；
