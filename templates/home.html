@@ -15,7 +15,7 @@
   <div class="grid">
     <a class="card" href="{{ url_for('bond_picker') }}"><h2>信用债择券辅助工具</h2><p>支持筛选、同主体比较、收益率倒挂和凸点分析。</p><div class="meta">更新日期：{{ status.bond_picker.updated }}</div></a>
     <a class="card" href="{{ url_for('strategy_dashboard') }}"><h2>信用债策略仪表盘</h2><p>寻找目前市场占优信用策略。</p><div class="meta">更新日期：{{ status.strategy_dashboard.updated }}</div></a>
-    <a class="card" href="{{ url_for('spread_monitor') }}"><h2>存量债利差监控</h2><p>查看全市场、持仓个券利差变化。</p><div class="meta">更新日期：{{ status.spread_monitor.updated }}</div></a>
+    <a class="card" href="{{ url_for('spread_monitor') }}"><h2>存量债利差监控</h2><p>查看全市场、重点债券利差变化。</p><div class="meta">更新日期：{{ status.spread_monitor.updated }}</div></a>
     <a class="card" href="{{ url_for('primary_market_pricing.index') }}"><h2>一级发行研究</h2><p>分析发行人一级发行定价偏离、非市场化比例与发飞情况。</p><div class="meta">缓存更新：{{ status.primary_market_pricing.updated }}</div></a>
     <a class="card" href="{{ url_for('industry_prosperity') }}"><h2>行业景气度跟踪</h2><p>分析各个行业景气度</p><div class="meta">更新日期：{{ status.industry_prosperity.updated }}</div></a>
     <a class="card" href="{{ url_for('credit_std_dev') }}"><h2>信用债两倍标准差</h2><p>跟踪信用利差相对均值与标准差区间的位置。</p><div class="meta">数据：{{ status.credit_std_dev.data_updated }}</div></a>

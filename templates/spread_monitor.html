@@ -128,7 +128,7 @@ td.code{text-align:left;font-family:"Consolas","Courier New",monospace;font-size
       全市场 <span class="badge" id="badgeAll">0</span>
     </div>
     <div class="tab" data-tab="holding" onclick="switchTab('holding')">
-      持仓 <span class="badge" id="badgeHolding">0</span>
+      重点债券 <span class="badge" id="badgeHolding">0</span>
     </div>
   </div>
 
@@ -485,7 +485,7 @@ function exportCSV() {
     '证券代码','证券名称','隐含评级','期限(年)',
     '估值(%)','对应曲线','曲线收益率(%)',
     '当前利差(bp)','昨日利差(bp)','上周利差(bp)','上月利差(bp)','年初利差(bp)',
-    '日变化(bp)','周变化(bp)','月变化(bp)','年初至今(bp)','是否持仓'
+    '日变化(bp)','周变化(bp)','月变化(bp)','年初至今(bp)','是否重点债券'
   ];
   const keys = [
     'raw_code','name','implied_rating','term',

@@ -254,7 +254,7 @@ tr:hover td{background:#f8fafc}
             <div class="ms-wrap" id="nmsRating"><div class="ms-display" onclick="toggleMS('nmsRating')"><span class="ms-placeholder">全部</span></div><div class="ms-drop" id="drop-nmsRating"></div></div>
           </div>
           <div class="ctrl-group">
-            <label>内评</label>
+            <label>参考内评</label>
             <div class="ms-wrap" id="nmsIR"><div class="ms-display" onclick="toggleMS('nmsIR')"><span class="ms-placeholder">全部</span></div><div class="ms-drop" id="drop-nmsIR"></div></div>
           </div>
           <div class="ctrl-group">
@@ -397,7 +397,7 @@ tr:hover td{background:#f8fafc}
             <div class="ms-wrap" id="msRating"><div class="ms-display" onclick="toggleMS('msRating')"><span class="ms-placeholder">全部</span></div><div class="ms-drop" id="drop-msRating"></div></div>
           </div>
           <div class="ctrl-group">
-            <label>内评</label>
+            <label>参考内评</label>
             <div class="ms-wrap" id="msIR"><div class="ms-display" onclick="toggleMS('msIR')"><span class="ms-placeholder">全部</span></div><div class="ms-drop" id="drop-msIR"></div></div>
           </div>
           <div class="ctrl-group">
@@ -671,7 +671,7 @@ function renderNormalTable(bonds,filters){
 
   let html='<table><thead><tr>';
   html+='<th style="width:30px">#</th><th>展开</th><th>证券简称</th><th>证券代码</th><th class="num">期限(年)</th>';
-  html+='<th class="num">估值收益率(%)</th><th>隐含评级</th><th>内评</th>';
+  html+='<th class="num">估值收益率(%)</th><th>隐含评级</th><th>参考内评</th>';
   html+='<th>主体性质</th><th>城投</th><th>次级</th><th>主体名称</th>';
   html+='<th style="width:60px">相近券数</th>';
   html+='</tr></thead><tbody>';
@@ -710,7 +710,7 @@ function renderNormalTable(bonds,filters){
     }else{
       html+=`<div style="font-size:.8rem;font-weight:600;color:var(--tx2);margin-bottom:4px">同一主体相近期限债券 (${nearby.length}只，阈值±${nearbyTh.toFixed(2)}年)</div>`;
       html+='<table class="nearby-tbl"><thead><tr>';
-      html+='<th>证券简称</th><th>证券代码</th><th class="num">期限(年)</th><th class="num">估值收益率(%)</th><th class="num">期限差(年)</th><th class="num">收益率差(bp)</th><th>隐含评级</th><th>内评</th>';
+      html+='<th>证券简称</th><th>证券代码</th><th class="num">期限(年)</th><th class="num">估值收益率(%)</th><th class="num">期限差(年)</th><th class="num">收益率差(bp)</th><th>隐含评级</th><th>参考内评</th>';
       html+='</tr></thead><tbody>';
 
       nearby.forEach(n=>{
@@ -803,7 +803,7 @@ function normalResetFilters(){
 }
 
 function normalExportCSV(){
-  let csv='\uFEFF序号,证券简称,证券代码,期限,估值收益率%,隐含评级,内评,主体性质,城投,次级,主体名称,相近券数\n';
+  let csv='\uFEFF序号,证券简称,证券代码,期限,估值收益率%,隐含评级,参考内评,主体性质,城投,次级,主体名称,相近券数\n';
   STATE.normalFiltered.forEach((b,i)=>{
     const nearbyTh=parseFloat(document.getElementById('nfNearbyTh').value)||0.5;
     const nearby=getNearbyBonds(b,nearbyTh);
@@ -976,7 +976,7 @@ function renderGroupDetail(g){
   const lowCodes=new Set();
   g.inversions.forEach(inv=>{highCodes.add(inv.s.code);lowCodes.add(inv.l.code)});
   let html='<div class="sec-label">存量债概览（按期限排列）</div><div class="tbl-wrap"><table><thead><tr>';
-  html+='<th>证券简称</th><th class="num">期限(年)</th><th class="num">估值收益率(%)</th><th style="width:80px">分布</th><th>隐含评级</th><th>内评</th>';
+  html+='<th>证券简称</th><th class="num">期限(年)</th><th class="num">估值收益率(%)</th><th style="width:80px">分布</th><th>隐含评级</th><th>参考内评</th>';
   html+='</tr></thead><tbody>';
   bonds.forEach(b=>{
     const pct=Math.max(5,((b.ytm-minY)/range)*100);
@@ -1027,7 +1027,7 @@ function renderConvex(convex){
   html+='凸点定义：在同一主体的期限序列中，该债券的估值收益率同时<strong>高于</strong>期限更短和更长的相邻债券，形成曲线凸出（即该期限位置的债券被市场给予了更高的收益率/更低的价格）。</p>';
   html+='<div class="tbl-wrap"><table class="convex-table"><thead><tr>';
   html+='<th>#</th><th>主体</th><th>类型</th><th>凸点债券</th><th class="num">期限(年)</th>';
-  html+='<th class="num">绝对收益(%)</th><th>隐含评级</th><th>内评</th>';
+  html+='<th class="num">绝对收益(%)</th><th>隐含评级</th><th>参考内评</th>';
   html+='<th class="num">高于短邻(bp)</th><th class="num">高于长邻(bp)</th>';
   html+='<th>短邻债券</th><th>长邻债券</th>';
   html+='</tr></thead><tbody>';
@@ -1109,7 +1109,7 @@ function exportCSV(type){
       });
     });
   } else {
-    csv='\uFEFF主体,类型,凸点债券,代码,期限,绝对收益%,隐含评级,内评,高于短邻bp,高于长邻bp\n';
+    csv='\uFEFF主体,类型,凸点债券,代码,期限,绝对收益%,隐含评级,参考内评,高于短邻bp,高于长邻bp\n';
     STATE.filtered.convex.forEach(c=>{
       csv+=`"${c.issuer}",${c.sub==='是'?'次级':'普通'},"${c.bond.name}","${c.bond.code}",${c.bond.term},${c.bond.ytm},${c.bond.rating},${c.bond.ir},${c.dp},${c.dn}\n`;
     });

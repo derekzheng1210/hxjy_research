@@ -205,7 +205,7 @@
             <div class="metric-strip" id="dateMetrics"></div>
             <div class="panel" style="margin-bottom:14px"><div class="panel-head"><h3>当日发行债券</h3><span class="panel-note" id="dateBondCount"></span></div><div class="table-wrap"><table><thead id="dateBondHead"></thead><tbody id="dateBondBody"></tbody></table></div></div>
             <div class="panel" style="margin-bottom:14px"><div class="panel-head"><h3>发行人汇总</h3><span class="panel-note">历史指标截止查询日前一日</span></div><div class="table-wrap"><table id="issuerSummaryTable"><thead><tr>
-                <th class="sortable" data-table="issuers" data-key="issuer">发行人</th><th>内部评级</th><th class="sortable num" data-table="issuers" data-key="total_bonds" data-type="number">当日债券数</th><th class="sortable num" data-table="issuers" data-key="issue_amount_yi" data-type="number">发行规模(亿元)</th><th class="num">当日偏离概览</th><th class="sortable num" data-table="issuers" data-key="history_calculated_bonds" data-type="number">历史样本数</th><th class="sortable num" data-table="issuers" data-key="history_non_market_ratio" data-type="number">历史非市场化</th><th class="sortable num" data-table="issuers" data-key="history_overpriced_ratio" data-type="number">历史发飞</th><th class="sortable num" data-table="issuers" data-key="history_avg_deviation_bp" data-type="number">历史平均偏离</th>
+                <th class="sortable" data-table="issuers" data-key="issuer">发行人</th><th>参考内评</th><th class="sortable num" data-table="issuers" data-key="total_bonds" data-type="number">当日债券数</th><th class="sortable num" data-table="issuers" data-key="issue_amount_yi" data-type="number">发行规模(亿元)</th><th class="num">当日偏离概览</th><th class="sortable num" data-table="issuers" data-key="history_calculated_bonds" data-type="number">历史样本数</th><th class="sortable num" data-table="issuers" data-key="history_non_market_ratio" data-type="number">历史非市场化</th><th class="sortable num" data-table="issuers" data-key="history_overpriced_ratio" data-type="number">历史发飞</th><th class="sortable num" data-table="issuers" data-key="history_avg_deviation_bp" data-type="number">历史平均偏离</th>
             </tr></thead><tbody id="issuerSummaryBody"></tbody></table></div></div>
         </section>
 
@@ -238,7 +238,7 @@
             </div>
             <div class="metric-strip" id="issuerSummaryMetrics"></div>
             <div class="panel"><div class="panel-head"><h3>发行人定价汇总</h3><span class="panel-note" id="issuerSummaryCount">加载后显示全部发行人</span></div><div class="table-wrap"><table><thead><tr>
-                <th class="sortable" data-table="issuer-summary" data-key="issuer">发行人</th><th>内部评级</th><th class="sortable num" data-table="issuer-summary" data-key="total_bonds" data-type="number">发行债券数</th><th class="sortable num" data-table="issuer-summary" data-key="issue_amount_yi" data-type="number">发行规模(亿元)</th><th class="sortable num" data-table="issuer-summary" data-key="calculated_bonds" data-type="number">可计算样本</th><th class="sortable num" data-table="issuer-summary" data-key="calculable_ratio" data-type="number">可计算占比</th><th class="sortable num" data-table="issuer-summary" data-key="non_market_count" data-type="number">非市场化数</th><th class="sortable num" data-table="issuer-summary" data-key="non_market_ratio" data-type="number">非市场化占比</th><th class="sortable num" data-table="issuer-summary" data-key="overpriced_count" data-type="number">高于合理估值数</th><th class="sortable num" data-table="issuer-summary" data-key="overpriced_ratio" data-type="number">高于合理估值占比</th><th class="sortable num" data-table="issuer-summary" data-key="avg_deviation_bp" data-type="number">平均偏离(BP)</th><th class="sortable num" data-table="issuer-summary" data-key="last_issue_date">最近发行日</th>
+                <th class="sortable" data-table="issuer-summary" data-key="issuer">发行人</th><th>参考内评</th><th class="sortable num" data-table="issuer-summary" data-key="total_bonds" data-type="number">发行债券数</th><th class="sortable num" data-table="issuer-summary" data-key="issue_amount_yi" data-type="number">发行规模(亿元)</th><th class="sortable num" data-table="issuer-summary" data-key="calculated_bonds" data-type="number">可计算样本</th><th class="sortable num" data-table="issuer-summary" data-key="calculable_ratio" data-type="number">可计算占比</th><th class="sortable num" data-table="issuer-summary" data-key="non_market_count" data-type="number">非市场化数</th><th class="sortable num" data-table="issuer-summary" data-key="non_market_ratio" data-type="number">非市场化占比</th><th class="sortable num" data-table="issuer-summary" data-key="overpriced_count" data-type="number">高于合理估值数</th><th class="sortable num" data-table="issuer-summary" data-key="overpriced_ratio" data-type="number">高于合理估值占比</th><th class="sortable num" data-table="issuer-summary" data-key="avg_deviation_bp" data-type="number">平均偏离(BP)</th><th class="sortable num" data-table="issuer-summary" data-key="last_issue_date">最近发行日</th>
             </tr></thead><tbody id="issuerSummaryAllBody"></tbody></table></div><div class="pager" id="issuerSummaryPager"></div></div>
         </section>
     </main>
@@ -460,7 +460,7 @@
             q.set('sort_by', sortState.issuerSummary.key); q.set('sort_dir', sortState.issuerSummary.direction); q.set('export', '1');
             const data = await fetchJson(`/api/issuer-summary?${q}`, '正在准备完整 CSV');
             if (!data) return;
-            const header = ['发行人', '内部评级', '发行债券数', '发行规模(亿元)', '可计算样本', '可计算占比', '非市场化数', '非市场化占比', '高于合理估值数', '高于合理估值占比', '平均偏离(BP)', '最近发行日'];
+            const header = ['发行人', '参考内评', '发行债券数', '发行规模(亿元)', '可计算样本', '可计算占比', '非市场化数', '非市场化占比', '高于合理估值数', '高于合理估值占比', '平均偏离(BP)', '最近发行日'];
             const rows = (data.issuers || []).map(row => [
                 row.issuer, row.internal_rating || '-', integer(row.total_bonds), amountYi(row.issue_amount_yi), integer(row.calculated_bonds), pct(row.calculable_ratio),
                 integer(row.non_market_count), pct(row.non_market_ratio), integer(row.overpriced_count), pct(row.overpriced_ratio),
@@ -626,7 +626,7 @@
         }
 
         function bondHead(showIssuer) {
-            return `<tr><th>债券名称</th>${showIssuer ? '<th>发行人</th>' : ''}<th>内部评级</th><th>发行日期</th><th class="num">发行规模(亿元)</th><th>发行方式</th><th class="num">期限</th><th class="num">票面利率(%)</th><th class="num">合理价格(%)</th><th class="num">偏离(BP)</th><th>参考债券</th><th>判定</th></tr>`;
+            return `<tr><th>债券名称</th>${showIssuer ? '<th>发行人</th>' : ''}<th>参考内评</th><th>发行日期</th><th class="num">发行规模(亿元)</th><th>发行方式</th><th class="num">期限</th><th class="num">票面利率(%)</th><th class="num">合理价格(%)</th><th class="num">偏离(BP)</th><th>参考债券</th><th>判定</th></tr>`;
         }
 
         function renderBondTable(headId, bodyId, bonds, showIssuer) {
