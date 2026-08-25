@@ -690,6 +690,12 @@ class SQLiteStore:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def all_roadshow_items(self):
+        """返回全部路演安排（量级很小，供报告列表附加关联路演信息）。"""
+        with self.connect() as conn:
+            rows = conn.execute("SELECT * FROM roadshow_schedule ORDER BY event_time").fetchall()
+        return [dict(row) for row in rows]
+
     def get_roadshow_item(self, item_id):
         with self.connect() as conn:
             row = conn.execute(
@@ -709,6 +715,31 @@ class SQLiteStore:
                  item.get("tencentMeetingId", ""), item.get("presenter", ""), item.get("topic", ""),
                  item.get("createdById", ""), item.get("createdByName", ""), stamp, stamp),
             )
+
+    def update_roadshow_item(self, item_id, fields):
+        """更新路演安排字段（camelCase 键，仅覆盖传入字段），返回更新后的行或 None。"""
+        camel_to_snake = {"eventTime": "event_time", "endTime": "end_time",
+                          "format": "format", "institution": "institution",
+                          "organizer": "organizer", "meetingRoom": "meeting_room",
+                          "tencentMeetingId": "tencent_meeting_id",
+                          "presenter": "presenter", "topic": "topic"}
+        with self.transaction() as conn:
+            row = conn.execute("SELECT * FROM roadshow_schedule WHERE id=?", (item_id,)).fetchone()
+            if not row:
+                return None
+            current = dict(row)
+            for camel, snake in camel_to_snake.items():
+                if camel in fields:
+                    current[snake] = fields[camel]
+            conn.execute(
+                "UPDATE roadshow_schedule SET event_time=?,end_time=?,format=?,institution=?,organizer=?,"
+                "meeting_room=?,tencent_meeting_id=?,presenter=?,topic=?,updated_at=? WHERE id=?",
+                (current["event_time"], current["end_time"], current["format"],
+                 current["institution"], current["organizer"], current["meeting_room"],
+                 current["tencent_meeting_id"], current["presenter"], current["topic"],
+                 now_iso(), item_id),
+            )
+            return current
 
     def delete_roadshow_item(self, item_id):
         with self.transaction() as conn:

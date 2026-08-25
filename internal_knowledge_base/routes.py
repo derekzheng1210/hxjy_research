@@ -102,7 +102,7 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 
 # --------------------------------------------------------------------------- #
-# 大模型配置：默认 MiMo（小米开放平台，OpenAI 兼容），DeepSeek 兜底。
+# 大模型配置：优先自部署模型（阿里云，OpenAI 兼容网关），MiMo 兜底，DeepSeek 二层兜底。
 # 密钥不写入文件：优先读环境变量，Windows 下回退读注册表 HKCU\Environment
 # --------------------------------------------------------------------------- #
 def _env_or_registry(name):
@@ -118,6 +118,10 @@ def _env_or_registry(name):
         return ""
 
 
+def _self_llm_api_key():
+    return _env_or_registry("SELF_LLM_API_KEY")
+
+
 def _mimo_api_key():
     return _env_or_registry("MIMO_API_KEY")
 
@@ -128,19 +132,49 @@ def _deepseek_api_key():
 
 def _llm_api_key():
     """任一模型密钥可用即视为大模型已配置。"""
-    return _mimo_api_key() or _deepseek_api_key()
+    return _self_llm_api_key() or _mimo_api_key() or _deepseek_api_key()
 
 
+# 自部署模型（阿里云 OpenAI 兼容网关，内网直连）。网关不支持 thinking /
+# response_format 参数（会返回 400）：关闭思考与 JSON 输出模式均靠提示词约束。
+SELF_LLM_BASE_URL = os.environ.get("SELF_LLM_BASE_URL", "http://10.9.50.201:3005/v1").rstrip("/")
+SELF_LLM_MODEL = os.environ.get("SELF_LLM_MODEL", "glm-5.2")
 # MiMo（小米开放平台 https://platform.xiaomimimo.com，OpenAI 兼容协议）。
 # mimo-v2.5 为最便宜的文本模型；它是推理模型，默认会先输出 reasoning_content
 # 再给答案，等待时间长。业务场景（信息抽取/知识问答）不需要深度思考，
 # 统一传 thinking.type=disabled 关闭思考，首 token 响应可从约 15s 降至 1-4s。
 MIMO_BASE_URL = os.environ.get("MIMO_BASE_URL", "https://api.xiaomimimo.com/v1").rstrip("/")
 MIMO_MODEL = os.environ.get("MIMO_MODEL", "mimo-v2.5")
-DEEPSEEK_BASE_URL = "https://api.deepseek.com"
-DEEPSEEK_MODEL = "deepseek-chat"
+DEEPSEEK_BASE_URL = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com").rstrip("/")
+DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")
 LLM_TIMEOUT = 90
 LLM_MAX_TEXT_CHARS = 6000  # 发送给 LLM 的文档文本最大长度
+
+
+def _llm_providers():
+    """按优先级返回当前可用的大模型 provider 列表：自部署 → MiMo → DeepSeek。
+
+    每次调用重新解析密钥：Windows 服务更新环境变量并重启、或管理员补充
+    .env 后，不会因为模块导入时缓存了空值而一直不可用。
+    """
+    providers = []
+    self_key = _self_llm_api_key()
+    if self_key:
+        providers.append({"name": "自部署模型", "base_url": SELF_LLM_BASE_URL,
+                          "model": SELF_LLM_MODEL, "api_key": self_key,
+                          "json_mode": False,
+                          "chat_template_kwargs": {"enable_thinking": False}})
+    mimo_key = _mimo_api_key()
+    if mimo_key:
+        providers.append({"name": "MiMo", "base_url": MIMO_BASE_URL,
+                          "model": MIMO_MODEL, "api_key": mimo_key,
+                          "json_mode": True, "disable_thinking": True})
+    deepseek_key = _deepseek_api_key()
+    if deepseek_key:
+        providers.append({"name": "DeepSeek", "base_url": DEEPSEEK_BASE_URL,
+                          "model": DEEPSEEK_MODEL, "api_key": deepseek_key,
+                          "json_mode": True, "disable_thinking": False})
+    return providers
 KNOWLEDGE_INDEX_TEXT_CHARS = 60000
 KNOWLEDGE_VECTOR_DIM = 512
 KNOWLEDGE_VECTOR_VERSION = "local-char-ngram-v1-d512"
@@ -566,69 +600,91 @@ def _extract_text(file_path, max_chars=LLM_MAX_TEXT_CHARS):
     return text[:max_chars]
 
 
+def _strip_code_fences(text):
+    """部分网关（自部署 GLM）不支持 response_format，模型会把 JSON 包在
+    ```json 围栏里输出；剥掉围栏再交给调用方 json.loads。"""
+    s = str(text or "").strip()
+    if s.startswith("```"):
+        s = re.sub(r"^```[a-zA-Z]*\s*", "", s)
+        if s.endswith("```"):
+            s = s[:-3]
+    return s.strip()
+
+
 def _call_llm(prompt, system=None, max_tokens=None, json_mode=True):
-    """调用大模型（默认 MiMo，失败自动回退 DeepSeek），返回 message content。
+    """调用大模型（自部署优先，MiMo 兜底，DeepSeek 二层兜底），返回 message content。
 
     system：可选的系统消息，用于约束角色与回答风格。
     max_tokens：可选的输出长度上限，未传时由模型默认值决定。
-    json_mode：是否要求 JSON 输出；知识问答需要流式展示纯文本，传 False。
+    json_mode：是否要求 JSON 输出；仅支持 response_format 的 provider 会带上
+    该参数，其余 provider（自部署网关不支持 response_format）靠提示词约束，
+    返回前统一剥离 ``` 围栏。知识问答需要流式展示纯文本，传 False。
     """
-    # 每次调用时解析密钥：Windows 服务更新环境变量并重启、或管理员补充 .env
-    # 后，不会因为模块导入时缓存了空值而一直不可用。
     messages = _llm_messages(prompt, system=system)
-    mimo_key = _mimo_api_key()
-    if mimo_key:
+    providers = _llm_providers()
+    if not providers:
+        raise RuntimeError("未配置大模型 API 密钥（SELF_LLM_API_KEY / MIMO_API_KEY / DEEPSEEK_API_KEY）")
+    last_error = None
+    for provider in providers:
         try:
-            return _complete_provider(MIMO_BASE_URL, MIMO_MODEL, mimo_key, messages,
-                                      max_tokens, json_mode, disable_thinking=True)
+            content = _complete_provider(provider, messages, max_tokens, json_mode)
+            return _strip_code_fences(content) if json_mode else content
         except Exception as exc:
-            current_app.logger.warning("MiMo 调用失败，回退 DeepSeek：%s", exc)
-    deepseek_key = _deepseek_api_key()
-    if not deepseek_key:
-        raise RuntimeError("未配置大模型 API 密钥（MIMO_API_KEY / DEEPSEEK_API_KEY）")
-    return _complete_provider(DEEPSEEK_BASE_URL, DEEPSEEK_MODEL, deepseek_key, messages,
-                              max_tokens, json_mode)
+            last_error = exc
+            current_app.logger.warning("%s 调用失败，尝试下一个大模型：%s", provider["name"], exc)
+    raise RuntimeError(f"大模型调用失败：{last_error}")
 
 
 def _stream_llm(prompt, system=None, max_tokens=None):
-    """流式调用大模型（默认 MiMo，失败自动回退 DeepSeek），逐段 yield 文本增量。
+    """流式调用大模型（自部署优先，MiMo 兜底，DeepSeek 二层兜底），逐段 yield 文本增量。
 
     流式模式不支持 response_format，输出格式由 system 提示词约束、
-    由调用方解析。若 MiMo 已推送过内容则不再回退（回退会导致答案重复）。
+    由调用方解析。若当前 provider 已推送过内容则不再回退（回退会导致答案重复）。
     """
     messages = _llm_messages(prompt, system=system)
-    mimo_key = _mimo_api_key()
-    if mimo_key:
+    providers = _llm_providers()
+    if not providers:
+        raise RuntimeError("未配置大模型 API 密钥（SELF_LLM_API_KEY / MIMO_API_KEY / DEEPSEEK_API_KEY）")
+    last_error = None
+    for provider in providers:
         try:
             produced = False
-            for delta in _stream_provider(MIMO_BASE_URL, MIMO_MODEL, mimo_key, messages,
-                                          max_tokens, disable_thinking=True):
+            for delta in _stream_provider(provider, messages, max_tokens):
                 produced = True
                 yield delta
             return
         except Exception as exc:
             if produced:
                 raise
-            current_app.logger.warning("MiMo 流式调用失败，回退 DeepSeek：%s", exc)
-    deepseek_key = _deepseek_api_key()
-    if not deepseek_key:
-        raise RuntimeError("未配置大模型 API 密钥（MIMO_API_KEY / DEEPSEEK_API_KEY）")
-    yield from _stream_provider(DEEPSEEK_BASE_URL, DEEPSEEK_MODEL, deepseek_key, messages, max_tokens)
+            last_error = exc
+            current_app.logger.warning("%s 流式调用失败，尝试下一个大模型：%s", provider["name"], exc)
+    raise RuntimeError(f"大模型流式调用失败：{last_error}")
 
 
-def _complete_provider(base_url, model, api_key, messages, max_tokens, json_mode,
-                       disable_thinking=False):
-    """非流式调用单个 provider：读取完整响应并返回 content 字符串。"""
-    payload = {"model": model, "messages": messages, "temperature": 0.3}
-    if json_mode:
+def _provider_payload(provider, messages, max_tokens, json_mode, stream=False):
+    """按 provider 能力构造 chat/completions 请求体。"""
+    payload = {"model": provider["model"], "messages": messages, "temperature": 0.3}
+    if json_mode and provider.get("json_mode"):
         payload["response_format"] = {"type": "json_object"}
     if max_tokens:
         payload["max_tokens"] = max_tokens
-    if disable_thinking:
+    if provider.get("disable_thinking"):
         # MiMo 关闭深度思考，直接输出答案，大幅降低首响应延迟
         payload["thinking"] = {"type": "disabled"}
+    if provider.get("chat_template_kwargs"):
+        # vLLM 部署的自部署 GLM：通过聊天模板参数关闭思考，
+        # 响应从约 7s 降至 1s，且不再输出 reasoning_content
+        payload["chat_template_kwargs"] = provider["chat_template_kwargs"]
+    if stream:
+        payload["stream"] = True
+    return payload
+
+
+def _complete_provider(provider, messages, max_tokens, json_mode):
+    """非流式调用单个 provider：读取完整响应并返回 content 字符串。"""
+    payload = _provider_payload(provider, messages, max_tokens, json_mode)
     try:
-        with _open_llm_raw(base_url, payload, api_key) as resp:
+        with _open_llm_raw(provider["base_url"], payload, provider["api_key"]) as resp:
             data = json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")[:240]
@@ -641,19 +697,15 @@ def _complete_provider(base_url, model, api_key, messages, max_tokens, json_mode
     return data["choices"][0]["message"]["content"]
 
 
-def _stream_provider(base_url, model, api_key, messages, max_tokens, disable_thinking=False):
+def _stream_provider(provider, messages, max_tokens):
     """流式调用单个 provider，逐段 yield 模型输出的文本增量。
 
-    MiMo 是推理模型：流中会先推送 reasoning_content 增量（此处跳过），
-    且可能出现空 choices 帧，需要防护。
+    推理模型（MiMo、自部署 GLM 未关思考时）流中会先推送 reasoning_content
+    增量（此处跳过），且可能出现空 choices 帧，需要防护。
     """
-    payload = {"model": model, "messages": messages, "temperature": 0.3, "stream": True}
-    if max_tokens:
-        payload["max_tokens"] = max_tokens
-    if disable_thinking:
-        payload["thinking"] = {"type": "disabled"}
+    payload = _provider_payload(provider, messages, max_tokens, json_mode=False, stream=True)
     try:
-        with _open_llm_raw(base_url, payload, api_key) as resp:
+        with _open_llm_raw(provider["base_url"], payload, provider["api_key"]) as resp:
             for raw_line in resp:
                 line = raw_line.decode("utf-8", errors="replace").strip()
                 if not line.startswith("data:"):
@@ -1433,10 +1485,23 @@ def api_reports_list():
     user = require_user()
     if not user:
         return json_error("未登录", 401)
+    schedule_by_id = {item["id"]: item for item in store.all_roadshow_items()}
     reports = []
     for report in store.reports():
         item = public_report(report)
         item.update(store.report_engagement(report["id"], user["id"]))
+        # 路演报告附带关联路演安排摘要，供详情弹窗展示与手工匹配
+        schedule_id = str(report.get("roadshowScheduleId") or "")
+        if report.get("reportType") == "roadshow" and schedule_id and schedule_id in schedule_by_id:
+            schedule = schedule_by_id[schedule_id]
+            item["roadshowSchedule"] = {
+                "id": schedule_id,
+                "eventTime": schedule.get("event_time", ""),
+                "endTime": schedule.get("end_time", ""),
+                "presenter": schedule.get("presenter", ""),
+                "topic": schedule.get("topic", ""),
+                "institution": schedule.get("institution", ""),
+            }
         reports.append(item)
     return jsonify({"reports": reports})
 
@@ -1504,12 +1569,16 @@ def api_reports_upload(report_scope=None):
     else:
         scoring_orgs = list(SCORING_ORGS)
 
-    # 路演安排表关联：从路演日程一键上传报告时携带，便于回溯关联
+    # 路演安排表关联：从路演日程一键上传报告时携带，便于回溯关联；
+    # 未携带时尝试自动匹配（规则 + 大模型，匹配不上留空，可后续手工匹配）
     roadshow_schedule_id = ""
+    roadshow_match_method = ""
     if report_type == "roadshow":
         roadshow_schedule_id = str(meta.get("roadshowScheduleId", "")).strip()
         if roadshow_schedule_id and not store.get_roadshow_item(roadshow_schedule_id):
             return json_error("关联的路演安排不存在，请刷新后重试", 400)
+        if roadshow_schedule_id:
+            roadshow_match_method = "manual"
 
     author = user
     if user.get("role") == "admin":
@@ -1560,6 +1629,13 @@ def api_reports_upload(report_scope=None):
         f.save(save_path)
 
         title = (titles.get(original) or "").strip() or os.path.splitext(original)[0]
+        # 一键上传未携带关联时，按报告信息自动匹配路演安排（失败留空，不阻断上传）
+        if report_type == "roadshow" and not roadshow_schedule_id:
+            try:
+                roadshow_schedule_id, roadshow_match_method = _roadshow_auto_match(
+                    report_date, source_author, source_institution, title)
+            except Exception:
+                current_app.logger.exception("路演报告自动匹配失败：%s", report_id)
         report = {
             "id": report_id,
             "title": title,
@@ -1587,6 +1663,8 @@ def api_reports_upload(report_scope=None):
             "preset": False,
             "scoringOrgs": scoring_orgs,
             "roadshowScheduleId": roadshow_schedule_id,
+            "roadshowMatchedBy": roadshow_match_method,
+            "roadshowMatchedAt": now_iso if roadshow_schedule_id else "",
         }
         store.add_report(report)
         try:
@@ -1837,8 +1915,8 @@ def _validate_roadshow_fields(data):
 def api_roadshow_schedule_list():
     """按周（周一~周日）返回路演安排；不传 week 参数时返回当前周。
 
-    每条安排附带 reportId：该路演已上传的路演报告 id（取最新一篇），
-    供前端区分"已归档/未归档"并提供查看/下载入口。
+    每条安排附带 reportId/reportIds：该路演已关联的路演报告 id
+    （reportId 取最新一篇），供前端区分"已归档/未归档"并提供查看/下载入口。
     """
     user = require_user()
     if not user:
@@ -1846,13 +1924,15 @@ def api_roadshow_schedule_list():
     week_start, week_end = _roadshow_week_bounds(request.args.get("week", ""))
     items = store.roadshow_items(week_start, week_end)
     report_by_schedule = {}
-    for report in store.reports():
+    for report in sorted(store.reports(), key=lambda r: str(r.get("uploadedAt") or "")):
         schedule_id = str(report.get("roadshowScheduleId") or "")
         if schedule_id:
-            report_by_schedule[schedule_id] = report.get("id", "")
+            report_by_schedule.setdefault(schedule_id, []).append(report.get("id", ""))
     for item in items:
         item["formatLabel"] = ROADSHOW_FORMATS.get(item["format"], item["format"])
-        item["reportId"] = report_by_schedule.get(item["id"], "")
+        report_ids = report_by_schedule.get(item["id"], [])
+        item["reportId"] = report_ids[-1] if report_ids else ""
+        item["reportIds"] = report_ids
     return jsonify({"items": items, "weekStart": week_start, "weekEnd": week_end})
 
 
@@ -2099,6 +2179,34 @@ def api_roadshow_schedule_add():
     return jsonify({"ok": True, "item": {**item, "formatLabel": ROADSHOW_FORMATS[fmt]}})
 
 
+@app.route("/api/roadshow-schedule/<item_id>", methods=["PUT"])
+def api_roadshow_schedule_update(item_id):
+    """修改路演安排：创建人可改自己的记录，行政可改任何人的记录。"""
+    user = require_user()
+    if not user:
+        return json_error("未登录", 401)
+    item = store.get_roadshow_item(item_id)
+    if not item:
+        return json_error("路演安排不存在", 404)
+    if item.get("created_by") != user["id"] and user.get("role") != "admin":
+        return json_error("只能修改自己创建的路演安排", 403)
+    data = request.get_json(silent=True) or {}
+    validated = _validate_roadshow_fields(data)
+    if isinstance(validated, str):
+        return json_error(validated, 400)
+    event_time, end_time, fmt, institution, organizer, room, tencent_id, presenter, topic = validated
+    # 主约人为空时保留原值（行政代登记后由他人补充修改的场景）
+    organizer = organizer or item.get("organizer") or user["name"]
+    updated = store.update_roadshow_item(item_id, {
+        "eventTime": event_time, "endTime": end_time, "format": fmt,
+        "institution": institution, "organizer": organizer,
+        "meetingRoom": room, "tencentMeetingId": tencent_id,
+        "presenter": presenter, "topic": topic,
+    })
+    updated["formatLabel"] = ROADSHOW_FORMATS.get(updated["format"], updated["format"])
+    return jsonify({"ok": True, "item": updated})
+
+
 @app.route("/api/roadshow-schedule/<item_id>", methods=["DELETE"])
 def api_roadshow_schedule_delete(item_id):
     """删除路演安排：创建人可删自己的记录，行政可删任何人的记录。"""
@@ -2222,6 +2330,162 @@ def api_roadshow_schedule_ai_parse():
         "topic": str(parsed.get("topic", "")).strip()[:200],
     }
     return jsonify(result)
+
+
+# --------------------------------------------------------------------------- #
+# 路演报告 ↔ 路演安排匹配：规则 + 大模型自动匹配，手工匹配兜底
+# --------------------------------------------------------------------------- #
+ROADSHOW_MATCH_WINDOW_DAYS = 3   # 自动匹配的日期窗口（报告日期前后各 N 天）
+ROADSHOW_MATCH_RULE_SCORE = 5    # 规则匹配置信分阈值（日期3+路演人3+机构2+主题2）
+ROADSHOW_MATCH_RULE_MARGIN = 2   # 规则匹配需领先第二名的分差，避免多场近似时误配
+
+
+def _normalize_roadshow_institution(name):
+    """机构简称归一化：命中常见简称映射时换全称，方便与报告机构比对。"""
+    text = str(name or "").strip()
+    return ROADSHOW_INSTITUTION_ALIASES.get(text, text)
+
+
+def _roadshow_auto_match(report_date, source_author, source_institution, title):
+    """上传路演报告时自动匹配路演安排。
+
+    规则优先（日期/路演人/机构/主题重合打分），规则无把握时把候选交给
+    大模型挑选。返回 (schedule_id, method)，method 为 rule/llm；
+    匹配不上返回 ("", "")。任何异常都不阻断上传。
+    """
+    try:
+        anchor = datetime.strptime(str(report_date or ""), "%Y-%m-%d").date()
+    except ValueError:
+        return "", ""
+    date_from = (anchor - timedelta(days=ROADSHOW_MATCH_WINDOW_DAYS)).strftime("%Y-%m-%d")
+    date_to = (anchor + timedelta(days=ROADSHOW_MATCH_WINDOW_DAYS)).strftime("%Y-%m-%d")
+    items = store.roadshow_items(date_from, date_to)
+    if not items:
+        return "", ""
+
+    token_split = re.compile(r"[\s,，。；;、：:（）()《》\"'?!？\-—/\\]+")
+    title_tokens = {t for t in token_split.split(str(title or "")) if len(t) >= 2}
+
+    def item_day(item):
+        try:
+            return datetime.strptime(str(item.get("event_time", ""))[:10], "%Y-%m-%d").date()
+        except ValueError:
+            return None
+
+    def score(item):
+        value = 0
+        day = item_day(item)
+        if day == anchor:
+            value += 3
+        elif day and abs((day - anchor).days) <= 1:
+            value += 1
+        presenter = str(item.get("presenter") or "")
+        author = str(source_author or "")
+        if presenter and author and (presenter in author or author in presenter):
+            value += 3
+        institution = _normalize_roadshow_institution(item.get("institution"))
+        source_inst = _normalize_roadshow_institution(source_institution)
+        if institution and source_inst and (institution in source_inst or source_inst in institution):
+            value += 2
+        topic_tokens = {t for t in token_split.split(str(item.get("topic") or "")) if len(t) >= 2}
+        value += min(2, len(title_tokens & topic_tokens))
+        return value
+
+    ranked = sorted(items, key=score, reverse=True)
+    best_score = score(ranked[0])
+    runner_up = score(ranked[1]) if len(ranked) > 1 else -1
+    if best_score >= ROADSHOW_MATCH_RULE_SCORE and best_score - runner_up >= ROADSHOW_MATCH_RULE_MARGIN:
+        return ranked[0]["id"], "rule"
+
+    # 规则无把握：把候选交给大模型挑选（失败/超时则留空，用户可手工匹配）
+    try:
+        lines = []
+        for idx, item in enumerate(ranked, 1):
+            when = str(item.get("event_time", ""))[:16].replace("T", " ")
+            lines.append(f"{idx}. id={item['id']} | {when} | 路演人:{item.get('presenter', '')} | "
+                         f"机构:{item.get('institution', '')} | 主题:{item.get('topic', '')}")
+        prompt = (
+            "你是路演报告归档助手。一篇路演报告的信息如下：\n"
+            f"报告日期：{report_date}\n报告标题：{title}\n"
+            f"报告作者（路演人）：{source_author or '未知'}\n报告机构：{source_institution or '未知'}\n\n"
+            "候选路演安排：\n" + "\n".join(lines) + "\n\n"
+            "请判断哪一场路演最可能是这篇报告对应的路演。只输出一个JSON对象："
+            '{"scheduleId": "候选id或空字符串"}\n'
+            "规则：选信息最吻合的一场（日期、路演人、机构、主题）；都不吻合时 scheduleId 输出空字符串；"
+            "严格基于给定信息判断，不要编造。"
+        )
+        raw = _call_llm(prompt)
+        chosen = str(json.loads(raw).get("scheduleId", "")).strip()
+        if chosen and chosen in {item["id"] for item in items}:
+            return chosen, "llm"
+    except Exception as exc:
+        current_app.logger.warning("路演报告大模型匹配失败：%s", exc)
+    return "", ""
+
+
+@app.route("/api/roadshow-schedule/options", methods=["GET"])
+def api_roadshow_schedule_options():
+    """手工匹配用：返回锚点日期前后各 N 天（默认 10 天）的路演安排候选项。"""
+    user = require_user()
+    if not user:
+        return json_error("未登录", 401)
+    try:
+        anchor = datetime.strptime(str(request.args.get("date", "")), "%Y-%m-%d").date()
+    except ValueError:
+        anchor = datetime.now(CST).date()
+    try:
+        days = min(max(int(request.args.get("days", 10)), 1), 60)
+    except (TypeError, ValueError):
+        days = 10
+    date_from = (anchor - timedelta(days=days)).strftime("%Y-%m-%d")
+    date_to = (anchor + timedelta(days=days)).strftime("%Y-%m-%d")
+    options = []
+    for item in store.roadshow_items(date_from, date_to):
+        when = str(item.get("event_time", ""))[:16].replace("T", " ")
+        end = str(item.get("end_time") or "")[11:16]
+        label = f"{when}{f'-{end}' if end else ''} · {item.get('presenter', '')}《{item.get('topic', '')}》"
+        if item.get("institution"):
+            label += f"（{item['institution']}）"
+        options.append({"id": item["id"], "label": label})
+    return jsonify({"options": options})
+
+
+@app.route("/api/roadshow-schedule/match", methods=["POST"])
+def api_roadshow_schedule_match():
+    """手工建立/解除路演报告与路演安排的关联。
+
+    body: {reportId, scheduleId}；scheduleId 传空字符串表示取消关联。
+    权限：行政，或相关本人（报告署名作者/实际上传人/目标或现有路演安排的创建人）。
+    """
+    user = require_user()
+    if not user:
+        return json_error("未登录", 401)
+    data = request.get_json(silent=True) or {}
+    report_id = str(data.get("reportId", "")).strip()
+    schedule_id = str(data.get("scheduleId", "")).strip()
+    report = store.get_report(report_id)
+    if not report:
+        return json_error("报告不存在", 404)
+    if report.get("reportType") != "roadshow":
+        return json_error("仅路演报告支持关联路演安排", 400)
+    schedule = None
+    if schedule_id:
+        schedule = store.get_roadshow_item(schedule_id)
+        if not schedule:
+            return json_error("路演安排不存在，请刷新后重试", 404)
+    current_id = str(report.get("roadshowScheduleId") or "")
+    current_schedule = store.get_roadshow_item(current_id) if current_id else None
+    involved = (report.get("authorId") == user.get("id")
+                or report.get("uploadedById") == user.get("id")
+                or (schedule is not None and schedule.get("created_by") == user.get("id"))
+                or (current_schedule is not None and current_schedule.get("created_by") == user.get("id")))
+    if user.get("role") != "admin" and not involved:
+        return json_error("仅行政或相关本人可匹配路演报告", 403)
+    fields = {"roadshowScheduleId": schedule_id,
+              "roadshowMatchedBy": "manual" if schedule_id else "",
+              "roadshowMatchedAt": _now_iso() if schedule_id else ""}
+    updated = store.update_report(report_id, fields)
+    return jsonify({"ok": True, "report": public_report(updated)})
 
 
 @app.route("/api/work-reminders", methods=["GET"])

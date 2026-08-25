@@ -29,11 +29,20 @@ if ($Existing) {
 
 & $Nssm install $ServiceName $PythonExe "run_production.py"
 & $Nssm set $ServiceName AppDirectory $ProjectDir
-& $Nssm set $ServiceName AppEnvironmentExtra @(
+# 大模型密钥：自部署模型优先、MiMo 兜底、DeepSeek 二层兜底。
+# 密钥从当前用户环境解析（install_windows_service.ps1 交互版会在安装时询问）。
+$ServiceEnv = @(
     "PORT=$Port",
     "FLASK_DEBUG=0",
     "PORTAL_DATA_ROOT=$DataRoot"
-) | Out-Null
+)
+$SelfLlmApiKey = if ($env:SELF_LLM_API_KEY) { $env:SELF_LLM_API_KEY } else { [Environment]::GetEnvironmentVariable("SELF_LLM_API_KEY", "User") }
+if ($SelfLlmApiKey) { $ServiceEnv += "SELF_LLM_API_KEY=$SelfLlmApiKey" }
+$MimoApiKey = if ($env:MIMO_API_KEY) { $env:MIMO_API_KEY } else { [Environment]::GetEnvironmentVariable("MIMO_API_KEY", "User") }
+if ($MimoApiKey) { $ServiceEnv += "MIMO_API_KEY=$MimoApiKey" }
+$DeepSeekApiKey = if ($env:DEEPSEEK_API_KEY) { $env:DEEPSEEK_API_KEY } else { [Environment]::GetEnvironmentVariable("DEEPSEEK_API_KEY", "User") }
+if ($DeepSeekApiKey) { $ServiceEnv += "DEEPSEEK_API_KEY=$DeepSeekApiKey" }
+& $Nssm set $ServiceName AppEnvironmentExtra $ServiceEnv | Out-Null
 & $Nssm set $ServiceName AppStdout (Join-Path $LogDir "service-out.log")
 & $Nssm set $ServiceName AppStderr (Join-Path $LogDir "service-error.log")
 & $Nssm set $ServiceName AppRotateFiles 1

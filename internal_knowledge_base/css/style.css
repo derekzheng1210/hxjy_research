@@ -915,24 +915,23 @@ input::placeholder, textarea::placeholder { color: var(--text-faint); }
 /* ===== 路演安排表（周历式日程图表） ===== */
 .roadshow-panel { margin-bottom: 18px; }
 .roadshow-panel-actions { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
-.roadshow-cal-wrap { overflow-x: auto; }
-.roadshow-cal { min-width: 660px; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
-.roadshow-cal-head { display: grid; grid-template-columns: 56px repeat(5, 1fr); background: var(--surface-muted); border-bottom: 1px solid var(--border); overflow: hidden; scrollbar-gutter: stable; }
-.roadshow-cal-corner { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; padding: 4px 3px; color: var(--text-faint); font-size: 12px; font-weight: 700; text-align: center; }
+/* 单一滚动容器：横向拖动时左侧时间列 sticky 冻结，纵向滚动时表头 sticky 固定 */
+.roadshow-cal { border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+.roadshow-cal-scroller { overflow: auto; }
+.roadshow-cal-inner { display: grid; grid-template-columns: 56px repeat(5, 1fr); }
+.roadshow-cal-corner { position: sticky; left: 0; top: 0; z-index: 5; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; padding: 4px 3px; color: var(--text-faint); font-size: 12px; font-weight: 700; text-align: center; background: var(--surface-muted); border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); }
 /* 左上角格子内嵌的加宽/还原小开关：并排路演较多时加宽日历查看 */
 .roadshow-cal-widen-btn { padding: 1px 8px; color: var(--text-muted); font-size: 10.5px; font-weight: 600; background: var(--surface); border: 1px solid var(--border-strong); border-radius: 9px; cursor: pointer; }
 .roadshow-cal-widen-btn:hover { color: var(--primary); border-color: var(--primary); background: var(--primary-soft); }
 .roadshow-cal-widen-btn:disabled { opacity: .45; cursor: default; }
 .roadshow-cal-widen-btn:disabled:hover { color: var(--text-muted); border-color: var(--border-strong); background: var(--surface); }
-.roadshow-cal-day { padding: 7px 4px; text-align: center; border-left: 1px solid var(--border); }
+.roadshow-cal-day { position: sticky; top: 0; z-index: 4; padding: 7px 4px; text-align: center; background: var(--surface-muted); border-left: 1px solid var(--border); border-bottom: 1px solid var(--border); }
 .roadshow-cal-day b { display: block; font-size: 13px; }
 .roadshow-cal-day span { display: inline-block; margin-top: 2px; color: var(--text-faint); font-size: 11px; }
 .roadshow-cal-day.today b, .roadshow-cal-day.today span { color: var(--primary); }
 .roadshow-cal-day.today span { background: var(--primary-soft); padding: 1px 7px; border-radius: 9px; }
-.roadshow-cal-scroll { display: grid; grid-template-columns: 56px 1fr; max-height: calc(var(--roadshow-row-h) * 19); overflow-y: auto; overflow-x: hidden; scrollbar-gutter: stable; }
-.roadshow-cal-times { border-right: 1px solid var(--border); background: var(--surface-muted); }
+.roadshow-cal-times { position: sticky; left: 0; z-index: 3; border-right: 1px solid var(--border); background: var(--surface-muted); }
 .roadshow-cal-slot { display: flex; align-items: flex-start; justify-content: flex-end; padding: 2px 6px 0 0; color: var(--text-faint); font-size: 11px; }
-.roadshow-cal-columns { display: grid; grid-template-columns: repeat(5, 1fr); }
 .roadshow-cal-grid { position: relative; border-left: 1px solid var(--border); cursor: copy;
   background-image: repeating-linear-gradient(to bottom, var(--border) 0 1px, transparent 1px 30px); }
 .roadshow-cal-grid:hover { background-color: rgba(37, 99, 235, .035); }

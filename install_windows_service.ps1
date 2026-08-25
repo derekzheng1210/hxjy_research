@@ -67,14 +67,29 @@ Write-Host "Installing Python dependencies ..."
 
 $SitePassword = Read-Host "Enter SITE_PASSWORD for website login"
 $SecretKey = Read-Host "Enter Flask SECRET_KEY, use a long random string"
-# 知识搜索使用服务进程自身的环境变量。不能只设置到当前用户环境，
+# 大模型密钥写入服务进程自身的环境变量。不能只设置到当前用户环境，
 # 否则 NSSM 服务（尤其以其他账户运行时）不会继承该密钥。
+# 优先级：自部署模型（SELF_LLM_API_KEY）→ MiMo（MIMO_API_KEY）→ DeepSeek（DEEPSEEK_API_KEY）。
+$SelfLlmApiKey = $env:SELF_LLM_API_KEY
+if (-not $SelfLlmApiKey) {
+    $SelfLlmApiKey = [Environment]::GetEnvironmentVariable("SELF_LLM_API_KEY", "User")
+}
+if (-not $SelfLlmApiKey) {
+    $SelfLlmApiKey = Read-Host "Enter SELF_LLM_API_KEY (self-hosted LLM; leave blank to skip)"
+}
+$MimoApiKey = $env:MIMO_API_KEY
+if (-not $MimoApiKey) {
+    $MimoApiKey = [Environment]::GetEnvironmentVariable("MIMO_API_KEY", "User")
+}
+if (-not $MimoApiKey) {
+    $MimoApiKey = Read-Host "Enter MIMO_API_KEY (first fallback; leave blank to skip)"
+}
 $DeepSeekApiKey = $env:DEEPSEEK_API_KEY
 if (-not $DeepSeekApiKey) {
     $DeepSeekApiKey = [Environment]::GetEnvironmentVariable("DEEPSEEK_API_KEY", "User")
 }
 if (-not $DeepSeekApiKey) {
-    $DeepSeekApiKey = Read-Host "Enter DEEPSEEK_API_KEY (leave blank to disable knowledge search)"
+    $DeepSeekApiKey = Read-Host "Enter DEEPSEEK_API_KEY (second fallback; leave blank to skip)"
 }
 
 Write-Host "Registering Windows service $ServiceName ..."
@@ -95,6 +110,12 @@ $ServiceEnvironment = @(
     "FLASK_DEBUG=0",
     "PORT=$Port"
 )
+if ($SelfLlmApiKey) {
+    $ServiceEnvironment += "SELF_LLM_API_KEY=$SelfLlmApiKey"
+}
+if ($MimoApiKey) {
+    $ServiceEnvironment += "MIMO_API_KEY=$MimoApiKey"
+}
 if ($DeepSeekApiKey) {
     $ServiceEnvironment += "DEEPSEEK_API_KEY=$DeepSeekApiKey"
 }
