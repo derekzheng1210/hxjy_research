@@ -2346,6 +2346,44 @@ def _normalize_roadshow_institution(name):
     return ROADSHOW_INSTITUTION_ALIASES.get(text, text)
 
 
+ROADSHOW_MATCH_TOKEN_SPLIT = re.compile(r"[\s,，。；;、：:（）()《》\"'?!？\-—/\\]+")
+
+
+def _roadshow_match_score(event_time, presenter, institution, topic,
+                          report_date, source_author, source_institution, title):
+    """报告与路演安排的匹配打分，两个方向的自动匹配共用。
+
+    日期同日 +3（差一天 +1）；路演人与报告作者互含 +3；机构归一化后互含 +2；
+    主题与标题 token 重合最多 +2。满分 10。
+    """
+    value = 0
+    try:
+        day = datetime.strptime(str(event_time or "")[:10], "%Y-%m-%d").date()
+    except ValueError:
+        day = None
+    try:
+        anchor = datetime.strptime(str(report_date or ""), "%Y-%m-%d").date()
+    except ValueError:
+        anchor = None
+    if day is not None and anchor is not None:
+        if day == anchor:
+            value += 3
+        elif abs((day - anchor).days) <= 1:
+            value += 1
+    presenter = str(presenter or "")
+    author = str(source_author or "")
+    if presenter and author and (presenter in author or author in presenter):
+        value += 3
+    schedule_inst = _normalize_roadshow_institution(institution)
+    report_inst = _normalize_roadshow_institution(source_institution)
+    if schedule_inst and report_inst and (schedule_inst in report_inst or report_inst in schedule_inst):
+        value += 2
+    title_tokens = {t for t in ROADSHOW_MATCH_TOKEN_SPLIT.split(str(title or "")) if len(t) >= 2}
+    topic_tokens = {t for t in ROADSHOW_MATCH_TOKEN_SPLIT.split(str(topic or "")) if len(t) >= 2}
+    value += min(2, len(title_tokens & topic_tokens))
+    return value
+
+
 def _roadshow_auto_match(report_date, source_author, source_institution, title):
     """上传路演报告时自动匹配路演安排。
 
@@ -2363,33 +2401,10 @@ def _roadshow_auto_match(report_date, source_author, source_institution, title):
     if not items:
         return "", ""
 
-    token_split = re.compile(r"[\s,，。；;、：:（）()《》\"'?!？\-—/\\]+")
-    title_tokens = {t for t in token_split.split(str(title or "")) if len(t) >= 2}
-
-    def item_day(item):
-        try:
-            return datetime.strptime(str(item.get("event_time", ""))[:10], "%Y-%m-%d").date()
-        except ValueError:
-            return None
-
     def score(item):
-        value = 0
-        day = item_day(item)
-        if day == anchor:
-            value += 3
-        elif day and abs((day - anchor).days) <= 1:
-            value += 1
-        presenter = str(item.get("presenter") or "")
-        author = str(source_author or "")
-        if presenter and author and (presenter in author or author in presenter):
-            value += 3
-        institution = _normalize_roadshow_institution(item.get("institution"))
-        source_inst = _normalize_roadshow_institution(source_institution)
-        if institution and source_inst and (institution in source_inst or source_inst in institution):
-            value += 2
-        topic_tokens = {t for t in token_split.split(str(item.get("topic") or "")) if len(t) >= 2}
-        value += min(2, len(title_tokens & topic_tokens))
-        return value
+        return _roadshow_match_score(item.get("event_time"), item.get("presenter"),
+                                     item.get("institution"), item.get("topic"),
+                                     report_date, source_author, source_institution, title)
 
     ranked = sorted(items, key=score, reverse=True)
     best_score = score(ranked[0])
@@ -2486,6 +2501,83 @@ def api_roadshow_schedule_match():
               "roadshowMatchedAt": _now_iso() if schedule_id else ""}
     updated = store.update_report(report_id, fields)
     return jsonify({"ok": True, "report": public_report(updated)})
+
+
+@app.route("/api/roadshow-schedule/<item_id>/auto-match-report", methods=["POST"])
+def api_roadshow_auto_match_report(item_id):
+    """为路演安排推荐一份最吻合的未关联路演报告（规则 + 大模型，报告侧的反向入口）。
+
+    只推荐不写库：返回 {recommended, method, report, message}，前端展示推荐结果，
+    由人工确认后再调用 /api/roadshow-schedule/match 保存关联。
+    权限：行政或该路演安排创建人。
+    """
+    user = require_user()
+    if not user:
+        return json_error("未登录", 401)
+    item = store.get_roadshow_item(item_id)
+    if not item:
+        return json_error("路演安排不存在", 404)
+    if user.get("role") != "admin" and item.get("created_by") != user.get("id"):
+        return json_error("仅行政或路演创建人可自动匹配报告", 403)
+    try:
+        day = datetime.strptime(str(item.get("event_time", ""))[:10], "%Y-%m-%d").date()
+    except ValueError:
+        return json_error("该路演安排缺少有效日期，无法自动匹配", 400)
+    date_from = (day - timedelta(days=ROADSHOW_MATCH_WINDOW_DAYS)).strftime("%Y-%m-%d")
+    date_to = (day + timedelta(days=ROADSHOW_MATCH_WINDOW_DAYS)).strftime("%Y-%m-%d")
+    candidates = [
+        report for report in store.reports()
+        if report.get("reportType") == "roadshow"
+        and not str(report.get("roadshowScheduleId") or "")
+        and date_from <= str(report.get("reportDate") or "") <= date_to
+    ]
+    if not candidates:
+        return jsonify({"recommended": False, "method": "", "report": None,
+                        "message": "该时段前后没有未关联的路演报告，可先上传或展开选择"})
+
+    def score(report):
+        return _roadshow_match_score(item.get("event_time"), item.get("presenter"),
+                                     item.get("institution"), item.get("topic"),
+                                     report.get("reportDate"), report.get("sourceAuthor"),
+                                     report.get("sourceInstitution"), report.get("title"))
+
+    ranked = sorted(candidates, key=score, reverse=True)
+    best_score = score(ranked[0])
+    runner_up = score(ranked[1]) if len(ranked) > 1 else -1
+    chosen, method = "", ""
+    if best_score >= ROADSHOW_MATCH_RULE_SCORE and best_score - runner_up >= ROADSHOW_MATCH_RULE_MARGIN:
+        chosen, method = ranked[0]["id"], "rule"
+    else:
+        # 规则无把握：把候选交给大模型挑选（失败/超时则留空，用户可手工选择）
+        try:
+            lines = []
+            for idx, report in enumerate(ranked, 1):
+                lines.append(f"{idx}. reportId={report['id']} | 日期:{report.get('reportDate', '')} | "
+                             f"标题:{report.get('title', '')} | 作者:{report.get('sourceAuthor', '')} | "
+                             f"机构:{report.get('sourceInstitution', '')}")
+            prompt = (
+                "你是路演报告归档助手。一场路演安排的信息如下：\n"
+                f"路演日期：{item.get('event_time', '')[:10]}\n主题：{item.get('topic', '')}\n"
+                f"路演人：{item.get('presenter', '') or '未知'}\n机构：{item.get('institution', '') or '未知'}\n\n"
+                "候选未关联的路演报告：\n" + "\n".join(lines) + "\n\n"
+                "请判断哪一篇报告最可能是这场路演对应的报告。只输出一个JSON对象："
+                '{"reportId": "候选reportId或空字符串"}\n'
+                "规则：选信息最吻合的一篇（日期、路演人、机构、主题）；都不吻合时 reportId 输出空字符串；"
+                "严格基于给定信息判断，不要编造。"
+            )
+            raw = _call_llm(prompt)
+            picked = str(json.loads(raw).get("reportId", "")).strip()
+            if picked and picked in {report["id"] for report in candidates}:
+                chosen, method = picked, "llm"
+        except Exception as exc:
+            current_app.logger.warning("路演安排大模型匹配报告失败：%s", exc)
+
+    if not chosen:
+        return jsonify({"recommended": False, "method": "", "report": None,
+                        "message": "未找到足够吻合的路演报告，请手工选择或展开已关联报告"})
+    report = next(report for report in candidates if report["id"] == chosen)
+    return jsonify({"recommended": True, "method": method, "report": public_report(report),
+                    "message": ""})
 
 
 @app.route("/api/work-reminders", methods=["GET"])

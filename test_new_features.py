@@ -232,12 +232,77 @@ def main():
     parsed_ok = status == 200 and data.get("eventTime") == "2026-09-25T13:30"
     check("LLM 路演文本识别（自部署模型，JSON 输出无围栏问题）", parsed_ok, str(data)[:200])
 
+    # ---------- 二轮优化：路演侧自动匹配 + 多报告关联 ----------
+    # 建一条新安排 + 上传两份匹配的报告（不携带 scheduleId，让它们保持未关联）
+    status, data = api(admin, "/api/roadshow-schedule", "POST", {
+        "eventTime": "2026-10-14T14:00", "format": "offline", "institution": "华泰证券",
+        "meetingRoom": "9层2会", "presenter": "自动匹配测试人", "topic": "自动匹配主题交流"})
+    item3_id = data.get("item", {}).get("id", "")
+
+    def upload_roadshow_report(title, date):
+        meta3 = json.dumps({
+            "reportType": "roadshow", "category": "", "theme": "credit",
+            "org": "固收中心", "reportDate": date, "summary": "自动匹配测试",
+            "sourceAuthor": "自动匹配测试人", "sourceInstitution": "华泰证券",
+            "tags": "", "titles": {}, "authorId": "testuser",
+        })
+        b = "----smoke2"
+        parts = [f"--{b}\r\nContent-Disposition: form-data; name=\"meta\"\r\n\r\n{meta3}\r\n".encode(),
+                 f"--{b}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{title}.pdf\"\r\n"
+                 "Content-Type: application/pdf\r\n\r\n".encode() + b"%PDF-1.4 auto" + b"\r\n",
+                 f"--{b}--\r\n".encode()]
+        req = urllib.request.Request(KB + "/api/reports/roadshow", data=b"".join(parts), method="POST")
+        req.add_header("Content-Type", f"multipart/form-data; boundary={b}")
+        req.add_header("X-CSRF-Token", admin.csrf)
+        return json.loads(admin.opener.open(req, timeout=180).read().decode("utf-8"))["reports"][0]
+
+    # 注意：这两份报告上传时可能会被报告侧自动匹配逻辑关联到 item3 —— 若如此恰好说明双向匹配工作正常
+    report_a = upload_roadshow_report("自动匹配主题交流-报告A", "2026-10-14")
+    check("上传即自动关联（报告侧）", report_a.get("roadshowScheduleId") == item3_id,
+          f"got {report_a.get('roadshowScheduleId')!r} by={report_a.get('roadshowMatchedBy')!r}")
+    report_b = upload_roadshow_report("华泰证券自动匹配主题补充材料", "2026-10-15")
+    report_b_id = report_b.get("id", "")
+
+    # 报告 B 若被自动关联则先取消，保持未关联状态供路演侧自动匹配测试
+    if report_b.get("roadshowScheduleId"):
+        api(admin, "/api/roadshow-schedule/match", "POST", {"reportId": report_b_id, "scheduleId": ""})
+    # 路演侧自动匹配（行政触发）：只推荐不落库，返回推荐的报告 B
+    status, data = api(admin, f"/api/roadshow-schedule/{item3_id}/auto-match-report", "POST", None)
+    check("路演侧自动匹配返回推荐（不落库）",
+          status == 200 and data.get("recommended") and data.get("report", {}).get("id") == report_b_id
+          and not data.get("report", {}).get("roadshowScheduleId"),
+          str(data)[:200])
+    # 推荐未确认前不应写库：直接查报告列表验证仍为未关联
+    status, data = api(admin, "/api/reports")
+    report_b_now = next((r for r in data["reports"] if r["id"] == report_b_id), {})
+    check("推荐未经确认不建立关联", not report_b_now.get("roadshowScheduleId"),
+          f"got {report_b_now.get('roadshowScheduleId')!r}")
+    # 人工确认保存后才建立关联
+    status, data = api(admin, "/api/roadshow-schedule/match", "POST",
+                       {"reportId": report_b_id, "scheduleId": item3_id})
+    check("确认后保存关联", status == 200 and data["report"]["roadshowScheduleId"] == item3_id)
+    # 无关用户触发被拒
+    status, data = api(third, f"/api/roadshow-schedule/{item3_id}/auto-match-report", "POST", None)
+    check("无关用户触发自动匹配被拒（403）", status == 403, f"got {status}")
+    # 已经没有未关联候选时返回 recommended=false 而非报错
+    status, data = api(admin, f"/api/roadshow-schedule/{item3_id}/auto-match-report", "POST", None)
+    check("无候选时自动匹配返回未推荐", status == 200 and data.get("recommended") is False, str(data)[:150])
+
+    # 多报告关联一场路演：列表接口应同时返回两篇
+    status, data = api(admin, "/api/roadshow-schedule?week=2026-10-14")
+    item3 = next((it for it in data.get("items", []) if it["id"] == item3_id), {})
+    check("一场路演关联多篇报告（reportIds）",
+          len(item3.get("reportIds") or []) == 2, str(item3.get("reportIds")))
+
     # ---------- 清理：删除测试数据 ----------
-    status, data = api(member, "/api/reports/%s" % report_id, "DELETE")
+    for rid in (report_id, report_a.get("id", ""), report_b_id):
+        if rid:
+            status, data = api(member if rid == report_id else admin, "/api/reports/%s" % rid, "DELETE")
     check("删除测试报告", status == 200)
     status, data = api(admin, f"/api/roadshow-schedule/{item_id}", "DELETE")
     status2, data2 = api(admin, f"/api/roadshow-schedule/{item2_id}", "DELETE")
-    check("删除测试路演安排", status == 200 and status2 == 200)
+    status3, data3 = api(admin, f"/api/roadshow-schedule/{item3_id}", "DELETE")
+    check("删除测试路演安排", status == 200 and status2 == 200 and status3 == 200)
 
     print("\n========== 汇总 ==========")
     print(f"通过 {len(passed)} 项，失败 {len(failed)} 项")

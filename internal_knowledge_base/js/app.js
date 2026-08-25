@@ -78,6 +78,7 @@
     // 路演报告-路演安排匹配：候选项与手工建立/取消关联
     roadshowOptions: (date) => apiFetch(`/api/roadshow-schedule/options?date=${encodeURIComponent(date || '')}`, { credentials: 'same-origin' }).then(handleJson),
     roadshowMatch: (data) => apiFetch('/api/roadshow-schedule/match', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify(data) }).then(handleJson),
+    roadshowAutoMatch: (scheduleId) => apiFetch(`/api/roadshow-schedule/${scheduleId}/auto-match-report`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: '{}' }).then(handleJson),
   };
 
   async function handleJson(res) {
@@ -1215,25 +1216,29 @@
     }
   }
 
-  // 已关联路演报告的标题（路演详情展示用；取最新一篇）
-  function roadshowLinkedReportTitle(item) {
-    const report = item.reportId ? getReport(item.reportId) : null;
-    return report ? report.title : '';
-  }
-
   function showRoadshowDetailModal(itemId) {
     const item = (state.roadshow.items || []).find(row => row.id === itemId);
     if (!item) return notify('未找到该路演安排', 'error');
     // 创建人本人和行政可修改/删除；匹配报告额外对报告上传人/作者开放（后端校验）
     const canManage = isAdminRole() || (state.currentUser && item.created_by === state.currentUser.id);
     const endTime = item.end_time ? ` - ${escapeHTML(String(item.end_time).slice(11, 16))}` : '';
-    const linkedTitle = roadshowLinkedReportTitle(item);
-    const linkedCount = (item.reportIds || []).length;
-    // 已上传路演报告：提供查看/下载入口；未上传：提供预填信息的上传入口
-    const reportActions = item.reportId
-      ? `<button class="btn btn-secondary" data-action="view-report" data-id="${escapeHTML(item.reportId)}">查看报告</button>
-         <button class="btn btn-secondary" data-action="download" data-id="${escapeHTML(item.reportId)}">下载报告</button>`
-      : `<button class="btn btn-secondary" data-action="roadshow-upload" data-id="${escapeHTML(item.id)}">上传报告</button>`;
+    // 一场路演可关联多篇报告：全部列出（新上传的在前），点击打开报告详情
+    const linkedReports = (item.reportIds || [])
+      .map(id => getReport(id))
+      .filter(Boolean)
+      .reverse();
+    const reportListHTML = linkedReports.length ? `
+        <div class="detail-section">
+          <span class="detail-label">已归档报告（${linkedReports.length}）</span>
+          <ul class="roadshow-report-list">
+            ${linkedReports.map(report => `<li>
+              <button class="roadshow-report-item" data-action="view-report" data-id="${escapeHTML(report.id)}" title="打开报告详情">
+                <strong>${escapeHTML(report.title)}</strong>
+                <span>${escapeHTML(report.reportDate || '')} · ${escapeHTML(report.sourceAuthor || report.author || '')}</span>
+              </button>
+            </li>`).join('')}
+          </ul>
+        </div>` : '';
     openModal(`<section class="modal-card">
       ${modalHeader('路演详情', item.topic || '路演安排')}
       <div class="modal-body">
@@ -1246,14 +1251,14 @@
           <div><span>腾讯会议号</span><strong>${escapeHTML(item.tencent_meeting_id || '—')}</strong></div>
           <div><span>会议室/地点</span><strong>${escapeHTML(item.meeting_room || '—')}</strong></div>
           <div><span>创建人</span><strong>${escapeHTML(item.created_by_name || '—')}</strong></div>
-          <div><span>路演报告</span><strong title="${escapeHTML(linkedTitle)}">${linkedCount ? `已归档${linkedCount > 1 ? ` ${linkedCount} 篇` : ''}` : '未上传'}</strong></div>
+          <div><span>路演报告</span><strong>${linkedReports.length ? `已归档 ${linkedReports.length} 篇` : '未上传'}</strong></div>
         </div>
         <div class="detail-section"><span class="detail-label">主题</span><p class="roadshow-topic-view">${escapeHTML(item.topic || '')}</p></div>
-        ${linkedTitle ? `<div class="detail-section"><span class="detail-label">最新报告</span><p class="roadshow-topic-view">${escapeHTML(linkedTitle)}</p></div>` : ''}
+        ${reportListHTML}
       </div>
       <div class="modal-footer">
         <button class="btn btn-ghost" data-close="modal">关闭</button>
-        ${reportActions}
+        <button class="btn btn-secondary" data-action="roadshow-upload" data-id="${escapeHTML(item.id)}" title="预填该路演信息上传路演报告">上传报告</button>
         <button class="btn btn-secondary" data-action="match-report" data-id="${escapeHTML(item.id)}" title="手工把已上传的路演报告关联到该安排">匹配报告</button>
         ${canManage ? `<button class="btn btn-secondary" data-action="roadshow-edit" data-id="${escapeHTML(item.id)}"><svg viewBox="0 0 24 24" fill="none" width="14" height="14"><path d="M4 20h4L18.5 9.5a2.12 2.12 0 0 0-3-3L5 17v3z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>修改</button>` : ''}
         ${canManage ? `<button class="btn btn-danger danger-action" data-action="roadshow-delete" data-id="${escapeHTML(item.id)}">删除</button>` : ''}
@@ -1319,6 +1324,30 @@
     if (!state.currentUser) return false;
     if (isAdminRole()) return true;
     return report.authorId === state.currentUser.id || report.uploadedById === state.currentUser.id;
+  }
+
+  // 上传路演报告自动匹配成功后的结果卡片：展示匹配到的路演，可一键调整
+  function showAutoMatchResultModal(report) {
+    const schedule = report.roadshowSchedule || {};
+    const when = String(schedule.eventTime || '').slice(5, 16).replace('T', ' ');
+    const info = `${when} ${schedule.presenter || ''}《${schedule.topic || ''}》${schedule.institution ? `（${schedule.institution}）` : ''}`;
+    openModal(`<section class="modal-card">
+      ${modalHeader('自动匹配结果', report.title)}
+      <div class="modal-body">
+        <div class="roadshow-match-result">
+          <div class="roadshow-match-result-icon">✓</div>
+          <div>
+            <strong>已自动匹配到路演安排</strong>
+            <p>${escapeHTML(info)}</p>
+            <span>${report.roadshowMatchedBy === 'rule' ? '规则匹配' : '大模型匹配'} · 匹配不强制，可随时调整</span>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-ghost" data-close="modal">完成</button>
+        <button type="button" class="btn btn-primary" data-action="match-schedule" data-id="${escapeHTML(report.id)}">调整匹配</button>
+      </div>
+    </section>`);
   }
 
   // 报告详情侧：为路演报告选择/更换/取消关联的路演安排
@@ -1388,6 +1417,7 @@
   }
 
   // 路演详情侧：把已上传的路演报告关联到该安排（报告日期前后各 10 天内的路演报告）
+  // 已关联其他安排的报告默认隐藏，点击开关展开；另有"自动尝试匹配"按钮触发规则+大模型匹配
   function showReportMatchModal(scheduleId) {
     const item = (state.roadshow.items || []).find(row => row.id === scheduleId);
     if (!item) return notify('未找到该路演安排', 'error');
@@ -1396,39 +1426,73 @@
       const diff = Math.abs(new Date(value) - new Date(anchor)) / 86400000;
       return !Number.isNaN(diff) && diff <= 10;
     };
-    // 候选：日期窗口内的路演报告，外加已关联本安排的报告（便于换绑/识别）
+    // 候选：日期窗口内的路演报告，外加已关联本安排的报告（便于查看/换绑）
     const candidates = (state.reports || [])
       .filter(report => report.reportType === 'roadshow')
       .filter(report => (report.roadshowSchedule && report.roadshowSchedule.id === item.id) || inWindow(report.reportDate))
       .sort((a, b) => String(b.reportDate || '').localeCompare(String(a.reportDate || '')));
     if (!candidates.length) return notify('该时段前后没有可匹配的路演报告', 'info');
     const currentId = item.reportId || '';
-    const options = candidates.map(report => {
-      const linked = report.roadshowSchedule && report.roadshowSchedule.id && report.roadshowSchedule.id !== item.id
-        ? '（已关联其他安排）' : '';
-      return `<option value="${escapeHTML(report.id)}" ${report.id === currentId ? 'selected' : ''}>${escapeHTML(report.reportDate || '')} 《${escapeHTML(report.title)}》 ${escapeHTML(report.sourceAuthor || '')}${escapeHTML(linked)}</option>`;
-    }).join('');
+    const linkedHere = new Set(item.reportIds || []);
+    // 已关联其他安排的报告默认隐藏（避免误改绑），点开关展开
+    const hiddenCandidates = candidates.filter(report =>
+      report.roadshowSchedule && report.roadshowSchedule.id && !linkedHere.has(report.id));
+    const hiddenIds = new Set(hiddenCandidates.map(report => report.id));
+    const optionLabel = report => {
+      const flag = linkedHere.has(report.id) ? '（已关联本安排）'
+        : hiddenIds.has(report.id) ? '（已关联其他安排）' : '';
+      return `${escapeHTML(report.reportDate || '')} 《${escapeHTML(report.title)}》 ${escapeHTML(report.sourceAuthor || '')}${escapeHTML(flag)}`;
+    };
+    const renderOptions = showHidden => candidates.map(report =>
+      `<option value="${escapeHTML(report.id)}" ${hiddenIds.has(report.id) && !showHidden ? 'hidden' : ''} ${report.id === currentId ? 'selected' : ''}>${optionLabel(report)}</option>`).join('');
+    const toggleBtn = hiddenIds.size
+      ? `<button type="button" class="roadshow-match-toggle" id="toggleLinkedReports">展开已关联其他安排的报告（${hiddenIds.size}）</button>`
+      : '';
     openModal(`<section class="modal-card">
       ${modalHeader('匹配路演报告', item.topic || '路演安排')}
       <form id="reportMatchForm" data-schedule-id="${escapeHTML(item.id)}">
         <div class="modal-body">
           <div class="form-field">
             <label for="reportMatchSelect">选择路演报告 <span>按路演日期前后各 10 天列出</span></label>
-            <select id="reportMatchSelect" name="reportId" required>${options}</select>
+            <select id="reportMatchSelect" name="reportId" required>${renderOptions(false)}</select>
+            ${toggleBtn}
           </div>
-          <div class="score-rule-note"><span>提示</span><p>选择"不关联"以外的报告会建立关联；已关联其他安排的报告会被改绑到本安排。</p></div>
+          <div class="score-rule-note"><span>提示</span><p>列表默认只显示未关联与已关联本安排的报告；选择报告保存即建立（或改绑）关联，一场路演可关联多篇报告。</p></div>
         </div>
         <div class="modal-footer">
           <button type="button" class="btn btn-ghost" data-close="modal">取消</button>
-          ${currentId ? `<button type="button" class="btn btn-danger danger-action" data-action="unlink-schedule" data-id="${escapeHTML(currentId)}">取消关联</button>` : ''}
+          <button type="button" class="btn btn-secondary" data-action="auto-match-report" data-id="${escapeHTML(item.id)}" id="autoMatchReportBtn" title="按日期/路演人/机构/主题自动挑选最吻合的未关联报告">自动尝试匹配</button>
+          <button type="button" class="btn btn-danger danger-action" data-action="unlink-schedule" data-id="${escapeHTML(currentId)}" id="unlinkReportBtn" ${currentId ? '' : 'hidden'}>取消关联</button>
           <button type="submit" class="btn btn-primary" id="reportMatchSubmit">保存匹配</button>
         </div>
       </form>
     </section>`);
+
+    const select = document.getElementById('reportMatchSelect');
+    const toggle = document.getElementById('toggleLinkedReports');
+    if (toggle) {
+      let expanded = false;
+      toggle.addEventListener('click', () => {
+        expanded = !expanded;
+        const selected = select.value;
+        select.innerHTML = renderOptions(expanded);
+        select.value = selected;
+        toggle.textContent = expanded ? `收起已关联其他安排的报告（${hiddenIds.size}）` : `展开已关联其他安排的报告（${hiddenIds.size}）`;
+      });
+    }
+    // 取消关联按钮跟随选中项：选中的报告已关联本安排时才可取消
+    const unlinkBtn = document.getElementById('unlinkReportBtn');
+    const syncUnlink = () => {
+      unlinkBtn.hidden = !linkedHere.has(select.value);
+      unlinkBtn.dataset.id = select.value;
+    };
+    select.addEventListener('change', syncUnlink);
+    syncUnlink();
+
     document.getElementById('reportMatchForm').addEventListener('submit', async event => {
       event.preventDefault();
       const scheduleId = event.currentTarget.dataset.scheduleId;
-      const reportId = document.getElementById('reportMatchSelect').value;
+      const reportId = select.value;
       const submit = document.getElementById('reportMatchSubmit');
       submit.disabled = true;
       submit.textContent = '保存中…';
@@ -1443,6 +1507,58 @@
         submit.textContent = '保存匹配';
         notify(error.message || '保存失败', 'error');
       }
+    });
+  }
+
+  // 路演侧自动匹配：规则 + 大模型推荐一份未关联报告，仅在弹窗内展示推荐结果，
+  // 由人工"采用"后核对保存，不会直接建立关联
+  async function handleAutoMatchReport(scheduleId, button) {
+    if (!button) return;
+    const original = button.textContent;
+    button.disabled = true;
+    button.textContent = '匹配中…';
+    try {
+      const result = await API.roadshowAutoMatch(scheduleId);
+      if (result.recommended) showAutoMatchSuggestion(result);
+      else notify(result.message || '未找到足够吻合的路演报告，请手工选择', 'info');
+    } catch (error) {
+      notify(error.message || '自动匹配失败', 'error');
+    } finally {
+      button.disabled = false;
+      button.textContent = original;
+    }
+  }
+
+  // 在匹配报告弹窗内插入推荐结果条：采用=选入下拉（仍需点保存匹配确认），忽略=关闭
+  function showAutoMatchSuggestion(result) {
+    document.getElementById('autoMatchSuggestion')?.remove();
+    const report = result.report || {};
+    const box = document.createElement('div');
+    box.className = 'roadshow-match-suggestion';
+    box.id = 'autoMatchSuggestion';
+    box.innerHTML = `
+      <div class="roadshow-match-suggestion-info">
+        <strong>推荐匹配（${result.method === 'rule' ? '规则' : '大模型'}）</strong>
+        <p>《${escapeHTML(report.title || '')}》 ${escapeHTML(report.reportDate || '')} · ${escapeHTML(report.sourceAuthor || '')}</p>
+        <span>采用后请核对信息，点击"保存匹配"确认建立关联</span>
+      </div>
+      <div class="roadshow-match-suggestion-actions">
+        <button type="button" class="btn btn-primary btn-small" id="applySuggestionBtn">采用</button>
+        <button type="button" class="btn btn-ghost btn-small" id="dismissSuggestionBtn">忽略</button>
+      </div>`;
+    const select = document.getElementById('reportMatchSelect');
+    if (!select) return;
+    select.closest('.form-field').insertBefore(box, select.nextSibling);
+    box.querySelector('#dismissSuggestionBtn').addEventListener('click', () => box.remove());
+    box.querySelector('#applySuggestionBtn').addEventListener('click', () => {
+      // 推荐报告未关联其他安排，正常在默认列表中；若不在（理论上不会），先展开隐藏项
+      if (!select.querySelector(`option[value="${CSS.escape(report.id)}"]`)) {
+        document.getElementById('toggleLinkedReports')?.click();
+      }
+      select.value = report.id;
+      select.dispatchEvent(new Event('change'));
+      box.remove();
+      notify('已选入推荐报告，请核对后点击"保存匹配"');
     });
   }
 
@@ -2628,15 +2744,18 @@
       await refreshData();
       closeModal();
       notify(`成功上传 ${result.count} 份报告`);
-      // 路演报告自动匹配成功时提示（规则或大模型匹配，详情中可手工调整）
+      // 路演报告自动匹配成功时弹出结果卡片（规则或大模型匹配），可一键调整
       const uploaded = (result.reports || [])[0];
-      if (reportType === 'roadshow' && uploaded && uploaded.roadshowScheduleId
-        && ['rule', 'llm'].includes(uploaded.roadshowMatchedBy)) {
-        notify('已自动匹配到对应路演安排，可在报告详情中调整');
-      }
+      const autoMatched = reportType === 'roadshow' && uploaded && uploaded.roadshowScheduleId
+        && ['rule', 'llm'].includes(uploaded.roadshowMatchedBy);
       state.uploadPreset = null;
       state.filters = { category: reportType === 'internal' ? category : '', theme: reportType === 'internal' ? theme : '', org: '', score: '', query: '' };
       navigate(reportType === 'external' ? 'external-reports' : reportType === 'research_visit' ? 'research-reports' : reportType === 'roadshow' ? 'roadshow-reports' : 'reports');
+      if (autoMatched) {
+        const saved = getReport(uploaded.id);
+        if (saved && saved.roadshowSchedule) showAutoMatchResultModal(saved);
+        else notify('已自动匹配到对应路演安排，可在报告详情中调整');
+      }
     } catch (error) {
       console.error(error);
       submit.disabled = false;
@@ -3069,6 +3188,7 @@
     else if (action === 'match-schedule') showScheduleMatchModal(reportId);
     else if (action === 'unlink-schedule') unlinkSchedule(reportId);
     else if (action === 'match-report') showReportMatchModal(reportId);
+    else if (action === 'auto-match-report') handleAutoMatchReport(reportId, target);
   }
 
   function bindEvents() {
