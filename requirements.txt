@@ -1,6 +1,7 @@
 ﻿flask>=2.3
 openpyxl>=3.1
 gunicorn>=21.2
+waitress>=3.0  # Windows 生产 WSGI 服务器（gunicorn 不支持 Windows）
 oracledb>=2.0
 requests>=2.31
 python-dotenv>=1.0

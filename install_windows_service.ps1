@@ -85,7 +85,8 @@ if ($ExistingService) {
     & $Nssm remove $ServiceName confirm | Out-Null
 }
 
-& $Nssm install $ServiceName $VenvPython "app.py"
+# 以 waitress 生产入口运行（gunicorn 不支持 Windows；app.py 仅用于本地开发）
+& $Nssm install $ServiceName $VenvPython "run_production.py"
 & $Nssm set $ServiceName AppDirectory $ProjectDir
 $ServiceEnvironment = @(
     "PORTAL_DATA_ROOT=$DataRoot",
