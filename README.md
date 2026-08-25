@@ -26,6 +26,8 @@ $env:MIMO_API_KEY="sk-..."
 $env:DEEPSEEK_API_KEY="sk-..."
 # 可选：数据不在项目同级时设置
 # $env:PORTAL_DATA_ROOT="D:\信用债研究\完整网页内容\juyuan_credit_data"
+# 可选：机构行为监测上游数据源（默认 http://43.137.12.140:8000）
+# $env:INSTITUTION_FLOW_UPSTREAM="http://43.137.12.140:8000/bondflow/api"
 python app.py
 ```
 

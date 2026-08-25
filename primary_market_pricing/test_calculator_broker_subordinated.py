@@ -7,7 +7,7 @@ from primary_market_pricing.calculator import (
     _calculate_single_bond_with_cache,
     is_broker_subordinated_bond,
 )
-from primary_market_pricing.migrate_cache_v6_to_v7_broker_subordinated import (
+from scripts.migrate_cache_v6_to_v7_broker_subordinated import (
     _add_cached_type_mismatches,
 )
 

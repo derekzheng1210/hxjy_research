@@ -1,18 +1,25 @@
 from __future__ import annotations
 
 from datetime import datetime
+import json
+import os
+import tempfile
 import threading
 import traceback
 
 from .generators import run_all
-
+from paths import DATA_DIR
 
 DEFAULT_MODULES = ["bond_picker", "spread_monitor", "strategy_dashboard", "credit_std_dev", "institution_flow_rates", "primary_market_pricing"]
 VALID_MODULES = set(DEFAULT_MODULES)
 
+# 状态持久化：gunicorn 多 worker 下，启动更新的 worker 与轮询进度的 worker
+# 可能不是同一进程，内存态状态会互相不可见。这里把状态写到数据目录的
+# update_status.json（原子替换），get_status() 始终从文件读取。
+STATUS_FILE = DATA_DIR / "update_status.json"
 
 _lock = threading.Lock()
-_status = {
+_default_status = {
     "running": False,
     "started_at": None,
     "finished_at": None,
@@ -25,41 +32,73 @@ _status = {
 }
 
 
+def _load_status() -> dict:
+    try:
+        with open(STATUS_FILE, encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, ValueError):
+        return dict(_default_status, log=[])
+    if not isinstance(data, dict):
+        return dict(_default_status, log=[])
+    status = dict(_default_status)
+    status.update({key: data.get(key, value) for key, value in _default_status.items()})
+    if not isinstance(status["log"], list):
+        status["log"] = []
+    return status
+
+
+def _save_status(status: dict) -> None:
+    STATUS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=".update_status-", dir=STATUS_FILE.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(status, handle, ensure_ascii=False)
+        os.replace(tmp_name, STATUS_FILE)
+    finally:
+        if os.path.exists(tmp_name):
+            os.unlink(tmp_name)
+
+
 def get_status() -> dict:
     with _lock:
-        return dict(_status, log=list(_status["log"][-200:]))
+        status = _load_status()
+    return dict(status, log=list(status["log"][-200:]))
 
 
 def _append(message: str, percent: int | None = None) -> None:
     with _lock:
+        status = _load_status()
         if percent is not None:
-            _status["percent"] = max(0, min(100, int(percent)))
-        _status["step"] = message
-        pct = f" [{_status['percent']}%]" if _status.get("percent") else ""
-        _status["log"].append(f"{datetime.now().strftime('%H:%M:%S')} {message}{pct}")
+            status["percent"] = max(0, min(100, int(percent)))
+        status["step"] = message
+        pct = f" [{status['percent']}%]" if status.get("percent") else ""
+        status["log"].append(f"{datetime.now().strftime('%H:%M:%S')} {message}{pct}")
+        _save_status(status)
 
 
 def start_update(modules: list[str] | None = None) -> tuple[bool, str]:
     selected = [m for m in (modules or DEFAULT_MODULES) if m in VALID_MODULES]
     if not selected:
-        return False, "\u672a\u9009\u62e9\u4efb\u4f55\u66f4\u65b0\u6a21\u5757"
+        return False, "未选择任何更新模块"
     with _lock:
-        if _status["running"]:
-            return False, "\u5df2\u6709\u6570\u636e\u5e93\u66f4\u65b0\u4efb\u52a1\u6b63\u5728\u8fd0\u884c"
-        _status.update({
+        status = _load_status()
+        if status["running"]:
+            return False, "已有数据库更新任务正在运行"
+        status.update({
             "running": True,
             "started_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "finished_at": None,
-            "step": "\u51c6\u5907\u5f00\u59cb",
+            "step": "准备开始",
             "percent": 0,
             "ok": None,
             "error": None,
             "log": [],
             "modules": selected,
         })
+        _save_status(status)
     thread = threading.Thread(target=_worker, args=(selected,), name="juyuan-update", daemon=True)
     thread.start()
-    return True, "\u6570\u636e\u5e93\u66f4\u65b0\u4efb\u52a1\u5df2\u542f\u52a8"
+    return True, "数据库更新任务已启动"
 
 
 def _worker(modules: list[str]) -> None:
@@ -78,18 +117,22 @@ def _worker(modules: list[str]) -> None:
                 )
             )
         with _lock:
-            _status["ok"] = True
-            _status["step"] = "更新完成"
-            _status["percent"] = 100
-            _status["finished_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            _status["running"] = False
-            _status["log"].append(f"{datetime.now().strftime('%H:%M:%S')} 更新完成 [100%]")
+            status = _load_status()
+            status["ok"] = True
+            status["step"] = "更新完成"
+            status["percent"] = 100
+            status["finished_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            status["running"] = False
+            status["log"].append(f"{datetime.now().strftime('%H:%M:%S')} 更新完成 [100%]")
+            _save_status(status)
     except Exception as exc:
         tb = traceback.format_exc(limit=8)
         with _lock:
-            _status["ok"] = False
-            _status["error"] = f"{type(exc).__name__}: {exc}"
-            _status["step"] = "更新失败"
-            _status["finished_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            _status["running"] = False
-            _status["log"].append(tb)
+            status = _load_status()
+            status["ok"] = False
+            status["error"] = f"{type(exc).__name__}: {exc}"
+            status["step"] = "更新失败"
+            status["finished_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            status["running"] = False
+            status["log"].append(tb)
+            _save_status(status)

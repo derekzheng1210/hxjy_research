@@ -13,13 +13,14 @@ from . import config
 _CLIENT_INITIALIZED = False
 
 
-def _init_client() -> None:
+def _init_client(client_dir: str | None = None) -> None:
     global _CLIENT_INITIALIZED
     if _CLIENT_INITIALIZED:
         return
-    if config.ORACLE_CLIENT and os.path.isdir(config.ORACLE_CLIENT):
+    client_dir = client_dir or config.ORACLE_CLIENT
+    if client_dir and os.path.isdir(client_dir):
         try:
-            oracledb.init_oracle_client(lib_dir=config.ORACLE_CLIENT)
+            oracledb.init_oracle_client(lib_dir=client_dir)
         except Exception as exc:
             # Calling init twice raises in some environments; connecting below
             # will surface real client problems.
@@ -28,13 +29,20 @@ def _init_client() -> None:
     _CLIENT_INITIALIZED = True
 
 
+# 兼容历史调用：仅初始化 Oracle 客户端
+def init_oracle_client() -> None:
+    _init_client()
+
+
 @contextmanager
-def connect():
+def connect(user: str | None = None, password: str | None = None, dsn: str | None = None):
+    """连接聚源 Oracle。参数缺省时使用 juyuan_update.config 的默认配置，
+    其他模块（如 primary_market_pricing）可传入自己的连接参数复用本实现。"""
     _init_client()
     conn = oracledb.connect(
-        user=config.DB_USER,
-        password=config.DB_PASSWORD,
-        dsn=config.DB_DSN,
+        user=user or config.DB_USER,
+        password=password or config.DB_PASSWORD,
+        dsn=dsn or config.DB_DSN,
     )
     try:
         yield conn

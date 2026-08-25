@@ -17,7 +17,7 @@ import sys
 from collections import defaultdict
 from datetime import datetime
 
-if __package__:
+if __package__ == "primary_market_pricing":
     from . import config
     from .cache_builder import CACHE_DB_PATH, ISSUE_DATE_RULE_VERSION, save_issuer_result
     from .calculator import (

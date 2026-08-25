@@ -19,12 +19,12 @@ from datetime import datetime
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(errors="replace")
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from cache_builder import CACHE_DB_PATH, ISSUE_DATE_RULE_VERSION, init_cache_db, save_issuer_result
-from calculator import _QueryCache, _calculate_single_bond_with_cache, is_exchange_kechuang_bond
-from data_fetcher import fetch_issuer_outstanding
-from db_utils import get_connection
+from primary_market_pricing.cache_builder import CACHE_DB_PATH, ISSUE_DATE_RULE_VERSION, init_cache_db, save_issuer_result
+from primary_market_pricing.calculator import _QueryCache, _calculate_single_bond_with_cache, is_exchange_kechuang_bond
+from primary_market_pricing.data_fetcher import fetch_issuer_outstanding
+from primary_market_pricing.db_utils import get_connection
 
 
 def _fetch_exchange_metadata(conn, symbols: set[str]) -> dict[str, tuple[str, str]]:

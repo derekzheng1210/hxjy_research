@@ -43,14 +43,14 @@ from dotenv import load_dotenv  # noqa: E402
 load_dotenv(os.path.join(_PROJECT_ROOT, ".env"))
 from paths import WORKPAPER_DIR  # noqa: E402
 
-from .cache_builder import (  # noqa: E402
+from primary_market_pricing.cache_builder import (  # noqa: E402
     CACHE_DB_PATH,
     HISTORY_START_DATE,
     ISSUE_DATE_RULE_VERSION,
     DateOrderedCacheBuilder,
     init_cache_db,
 )
-# 本模块为包成员，使用相对导入；请以 `python -m primary_market_pricing.update_excel_workpaper` 运行。
+# 维护脚本已移至 scripts/，请以 `python scripts/update_excel_workpaper.py` 运行。
 
 
 HEADER_FILL = PatternFill("solid", fgColor="1F4E78")

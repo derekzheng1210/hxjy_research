@@ -27,11 +27,11 @@ import os
 import sys
 import time
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from db_utils import get_connection
-from calculator import classify_bond_type
-from cache_builder import init_cache_db, CACHE_DB_PATH
+from primary_market_pricing.db_utils import get_connection
+from primary_market_pricing.calculator import classify_bond_type
+from primary_market_pricing.cache_builder import init_cache_db, CACHE_DB_PATH
 
 OLD_RULE = "issue_date_v5"
 NEW_RULE = "issue_date_v6"

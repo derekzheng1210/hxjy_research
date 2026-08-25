@@ -58,13 +58,24 @@ SHEET_NAME = "万得"
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "dev-secret-change-before-deploy")
+
+# 未显式配置敏感项时在启动日志中提醒，避免默认值被带到公网部署
+for _warn_var, _warn_default in (
+    ("SECRET_KEY", app.secret_key),
+    ("SITE_PASSWORD", os.environ.get("SITE_PASSWORD")),
+    ("ADMIN_PASSWORD", os.environ.get("ADMIN_PASSWORD")),
+    ("INSTITUTION_FLOW_UPSTREAM", os.environ.get("INSTITUTION_FLOW_UPSTREAM")),
+):
+    if not _warn_var or _warn_default is None:
+        print(f"[安全提醒] 环境变量 {_warn_var} 未设置，正在使用代码内置默认值；公网部署前请在 .env 或服务环境中显式配置。")
+
 app.register_blueprint(pricing_bp, url_prefix="/primary-market-pricing")
 app.register_blueprint(internal_knowledge_base_bp, url_prefix="/internal-knowledge-base")
 
 BONDS_CACHE = []
 DATA_TIMESTAMP = "尚未加载"
-INSTITUTION_FLOW_UPSTREAM = "http://43.137.12.140:8000/bondflow/api"
-INSTITUTION_FLOW_UPSTREAM_PAGE = "http://43.137.12.140:8000/jgxw/"
+INSTITUTION_FLOW_UPSTREAM = os.environ.get("INSTITUTION_FLOW_UPSTREAM", "http://43.137.12.140:8000/bondflow/api").rstrip("/")
+INSTITUTION_FLOW_UPSTREAM_PAGE = os.environ.get("INSTITUTION_FLOW_UPSTREAM_PAGE", "http://43.137.12.140:8000/jgxw/").rstrip("/")
 INSTITUTION_FLOW_TIMEOUT = 120
 INSTITUTION_FLOW_OPTIONS_TTL = 300
 INSTITUTION_FLOW_QUERY_TTL = int(os.environ.get("INSTITUTION_FLOW_QUERY_TTL", "30"))

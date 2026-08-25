@@ -8,13 +8,17 @@ then records the outcome so genuine no-reference cases are not retried.
 from __future__ import annotations
 
 import argparse
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import sqlite3
 import time
 from datetime import datetime
 
-from cache_builder import CACHE_DB_PATH, ISSUE_DATE_RULE_VERSION, init_cache_db, save_issuer_result
-from calculator import _QueryCache, calculate_issuer_deviations
-from db_utils import get_connection
+from primary_market_pricing.cache_builder import CACHE_DB_PATH, ISSUE_DATE_RULE_VERSION, init_cache_db, save_issuer_result
+from primary_market_pricing.calculator import _QueryCache, calculate_issuer_deviations
+from primary_market_pricing.db_utils import get_connection
 
 
 def _init_repair_log(conn: sqlite3.Connection) -> None:
