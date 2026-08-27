@@ -194,6 +194,24 @@ def save_bond_static(bonds: list[dict], source_file: str) -> dict:
     return payload
 
 
+def load_counterparty_limits() -> dict:
+    return load_json(
+        config.COUNTERPARTY_LIMITS_JSON,
+        {"generated_at": "", "source_file": "", "total_issuers": 0, "limits": {}},
+    )
+
+
+def save_counterparty_limits(limits: dict[str, float], source_file: str) -> dict:
+    payload = {
+        "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "source_file": source_file,
+        "total_issuers": len(limits),
+        "limits": limits,
+    }
+    write_json(config.COUNTERPARTY_LIMITS_JSON, payload)
+    return payload
+
+
 def refresh_bond_terms(target_trade_date: str, base_date: str | None = None) -> dict:
     import copy
     payload = copy.deepcopy(load_bond_static())
@@ -377,6 +395,36 @@ def parse_fund_sheet(ws) -> list[dict]:
     return [dedup[d] for d in sorted(dedup)]
 
 
+def parse_neiping_sheet(ws) -> dict[str, float]:
+    rows = list(ws.iter_rows(values_only=True))
+    header_row = None
+    issuer_index = None
+    limit_index = None
+    for row_index, row in enumerate(rows[:20]):
+        headers = [normalize_text(value) for value in row]
+        issuer_index = _header_index(headers, ["融资主体", "主体名称"], None)
+        limit_index = _header_index(headers, ["最新可用对手限额"], None)
+        if issuer_index is not None and limit_index is not None:
+            header_row = row_index
+            break
+    if header_row is None:
+        raise RuntimeError("统一 Excel 的 neiping 缺少融资主体或最新可用对手限额列")
+
+    limits: dict[str, float] = {}
+    for row in rows[header_row + 1:]:
+        issuer = normalize_text(row[issuer_index] if issuer_index < len(row) else None)
+        if not issuer:
+            continue
+        try:
+            value = float(row[limit_index])
+        except (TypeError, ValueError, IndexError):
+            continue
+        if value != value or value in (float("inf"), float("-inf")):
+            continue
+        limits[issuer] = round(value, 6)
+    return limits
+
+
 def import_unified_excel(path: Path) -> dict:
     wb = load_workbook(path, read_only=True, data_only=True)
     try:
@@ -384,8 +432,11 @@ def import_unified_excel(path: Path) -> dict:
             raise RuntimeError("统一 Excel 缺少 Sheet3 债券信息表")
         if "Sheet1" not in wb.sheetnames:
             raise RuntimeError("统一 Excel 缺少 Sheet1 基金指数表")
+        if "neiping" not in wb.sheetnames:
+            raise RuntimeError("统一 Excel 缺少 neiping 内评与限额表")
         bonds = parse_bond_sheet(wb["Sheet3"])
         fund_prices = parse_fund_sheet(wb["Sheet1"])
+        counterparty_limits = parse_neiping_sheet(wb["neiping"])
     finally:
         wb.close()
 
@@ -393,8 +444,11 @@ def import_unified_excel(path: Path) -> dict:
         raise RuntimeError("Sheet3 未读取到有效债券数据")
     if not fund_prices:
         raise RuntimeError("Sheet1 未读取到有效基金指数数据")
+    if not counterparty_limits:
+        raise RuntimeError("neiping 未读取到有效对手限额数据")
 
     bond_payload = save_bond_static(bonds, str(path))
+    limit_payload = save_counterparty_limits(counterparty_limits, str(path))
     write_json(config.STRATEGY_FUND_PRICES_FROZEN, fund_prices)
     return {
         "bonds": bond_payload["total_bonds"],
@@ -402,4 +456,5 @@ def import_unified_excel(path: Path) -> dict:
         "fund_prices": len(fund_prices),
         "fund_start": fund_prices[0]["date"],
         "fund_end": fund_prices[-1]["date"],
+        "counterparty_limit_issuers": limit_payload["total_issuers"],
     }

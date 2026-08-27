@@ -3,7 +3,7 @@
 import json
 import os
 import re
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from openpyxl import load_workbook
@@ -11,6 +11,7 @@ from openpyxl import load_workbook
 from . import config
 from .db import (
     connect,
+    fetch_bond_rating_facts,
     fetch_cnbd_yields_by_symbol,
     fetch_curve_series,
     fetch_curve_series_for_dates,
@@ -18,6 +19,7 @@ from .db import (
     resolve_curve_codes,
     shclest_reference_dates,
 )
+from .rating_compliance import persist_rating_facts
 from .strategy_dashboard import build_dashboard as build_strategy_dashboard
 from .unified_excel import (
     get_bond_picker_bonds,
@@ -587,12 +589,28 @@ def generate_bond_picker_yields(progress=None) -> dict:
     bonds = get_bond_picker_bonds()
     if not bonds:
         raise RuntimeError("未找到符合 BBB- 及以上且无担保人的择券工具债券")
+    rating_facts = None
+    rating_error = ""
     with connect() as conn:
         trade_date = latest_curve_date(conn)
         if progress:
             progress(f"查询择券工具最新中债估值 {dash_date(trade_date)}", 45)
         yields = fetch_cnbd_yields_by_symbol(conn, [b["code"] for b in bonds], trade_date)
+        if progress:
+            progress("查询债券主体/债项评级记录（合规630校验）", 60)
+        try:
+            rating_facts = fetch_bond_rating_facts(conn, [b["code"] for b in bonds])
+        except Exception as exc:
+            rating_error = str(exc)
     payload = save_bond_picker_yields_cache(trade_date, yields)
+    if rating_facts is not None:
+        persist_rating_facts(rating_facts, bonds, date.today())
+        if progress:
+            progress(f"630评级事实缓存完成 {len(rating_facts)} 条", 85)
+    payload["rating_facts"] = {
+        "updated": rating_facts is not None,
+        "error": rating_error,
+    }
     if progress:
         progress(f"择券工具估值缓存完成 {len(payload['yields'])} 条", 90)
     return payload

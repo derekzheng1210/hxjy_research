@@ -6,7 +6,7 @@ import re
 import shutil
 import tempfile
 import threading
-from datetime import datetime
+from datetime import date, datetime
 from functools import wraps
 from pathlib import Path
 from urllib.parse import urlparse
@@ -24,13 +24,33 @@ from juyuan_update.unified_excel import (
     import_unified_excel,
     load_bond_picker_yields_cache,
     load_bond_static,
+    load_counterparty_limits,
     load_update_settings,
     save_update_settings,
+)
+from juyuan_update.rating_compliance import (
+    evaluate_rating_compliance,
+    load_rating_facts_cache,
+    refresh_rating_compliance_cache,
 )
 from primary_market_pricing.app import pricing_bp
 from internal_knowledge_base import bp as internal_knowledge_base_bp
 import institution_flow_config
 import institution_flow_data
+from broker_market import (
+    MARKET_DIR,
+    data_version as bond_picker_data_version,
+    ensure_directories as ensure_broker_directories,
+    load_emotion_history,
+    load_preferences as load_broker_preferences,
+    load_snapshot as load_broker_snapshot,
+    merge_bond_rows,
+    record_market_emotion,
+    public_status as broker_scheduler_status,
+    save_preferences as save_broker_preferences,
+    start_scheduler as start_broker_scheduler,
+    trigger_update as trigger_broker_update,
+)
 
 # 运态数据路径统一由 paths.py 管理（PORTAL_DATA_ROOT 环境变量定位）
 from paths import (
@@ -247,11 +267,48 @@ def load_bond_data():
         return
     try:
         bonds, data_date = read_excel(BOND_EXCEL)
-        BONDS_CACHE = bonds
+        BONDS_CACHE = merge_bond_rows(bonds)
+        limits = load_counterparty_limits().get("limits") or {}
+        rating_cache = load_rating_facts_cache()
+        compliance = rating_cache.get("compliance") or {}
+        rating_facts = rating_cache.get("facts") or {}
+        # 缓存仅每日更新时覆盖；跨日未刷新时按事实现算兜底（不回写缓存）
+        cache_current = str(rating_cache.get("as_of_date") or "") == date.today().strftime("%Y-%m-%d")
+        today = date.today()
+        for row in BONDS_CACHE:
+            value = limits.get(str(row[4] or "").strip())
+            try:
+                row.append(float(value) if value is not None else None)
+            except (TypeError, ValueError):
+                row.append(None)
+            code = str(row[0] or "").strip().upper()
+            bare = code.split(".", 1)[0]
+            verdict = (compliance.get(code) or compliance.get(bare)) if cache_current else None
+            if not verdict:
+                fact = rating_facts.get(code) or rating_facts.get(bare) or {}
+                result = evaluate_rating_compliance(today, fact)
+                verdict = [result["status"], result["reason"]]
+            row.append(verdict)
         DATA_TIMESTAMP = format_date_only(data_date) or file_updated(BOND_EXCEL)
     except Exception as exc:
         BONDS_CACHE = []
         DATA_TIMESTAMP = f"读取失败: {exc}"
+
+
+def rating_compliance_status():
+    cache = load_rating_facts_cache()
+    counts = {"ok": 0, "fail": 0, "unknown": 0}
+    for verdict in (cache.get("compliance") or {}).values():
+        status = verdict[0] if isinstance(verdict, list) and verdict[0] in counts else "unknown"
+        counts[status] += 1
+    return {
+        "missing": not bool(cache.get("facts")),
+        "updated": file_updated_time(juyuan_config.RATING_FACTS_CACHE),
+        "as_of": str(cache.get("as_of_date") or ""),
+        "ok": f"{counts['ok']:,}",
+        "fail": f"{counts['fail']:,}",
+        "unknown": f"{counts['unknown']:,}",
+    }
 
 
 def status_info():
@@ -264,6 +321,7 @@ def status_info():
             "updated": DATA_TIMESTAMP,
             "total": f"{len(BONDS_CACHE):,}",
         },
+        "rating_compliance": rating_compliance_status(),
         "strategy_dashboard": {
             "updated": file_updated(STRATEGY_HTML),
             "size": file_size(STRATEGY_HTML),
@@ -300,13 +358,15 @@ def status_info():
             "fund_updated": file_updated_time(juyuan_config.STRATEGY_FUND_PRICES_FROZEN),
         },
         "settings": settings,
+        "broker_market": broker_scheduler_status(),
     }
 
 
 def portal_nav(active_endpoint: str):
     links = [
         ("home", "首页"),
-        ("bond_picker", "择券工具"),
+        ("secondary_bond_picker", "二级择券工具"),
+        ("bond_picker", "收益率倒挂挖掘工具"),
         ("strategy_dashboard", "策略仪表盘"),
         ("spread_monitor", "利差监控"),
         ("primary_market_pricing.index", "一级发行研究"),
@@ -320,7 +380,7 @@ def portal_nav(active_endpoint: str):
     items.append(
         ".portal-nav{position:sticky;top:0;z-index:10000;background:#fff;color:#1e293b;"
         "height:44px;display:flex;align-items:center;gap:6px;padding:0 16px;"
-        "border-bottom:1px solid #e2e8f0;font-family:-apple-system,BlinkMacSystemFont,"
+        "border-bottom:1px solid #e2e8f0;overflow-x:auto;white-space:nowrap;font-family:-apple-system,BlinkMacSystemFont,"
         '"Segoe UI","Microsoft YaHei",sans-serif;box-sizing:border-box}'
         ".portal-nav *{box-sizing:border-box}"
         ".portal-nav .brand{font-weight:800;color:#2563eb;font-size:15px;margin-right:16px;letter-spacing:.5px}"
@@ -625,13 +685,105 @@ def home():
 @login_required
 def bond_picker():
     load_bond_data()
+    version = bond_picker_data_version()
     return render_portal_template(
         "bond_picker.html",
         "bond_picker",
         bond_data=json.dumps(BONDS_CACHE, ensure_ascii=False),
+        market_meta=json.dumps(bond_picker_market_meta(include_emotion=False), ensure_ascii=False),
+        data_version=version,
         timestamp=DATA_TIMESTAMP,
         total=len(BONDS_CACHE),
     )
+
+
+@app.route("/secondary-bond-picker")
+@login_required
+def secondary_bond_picker():
+    load_bond_data()
+    market_meta = bond_picker_market_meta(include_emotion=True)
+    version = bond_picker_data_version()
+    return render_portal_template(
+        "secondary_bond_picker.html",
+        "secondary_bond_picker",
+        bond_data=json.dumps(BONDS_CACHE, ensure_ascii=False),
+        market_meta=json.dumps(market_meta, ensure_ascii=False),
+        data_version=version,
+        timestamp=DATA_TIMESTAMP,
+        total=len(BONDS_CACHE),
+    )
+
+
+def _ensure_latest_emotion(snapshot):
+    generated_at = str(snapshot.get("generated_at") or "")
+    history = load_emotion_history()
+    if not generated_at or any(p.get("observed_at") == generated_at for p in history.get("points") or []):
+        return history
+    try:
+        record_market_emotion(snapshot)
+    except Exception:
+        return history
+    return load_emotion_history()
+
+
+def bond_picker_market_meta(include_emotion=True):
+    snapshot = load_broker_snapshot()
+    scheduler = broker_scheduler_status()
+    broker_state = scheduler.get("broker", {})
+    valuation_state = scheduler.get("bond_picker", {})
+    payload = {
+        "valuation_date": DATA_TIMESTAMP,
+        "broker_snapshot_at": snapshot.get("generated_at") or "尚无经纪商快照",
+        "broker_quote_count": int(snapshot.get("quote_count") or 0),
+        "broker_state": broker_state.get("state") or "idle",
+        "broker_stale": bool(broker_state.get("stale")),
+        "broker_error": broker_state.get("last_error") or "",
+        "broker_next_run": broker_state.get("next_run") or "",
+        "valuation_state": valuation_state.get("state") or "idle",
+        "valuation_stale": bool(valuation_state.get("stale")),
+        "valuation_error": valuation_state.get("last_error") or "",
+        "rating_compliance": rating_compliance_status(),
+    }
+    if include_emotion:
+        history = _ensure_latest_emotion(snapshot)
+        points = history.get("points") or []
+        payload["emotion"] = points[-1] if points else {"value": None, "count": 0, "breakdown": {}}
+        payload["emotion_history"] = points
+        payload["emotion_history_version"] = history.get("version") or ""
+    return payload
+
+
+@app.route("/api/bond-picker/data")
+@app.route("/api/secondary-bond-picker/data")
+@login_required
+def api_bond_picker_data():
+    _ensure_latest_emotion(load_broker_snapshot())
+    version = bond_picker_data_version()
+    if request.if_none_match.contains(version):
+        response = Response(status=304)
+        response.set_etag(version)
+        return response
+    load_bond_data()
+    response = jsonify({
+        "version": version,
+        "bonds": BONDS_CACHE,
+        "meta": bond_picker_market_meta(),
+    })
+    response.set_etag(version)
+    response.headers["Cache-Control"] = "private, no-cache"
+    return response
+
+
+@app.route("/api/bond-picker/preferences", methods=["GET", "PUT"])
+@app.route("/api/secondary-bond-picker/preferences", methods=["GET", "PUT"])
+@login_required
+def api_bond_picker_preferences():
+    if request.method == "GET":
+        return jsonify(load_broker_preferences())
+    try:
+        return jsonify(save_broker_preferences(request.get_json(silent=False)))
+    except (TypeError, ValueError) as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
 
 
 @app.route("/strategy-dashboard")
@@ -815,11 +967,24 @@ def admin():
                 if target == "unified_excel":
                     save_upload(file, juyuan_config.UNIFIED_EXCEL, {".xlsx", ".xls"}, "unified_excel")
                     result = import_unified_excel(juyuan_config.UNIFIED_EXCEL)
+                    # 债券清单/起息日已变化，同步重建630评级合规缓存（单版本覆盖）
+                    try:
+                        rating = refresh_rating_compliance_cache()
+                        verdicts = [v[0] for v in (rating.get("compliance") or {}).values()]
+                        rating_note = (
+                            f"；630评级缓存已刷新：{rating['total_bonds']:,} 条"
+                            f"（满足 {verdicts.count('ok'):,}，不满足 {verdicts.count('fail'):,}，"
+                            f"待确认 {verdicts.count('unknown'):,}）"
+                        )
+                    except Exception as exc:
+                        rating_note = f"；630评级缓存刷新失败: {exc}（每日更新任务会自动重试）"
                     load_bond_data()
                     message = (
                         "统一 Excel 上传成功："
                         f"债券 {result['bonds']:,} 条，择券候选 {result['bond_picker_bonds']:,} 条，"
-                        f"基金指数 {result['fund_prices']:,} 条（{result['fund_start']} 至 {result['fund_end']}）。"
+                        f"基金指数 {result['fund_prices']:,} 条（{result['fund_start']} 至 {result['fund_end']}）"
+                        + rating_note
+                        + "。"
                     )
                 elif target == "bond_picker":
                     error = "该上传入口已合并为统一数据 Excel"
@@ -857,6 +1022,16 @@ def admin_start_db_update():
     ok, message = start_update(modules or None)
     if request.headers.get("X-Requested-With") == "XMLHttpRequest":
         return {"ok": ok, "message": message, "status": get_update_status()}
+    return redirect(url_for("admin"))
+
+
+@app.route("/admin/start-broker-update", methods=["POST"])
+@login_required
+@admin_required
+def admin_start_broker_update():
+    ok, message = trigger_broker_update("broker")
+    if request.headers.get("X-Requested-With") == "XMLHttpRequest":
+        return {"ok": ok, "message": message, "status": broker_scheduler_status()}
     return redirect(url_for("admin"))
 
 
@@ -902,12 +1077,16 @@ def api_update_status():
     return get_update_status()
 
 
-for directory in [BOND_DIR, STRATEGY_DIR, SPREAD_DIR, INDUSTRY_DIR, STD_DEV_JS.parent, INSTITUTION_FLOW_CACHE.parent, PRIMARY_PRICING_CACHE.parent, CONFIG_DIR, UPLOADS_DIR, juyuan_config.PROJECT2_BOND_EXCEL.parent, juyuan_config.STRATEGY_FUND_PRICES_FROZEN.parent, juyuan_config.BOND_STATIC_JSON.parent, juyuan_config.BOND_PICKER_YIELDS_CACHE.parent]:
+for directory in [BOND_DIR, STRATEGY_DIR, SPREAD_DIR, INDUSTRY_DIR, STD_DEV_JS.parent, INSTITUTION_FLOW_CACHE.parent, PRIMARY_PRICING_CACHE.parent, CONFIG_DIR, UPLOADS_DIR, juyuan_config.PROJECT2_BOND_EXCEL.parent, juyuan_config.STRATEGY_FUND_PRICES_FROZEN.parent, juyuan_config.BOND_STATIC_JSON.parent, juyuan_config.BOND_PICKER_YIELDS_CACHE.parent, MARKET_DIR]:
     directory.mkdir(parents=True, exist_ok=True)
 
+ensure_broker_directories()
 load_bond_data()
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", "5000"))
-    debug = os.environ.get("FLASK_DEBUG", "1") == "1"
-    app.run(host="0.0.0.0", port=port, debug=debug)
+    port = int(os.environ.get("PORT", "5011"))
+    host = os.environ.get("HOST", "127.0.0.1")
+    debug = os.environ.get("FLASK_DEBUG", "0") == "1"
+    if os.environ.get("BROKER_SCHEDULER_ENABLED", "1") == "1":
+        start_broker_scheduler()
+    app.run(host=host, port=port, debug=debug, use_reloader=False)

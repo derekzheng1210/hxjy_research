@@ -571,6 +571,115 @@ def resolve_bond_codes(conn, raw_codes: Iterable[str], batch_size: int = 500) ->
     return resolved
 
 
+_PLACEHOLDER_DATE_PREFIX = "1900"
+
+
+def normalize_event_date(value) -> str:
+    """Normalise Juyuan rating event dates to 'YYYY-MM-DD'; '' for placeholders."""
+    text = yyyymmdd(value)
+    if len(text) != 8 or not text.isdigit() or text.startswith(_PLACEHOLDER_DATE_PREFIX):
+        return ""
+    return f"{text[:4]}-{text[4:6]}-{text[6:8]}"
+
+
+def _batched(values: list, batch_size: int):
+    for start in range(0, len(values), batch_size):
+        yield values[start:start + batch_size]
+
+
+def fetch_bond_rating_facts(conn, raw_codes: Iterable[str], batch_size: int = 500) -> dict[str, dict]:
+    """Collect per-bond rating event dates for the Jun-30 tracking-rating rule.
+
+    债项评级事件 = TQ_BD_CREDITRATE（按 SECODE，含初次与年度跟踪）∪
+    TQ_BD_CREDITRATEINFO 的 RATEDATE≠'19000101'（按 SECURITYID）；
+    主体评级事件 = TQ_BD_CREDITRATEINFO 的 ISSUERATEDATE。
+    两表覆盖互补，合并后才接近完整历史（CREDITRATEINFO 单独只存部分期数）。
+    """
+    raw_codes = [str(c or "").strip().upper() for c in dict.fromkeys(raw_codes) if c]
+    facts: dict[str, dict] = {
+        code: {"secode": "", "securityid": "", "issue_date": "", "credit_dates": [], "issuer_dates": []}
+        for code in raw_codes
+    }
+    if not raw_codes:
+        return facts
+    resolved = resolve_bond_codes(conn, raw_codes, batch_size=batch_size)
+    secode_to_codes: dict[str, list[str]] = {}
+    for raw, meta in resolved.items():
+        secode = str(meta.get("secode") or "")
+        if not secode or raw not in facts:
+            continue
+        facts[raw]["secode"] = secode
+        secode_to_codes.setdefault(secode, []).append(raw)
+    secodes = list(secode_to_codes)
+    if not secodes:
+        return facts
+    cur = conn.cursor()
+
+    security_ids: dict[str, str] = {}
+    for table in ("TQ_BD_NEWESTBASICINFO", "TQ_BD_BASICINFO"):
+        missing = [s for s in secodes if not security_ids.get(s)]
+        if not missing:
+            break
+        for batch in _batched(missing, batch_size):
+            binds = {f"c{i}": code for i, code in enumerate(batch)}
+            placeholders = ",".join(f":c{i}" for i in range(len(batch)))
+            cur.execute(
+                f"SELECT SECODE, SECURITYID FROM {table} WHERE SECODE IN ({placeholders})",
+                binds,
+            )
+            for secode, security_id in cur.fetchall():
+                if secode and security_id:
+                    security_ids.setdefault(str(secode), str(security_id))
+
+    sid_to_codes: dict[str, list[str]] = {}
+    for secode, security_id in security_ids.items():
+        for raw in secode_to_codes.get(secode, []):
+            facts[raw]["securityid"] = security_id
+            sid_to_codes.setdefault(security_id, []).append(raw)
+
+    for batch in _batched(secodes, batch_size):
+        binds = {f"c{i}": code for i, code in enumerate(batch)}
+        placeholders = ",".join(f":c{i}" for i in range(len(batch)))
+        cur.execute(
+            f"SELECT SECODE, CREDITDATE FROM TQ_BD_CREDITRATE WHERE SECODE IN ({placeholders})",
+            binds,
+        )
+        for secode, credit_date in cur.fetchall():
+            day = normalize_event_date(credit_date)
+            if not day:
+                continue
+            for raw in secode_to_codes.get(str(secode), []):
+                facts[raw]["credit_dates"].append(day)
+
+    for batch in _batched(list(sid_to_codes), batch_size):
+        binds = {f"s{i}": sid for i, sid in enumerate(batch)}
+        placeholders = ",".join(f":s{i}" for i in range(len(batch)))
+        cur.execute(
+            f"""
+            SELECT SECURITYID, RATEDATE, ISSUERATEDATE
+            FROM TQ_BD_CREDITRATEINFO
+            WHERE SECURITYID IN ({placeholders})
+            """,
+            binds,
+        )
+        for security_id, rate_date, issuer_rate_date in cur.fetchall():
+            raws = sid_to_codes.get(str(security_id), [])
+            if not raws:
+                continue
+            credit_day = normalize_event_date(rate_date)
+            issuer_day = normalize_event_date(issuer_rate_date)
+            for raw in raws:
+                if credit_day:
+                    facts[raw]["credit_dates"].append(credit_day)
+                if issuer_day:
+                    facts[raw]["issuer_dates"].append(issuer_day)
+
+    for fact in facts.values():
+        fact["credit_dates"] = sorted(set(fact["credit_dates"]))
+        fact["issuer_dates"] = sorted(set(fact["issuer_dates"]))
+    return facts
+
+
 def discover_benchmark(conn, keyword: str) -> dict | None:
     if config.BENCHMARK_CODE:
         return {"table": "CONFIG", "code": config.BENCHMARK_CODE, "name": keyword}
