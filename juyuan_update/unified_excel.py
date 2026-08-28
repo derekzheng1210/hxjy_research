@@ -27,9 +27,6 @@ RATING_RANK = {
     "BBB-": 1,
 }
 
-DEFAULT_EXCEL_TERM_BASE_DATE = "2026-06-10"
-
-
 def atomic_write_text(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
@@ -148,37 +145,6 @@ def write_json(path: Path, payload) -> None:
     _json_cache.pop(path, None)
 
 
-def normalize_date(value, *, field_name: str = "日期") -> str:
-    text = date_text(value)
-    try:
-        return datetime.strptime(text, "%Y-%m-%d").strftime("%Y-%m-%d")
-    except ValueError as exc:
-        raise ValueError(f"{field_name}必须是 YYYY-MM-DD 格式") from exc
-
-
-def load_update_settings() -> dict:
-    payload = load_json(config.UPDATE_SETTINGS_JSON, {})
-    base_date = payload.get("excel_term_base_date") or DEFAULT_EXCEL_TERM_BASE_DATE
-    try:
-        base_date = normalize_date(base_date, field_name="Excel 待偿期限基准日")
-    except ValueError:
-        base_date = DEFAULT_EXCEL_TERM_BASE_DATE
-    return {
-        "excel_term_base_date": base_date,
-    }
-
-
-def save_update_settings(settings: dict) -> dict:
-    payload = load_update_settings()
-    if "excel_term_base_date" in settings:
-        payload["excel_term_base_date"] = normalize_date(
-            settings["excel_term_base_date"],
-            field_name="Excel 待偿期限基准日",
-        )
-    write_json(config.UPDATE_SETTINGS_JSON, payload)
-    return payload
-
-
 def load_bond_static() -> dict:
     return load_json(config.BOND_STATIC_JSON, {"generated_at": "", "source_file": "", "bonds": []})
 
@@ -194,63 +160,105 @@ def save_bond_static(bonds: list[dict], source_file: str) -> dict:
     return payload
 
 
-def refresh_bond_terms(target_trade_date: str, base_date: str | None = None) -> dict:
-    import copy
-    payload = copy.deepcopy(load_bond_static())
-    bonds = payload.get("bonds") or []
-    if not bonds:
-        return {
-            "base_date": base_date or load_update_settings()["excel_term_base_date"],
-            "target_trade_date": normalize_date(target_trade_date, field_name="目标交易日"),
-            "updated": 0,
-            "total_bonds": 0,
-        }
+def load_counterparty_limits() -> dict:
+    return load_json(
+        config.COUNTERPARTY_LIMITS_JSON,
+        {"generated_at": "", "source_file": "", "total_issuers": 0, "limits": {}},
+    )
 
-    base_text = normalize_date(base_date or load_update_settings()["excel_term_base_date"], field_name="Excel 待偿期限基准日")
-    target_text = normalize_date(target_trade_date, field_name="目标交易日")
-    base_dt = datetime.strptime(base_text, "%Y-%m-%d").date()
-    target_dt = datetime.strptime(target_text, "%Y-%m-%d").date()
 
+def save_counterparty_limits(limits: dict[str, float], source_file: str) -> dict:
+    payload = {
+        "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "source_file": source_file,
+        "total_issuers": len(limits),
+        "limits": limits,
+    }
+    write_json(config.COUNTERPARTY_LIMITS_JSON, payload)
+    return payload
+
+
+def apply_portal_metadata(bonds: list[dict]) -> int:
+    """Overlay non-Excel internal ratings, limits and holdings from the portal cache."""
+    from .neiping_portal_fetch import load_portal_data
+
+    payload = load_portal_data()
+    ratings = payload.get("ratings") or {}
+    holdings = load_portal_holdings()
     updated = 0
     for bond in bonds:
-        try:
-            original_term = float(bond.get("original_term", bond.get("term")))
-        except (TypeError, ValueError):
-            continue
-        if original_term < 0:
-            continue
-        maturity_dt = base_dt + timedelta(days=round(original_term * 365))
-        new_term = max((maturity_dt - target_dt).days / 365, 0)
-        bond["original_term"] = round(original_term, 4)
-        bond["term"] = round(new_term, 4)
-        bond["term_base_date"] = base_text
-        bond["term_updated_date"] = target_text
-        bond["maturity_date_estimated"] = maturity_dt.strftime("%Y-%m-%d")
-        updated += 1
-
-    payload["generated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    payload["term_base_date"] = base_text
-    payload["term_updated_date"] = target_text
-    payload["total_bonds"] = len(bonds)
-    payload["bonds"] = bonds
-    write_json(config.BOND_STATIC_JSON, payload)
-    return {
-        "base_date": base_text,
-        "target_trade_date": target_text,
-        "updated": updated,
-        "total_bonds": len(bonds),
-    }
+        issuer = str(bond.get("issuer") or "").strip()
+        rating = ratings.get(issuer)
+        if rating:
+            bond["internal_rating"] = normalize_rating(rating)
+            updated += 1
+        info = holdings.get(bond.get("code"))
+        if info is not None:
+            amount = float(info.get("amount") or 0)
+            bond["is_holding"] = amount != 0
+            bond["holding_amount"] = round(amount, 6)
+            bond["holding_date"] = info.get("holding_date") or ""
+        elif holdings:
+            bond["is_holding"] = False
+    return updated
 
 
 def get_bond_picker_bonds() -> list[dict]:
+    import copy
+
+    bonds = copy.deepcopy(load_bond_static().get("bonds", []))
+    apply_portal_metadata(bonds)
     return [
-        bond for bond in load_bond_static().get("bonds", [])
+        bond for bond in bonds
         if rating_at_least(bond.get("internal_rating")) and is_blank(bond.get("guarantor"))
     ]
 
 
 def get_spread_monitor_bonds() -> list[dict]:
-    return list(load_bond_static().get("bonds", []))
+    import copy
+
+    bonds = copy.deepcopy(load_bond_static().get("bonds", []))
+    apply_portal_metadata(bonds)
+    return bonds
+
+
+def load_portal_holdings() -> dict:
+    """门户「债项评级-有效1」最新持仓，键为规范化债券代码。
+
+    值为 {"amount": 持仓金额, "is_holding": 是否持仓, "holding_date": 持仓日期, ...}。
+    """
+    from .neiping_portal_fetch import load_portal_data
+
+    payload = load_portal_data()
+    holdings: dict[str, dict] = {}
+    for raw_code, info in (payload.get("holdings") or {}).items():
+        code = normalize_bond_code(raw_code)
+        if not code or code in holdings:
+            continue
+        holdings[code] = info
+    return holdings
+
+
+def apply_portal_holdings(bonds: list[dict]) -> int:
+    """用信评系统「债项查询-最新持仓金额」覆盖 is_holding（非 0 即有持仓）。
+
+    门户清单之外的债券一律视为无持仓；门户缓存为空时保留 Excel 原值。
+    """
+    holdings = load_portal_holdings()
+    if not holdings:
+        return 0
+    overridden = 0
+    for bond in bonds:
+        info = holdings.get(bond.get("code"))
+        if info is not None:
+            amount = float(info.get("amount") or 0)
+            bond["is_holding"] = amount != 0
+            bond["holding_amount"] = round(amount, 6)
+            bond["holding_date"] = info.get("holding_date") or ""
+            overridden += 1
+        else:
+            bond["is_holding"] = False
+    return overridden
 
 
 def load_bond_picker_yields_cache() -> dict:
@@ -377,28 +385,51 @@ def parse_fund_sheet(ws) -> list[dict]:
     return [dedup[d] for d in sorted(dedup)]
 
 
+def parse_neiping_sheet(ws) -> dict[str, float]:
+    rows = list(ws.iter_rows(values_only=True))
+    header_row = None
+    issuer_index = None
+    limit_index = None
+    for row_index, row in enumerate(rows[:20]):
+        headers = [normalize_text(value) for value in row]
+        issuer_index = _header_index(headers, ["融资主体", "主体名称"], None)
+        limit_index = _header_index(headers, ["最新可用对手限额"], None)
+        if issuer_index is not None and limit_index is not None:
+            header_row = row_index
+            break
+    if header_row is None:
+        raise RuntimeError("统一 Excel 的 neiping 缺少融资主体或最新可用对手限额列")
+
+    limits: dict[str, float] = {}
+    for row in rows[header_row + 1:]:
+        issuer = normalize_text(row[issuer_index] if issuer_index < len(row) else None)
+        if not issuer:
+            continue
+        try:
+            value = float(row[limit_index])
+        except (TypeError, ValueError, IndexError):
+            continue
+        if value != value or value in (float("inf"), float("-inf")):
+            continue
+        limits[issuer] = round(value, 6)
+    return limits
+
+
 def import_unified_excel(path: Path) -> dict:
+    """Import only the frozen medium/long pure-bond fund index from Excel."""
     wb = load_workbook(path, read_only=True, data_only=True)
     try:
-        if "Sheet3" not in wb.sheetnames:
-            raise RuntimeError("统一 Excel 缺少 Sheet3 债券信息表")
         if "Sheet1" not in wb.sheetnames:
             raise RuntimeError("统一 Excel 缺少 Sheet1 基金指数表")
-        bonds = parse_bond_sheet(wb["Sheet3"])
         fund_prices = parse_fund_sheet(wb["Sheet1"])
     finally:
         wb.close()
 
-    if not bonds:
-        raise RuntimeError("Sheet3 未读取到有效债券数据")
     if not fund_prices:
         raise RuntimeError("Sheet1 未读取到有效基金指数数据")
 
-    bond_payload = save_bond_static(bonds, str(path))
     write_json(config.STRATEGY_FUND_PRICES_FROZEN, fund_prices)
     return {
-        "bonds": bond_payload["total_bonds"],
-        "bond_picker_bonds": len(get_bond_picker_bonds()),
         "fund_prices": len(fund_prices),
         "fund_start": fund_prices[0]["date"],
         "fund_end": fund_prices[-1]["date"],

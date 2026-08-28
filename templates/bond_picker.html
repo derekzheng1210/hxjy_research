@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>信用债择券辅助工具</title>
+<title>收益率倒挂挖掘工具</title>
 <style>
 /* ====== Reset & Base ====== */
 *{margin:0;padding:0;box-sizing:border-box}
@@ -122,7 +122,8 @@ tr:hover td{background:#f8fafc}
 .sec-label{font-size:.78rem;font-weight:600;color:var(--tx2);margin:10px 0 4px;padding-bottom:3px;border-bottom:1px solid var(--bdr)}
 
 /* ====== Convex table ====== */
-.convex-table tr.dip td{background:var(--grn-l)}
+.convex-table{table-layout:fixed;font-size:.76rem}.convex-table th,.convex-table td{padding:6px 7px}.convex-table .bond-name{overflow:hidden;text-overflow:ellipsis}.convex-table tr.dip td{background:var(--grn-l)}
+.rating-dot{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--red);margin-left:4px;vertical-align:middle;cursor:help}
 
 /* ====== Empty state ====== */
 .empty{text-align:center;padding:40px;color:var(--tx3)}
@@ -204,17 +205,46 @@ tr:hover td{background:#f8fafc}
 .pagination button.active{background:var(--pri);color:#fff;border-color:var(--pri)}
 .pagination button:disabled{opacity:.4;cursor:not-allowed}
 .page-info{font-size:.78rem;color:var(--tx2)}
+
+/* ====== Trading workbench ====== */
+.market-strip{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:7px;font-size:.76rem}
+.market-pill{display:inline-flex;align-items:center;gap:5px;padding:2px 8px;border:1px solid var(--bdr);border-radius:12px;background:#fff;color:var(--tx2)}
+.market-pill.ok{color:var(--grn);border-color:var(--grn-b);background:var(--grn-l)}
+.market-pill.warn{color:var(--org);border-color:#fde68a;background:var(--org-l)}
+.market-pill.bad{color:var(--red);border-color:var(--red-b);background:var(--red-l)}
+.quick-row{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-top:10px;padding-top:10px;border-top:1px dashed var(--bdr)}
+.check-control{display:inline-flex;align-items:center;gap:6px;font-size:.8rem;color:var(--tx);cursor:pointer}
+.check-control input{width:15px;height:15px;accent-color:var(--pri)}
+.preset-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px}
+.preset-row select{height:30px;min-width:180px;border:1px solid var(--bdr);border-radius:5px;padding:0 8px;background:#fff;color:var(--tx)}
+.trading-table{min-width:1550px;font-size:.76rem}
+.trading-table th{top:0;z-index:4;padding:6px 8px;cursor:default}
+.trading-table td{padding:5px 8px;height:30px}
+.trading-table th.sortable{cursor:pointer;user-select:none}
+.trading-table th.sortable:hover{color:var(--pri);background:#e8eef7}
+.trading-table .sticky-1,.trading-table .sticky-2,.trading-table .sticky-3{position:sticky;z-index:3;background:#fff}
+.trading-table th.sticky-1,.trading-table th.sticky-2,.trading-table th.sticky-3{z-index:6;background:#f1f5f9}
+.trading-table .sticky-1{left:0}.trading-table .sticky-2{left:38px}.trading-table .sticky-3{left:78px}
+.trading-table tr:hover .sticky-1,.trading-table tr:hover .sticky-2,.trading-table tr:hover .sticky-3{background:#f8fafc}
+.quote-bid{color:#0284c7;font-weight:700}.quote-ofr{color:#ea580c;font-weight:700}
+.spread-cheap{color:var(--grn);font-weight:700}.spread-rich{color:var(--red);font-weight:700}.spread-flat{color:var(--tx2);font-weight:600}
+.fav-btn{border:0;background:none;color:#94a3b8;font-size:1.1rem;cursor:pointer;line-height:1}.fav-btn.active{color:#f59e0b}
+.quote-cell{position:relative}.quote-dot{display:inline-block;width:5px;height:5px;border-radius:50%;background:#22c55e;margin-right:4px;vertical-align:middle}
+.sort-rank{font-size:.65rem;color:var(--pri);margin-left:3px}
+.toolbar-left{margin-right:auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.error-detail{max-width:520px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 </style>
 </head>
 <body>
 
 
   <div class="header">
-  <h1>信用债择券辅助工具</h1>
-  <div class="sub">数据来源: 中债估值 | <span id="hdrInfo">加载中...</span> | 数据更新: <strong id="hdrTimestamp">{{ timestamp }}</strong></div>
+  <h1>收益率倒挂挖掘工具</h1>
+  <div class="sub">基于同主体估值曲线，寻找期限倒挂和曲线凸点 | 中债数据：{{ timestamp }}</div>
 </div>
 
 <div class="main">
+  {% if false %}
   <!-- ====== Top-level Tabs ====== -->
   <div class="top-tabs">
     <button class="top-tab-btn active" data-top-tab="normal" onclick="switchTopTab('normal')">
@@ -227,6 +257,8 @@ tr:hover td{background:#f8fafc}
     </button>
   </div>
 
+  {% endif %}
+  {% if false %}
   <!-- =============================================================== -->
   <!-- TOP TAB 1: 正常择券 -->
   <!-- =============================================================== -->
@@ -290,8 +322,12 @@ tr:hover td{background:#f8fafc}
             <input type="text" id="nfSearch" placeholder="输入关键词..." oninput="normalOnFilter()">
           </div>
           <div class="ctrl-group">
-            <label>相近期限阈值 (年)</label>
-            <input type="number" id="nfNearbyTh" value="0.5" min="0.05" step="0.05" title="同一主体内，与当前券期限差在此范围内的债券视为相近期限">
+            <label>最低卖量（DM原值）</label>
+            <input type="number" id="nfMinOfferVolume" min="0" step="100" placeholder="如 3000" oninput="normalOnFilter()">
+          </div>
+          <div class="ctrl-group">
+            <label>最大中债-Ofr (bp)</label>
+            <input type="number" id="nfMaxValOfr" step="0.1" placeholder="如 0，表示不贵于估值" oninput="normalOnFilter()">
           </div>
           <div class="ctrl-group">
             <label>每页显示条数</label>
@@ -304,9 +340,20 @@ tr:hover td{background:#f8fafc}
             </select>
           </div>
         </div>
-        <div style="margin-top:10px;text-align:right">
+        <div class="quick-row">
+          <label class="check-control"><input type="checkbox" id="nfHasOffer" checked onchange="normalOnFilter()">仅看有卖盘</label>
+          <label class="check-control"><input type="checkbox" id="nfTwoSided" onchange="normalOnFilter()">仅看双边</label>
+          <label class="check-control"><input type="checkbox" id="nfFavorites" onchange="normalOnFilter()">仅看关注</label>
+          <label class="check-control"><input type="checkbox" id="nfOfferAtOrAboveVal" onchange="normalOnFilter()">卖盘收益率不低于中债</label>
+        </div>
+        <div class="preset-row">
+          <select id="nfPreset" onchange="applySelectedPreset()"><option value="">共享筛选预设</option></select>
+          <button class="btn btn-out btn-sm" onclick="saveCurrentPreset()">保存当前预设</button>
+          <button class="btn btn-out btn-sm" onclick="deleteSelectedPreset()">删除预设</button>
+          <span style="margin-left:auto">
           <button class="btn btn-out btn-sm" onclick="normalResetFilters()">重置筛选</button>
           <button class="btn btn-out btn-sm" onclick="normalOnFilter()" style="margin-left:6px">应用筛选</button>
+          </span>
         </div>
       </div>
     </div>
@@ -315,14 +362,14 @@ tr:hover td{background:#f8fafc}
     <div class="stats" id="nStatsBar">
       <div class="stat-card"><div class="stat-val" id="nsTotal">-</div><div class="stat-label">债券总数</div></div>
       <div class="stat-card"><div class="stat-val" id="nsFiltered">-</div><div class="stat-label">筛选结果</div></div>
-      <div class="stat-card success"><div class="stat-val" id="nsIssuers">-</div><div class="stat-label">涉及主体</div></div>
-      <div class="stat-card"><div class="stat-val" id="nsAvgYield">-</div><div class="stat-label">平均收益率(%)</div></div>
+      <div class="stat-card success"><div class="stat-val" id="nsOffers">-</div><div class="stat-label">有效卖盘</div></div>
+      <div class="stat-card"><div class="stat-val" id="nsAvgSpread">-</div><div class="stat-label">平均中债-Ofr(bp)</div></div>
     </div>
 
     <!-- 导出 -->
     <div class="export-bar">
+      <div class="toolbar-left"><span class="page-info">点击数值表头排序；按住 Shift 可追加第二、第三排序条件</span></div>
       <button class="btn btn-out btn-sm" onclick="normalExportCSV()">导出 CSV</button>
-      <button class="btn btn-out btn-sm" onclick="normalCollapseAll()">全部折叠</button>
     </div>
 
     <!-- 结果表格 -->
@@ -335,14 +382,15 @@ tr:hover td{background:#f8fafc}
     </div>
 
     <!-- 分页 -->
-    <div class="pagination" id="nPagination"></div>
+  <div class="pagination" id="nPagination"></div>
 
   </div>
+  {% endif %}
 
   <!-- =============================================================== -->
   <!-- TOP TAB 2: 寻找收益率倒挂券 (原版功能) -->
   <!-- =============================================================== -->
-  <div class="tab-pane" id="pane-inversion">
+  <div class="tab-pane active" id="pane-inversion">
 
     <!-- 分析参数 -->
     <div class="card">
@@ -425,6 +473,10 @@ tr:hover td{background:#f8fafc}
             <input type="text" id="fSearch" placeholder="输入关键词..." oninput="onFilter()">
           </div>
         </div>
+        <div class="quick-row">
+          <label class="check-control"><input type="checkbox" id="fRecommendedOnly" onchange="onFilter()">只看推荐</label>
+          <label class="check-control"><input type="checkbox" id="fHasOffer" onchange="onFilter()">只看有卖盘</label>
+        </div>
         <div style="margin-top:10px;text-align:right">
           <button class="btn btn-out btn-sm" onclick="resetFilters()">重置筛选</button>
         </div>
@@ -443,12 +495,12 @@ tr:hover td{background:#f8fafc}
 
     <!-- Tabs -->
     <div class="tabs">
-      <button class="tab-btn active" data-tab="inversions" onclick="switchTab('inversions')">倒挂明细</button>
-      <button class="tab-btn" data-tab="convex" onclick="switchTab('convex')">凸点提示</button>
+      <button class="tab-btn active" data-tab="convex" onclick="switchTab('convex')">凸点提示</button>
+      <button class="tab-btn" data-tab="inversions" onclick="switchTab('inversions')">倒挂明细</button>
     </div>
 
     <!-- 倒挂明细 -->
-    <div class="tab-pane active" id="pane-inversions">
+    <div class="tab-pane" id="pane-inversions">
       <div class="export-bar">
         <button class="btn btn-out btn-sm" onclick="exportCSV('inversions')">导出 CSV</button>
         <button class="btn btn-out btn-sm" onclick="collapseAll()">全部折叠</button>
@@ -457,7 +509,7 @@ tr:hover td{background:#f8fafc}
     </div>
 
     <!-- 凸点提示 -->
-    <div class="tab-pane" id="pane-convex">
+    <div class="tab-pane active" id="pane-convex">
       <div class="export-bar">
         <button class="btn btn-out btn-sm" onclick="exportCSV('convex')">导出 CSV</button>
       </div>
@@ -473,18 +525,30 @@ tr:hover td{background:#f8fafc}
 // ===================================================================
 //  DATA
 // ===================================================================
-const RAW = {{ bond_data | safe }};
-const F={CODE:0,NAME:1,TERM:2,RATING:3,ISSUER:4,YTM:5,ENTITY:6,CT:7,SUB:8,TECH:9,IR:10};
-function toB(a){return{code:a[F.CODE],name:a[F.NAME],term:a[F.TERM],rating:a[F.RATING],issuer:a[F.ISSUER],ytm:a[F.YTM],entity:a[F.ENTITY],ct:a[F.CT],sub:a[F.SUB],tech:a[F.TECH],ir:a[F.IR]}}
-const BONDS=RAW.map(toB);
+let RAW = {{ bond_data | safe }};
+let MARKET_META = {{ market_meta | safe }};
+const INITIAL_DATA_VERSION = {{ data_version | tojson }};
+const F={CODE:0,NAME:1,TERM:2,RATING:3,ISSUER:4,YTM:5,ENTITY:6,CT:7,SUB:8,TECH:9,IR:10,
+  BID_VOL_TEXT:11,BID_VOL:12,BID:13,OFR:14,OFR_VOL_TEXT:15,OFR_VOL:16,VAL_OFR:17,BID_OFR:18,
+  BID_BROKER:19,OFR_BROKER:20,BID_TIME:21,OFR_TIME:22,QUOTE_TIME:23,HAS_BID:24,HAS_OFR:25,TWO_SIDED:26,COUNTERPARTY_LIMIT:27,RATING630:28};
+function toB(a){const r630=Array.isArray(a[F.RATING630])?a[F.RATING630]:[];return{code:a[F.CODE],name:a[F.NAME],term:a[F.TERM],rating:a[F.RATING],issuer:a[F.ISSUER],ytm:a[F.YTM],entity:a[F.ENTITY],ct:a[F.CT],sub:a[F.SUB],tech:a[F.TECH],ir:a[F.IR],
+  bidVolText:a[F.BID_VOL_TEXT]||'',bidVol:numOrNull(a[F.BID_VOL]),bid:numOrNull(a[F.BID]),ofr:numOrNull(a[F.OFR]),ofrVolText:a[F.OFR_VOL_TEXT]||'',ofrVol:numOrNull(a[F.OFR_VOL]),
+  valOfr:numOrNull(a[F.VAL_OFR]),bidOfr:numOrNull(a[F.BID_OFR]),bidBroker:a[F.BID_BROKER]||'',ofrBroker:a[F.OFR_BROKER]||'',bidTime:a[F.BID_TIME]||'',ofrTime:a[F.OFR_TIME]||'',quoteTime:a[F.QUOTE_TIME]||'',hasBid:!!a[F.HAS_BID],hasOfr:!!a[F.HAS_OFR],twoSided:!!a[F.TWO_SIDED],counterpartyLimit:numOrNull(a[F.COUNTERPARTY_LIMIT]),rating630:r630[0]||'unknown',rating630Note:r630[1]||''}}
+function numOrNull(value){const n=Number(value);return value===null||value===''||!Number.isFinite(n)?null:n}
+let BONDS=RAW.map(toB);
+const DEFAULT_RECOMMENDATION_SETTINGS={min_yield:1.65,max_yield:3,min_offer_volume:1000,bbb_minus_max_term:3,require_better_than_market:true};
+let RECOMMENDATION_SETTINGS={...DEFAULT_RECOMMENDATION_SETTINGS};
+let RECOMMENDED=new Set();
 
 // ===================================================================
 //  STATE
 // ===================================================================
 let STATE={
-  analysis:null,filtered:null,activeTab:'inversions',
+  analysis:null,filtered:null,activeTab:'convex',
   // Normal page state
-  normalFiltered:[],normalPage:1,normalExpanded:{},nearbyCache:{}
+  normalFiltered:[],normalPage:1,normalExpanded:{},nearbyCache:{},
+  favorites:new Set(),presets:[],normalSort:[{key:'valuationOffer',dir:'asc'},{key:'ofrVolume',dir:'desc'}],
+  dataVersion:INITIAL_DATA_VERSION,etag:'"'+INITIAL_DATA_VERSION+'"'
 };
 
 // Pre-group bonds by issuer for nearby lookups
@@ -499,14 +563,19 @@ Object.values(ISSUER_GROUPS).forEach(g=>g.sort((a,b)=>a.term-b.term));
 // ===================================================================
 //  INIT
 // ===================================================================
-function init(){
-  document.getElementById('hdrInfo').textContent=`共 ${BONDS.length.toLocaleString()} 只债券`;
+async function init(){
   populateFilters();
-  normalPopulateFilters();
+  await loadRecommendationSettings();
   onAnalyze();
-  normalOnFilter();
+  window.setInterval(checkForMarketUpdate,60000);
   document.addEventListener('click',e=>{if(!e.target.closest('.ms-wrap'))document.querySelectorAll('.ms-drop.open').forEach(d=>d.classList.remove('open'))});
 }
+
+function ratingEligible(b){const bbbPlusOrAbove=['AAA+','AAA','AAA-','AA+','AA','AA-','A+','A','A-','BBB+'];if(b.term!==null&&b.term>=5)return bbbPlusOrAbove.includes(b.ir);if(bbbPlusOrAbove.includes(b.ir)||b.ir==='BBB')return true;return b.ir==='BBB-'&&b.term!==null&&b.term<=RECOMMENDATION_SETTINGS.bbb_minus_max_term}
+function recommendationEligible(b){if(b.rating630!=='ok'||!ratingEligible(b)||b.counterpartyLimit===null||b.counterpartyLimit<=1||b.ytm===null||b.ytm<RECOMMENDATION_SETTINGS.min_yield||b.ytm>RECOMMENDATION_SETTINGS.max_yield||!b.hasOfr||b.ofrVol===null||b.ofrVol<RECOMMENDATION_SETTINGS.min_offer_volume)return false;if(RECOMMENDATION_SETTINGS.require_better_than_market){const m=numOrNull((MARKET_META.emotion||{}).value);if(m!==null&&((b.ofr-b.ytm)*100)<m)return false}return true}
+function computeRecommendations(){RECOMMENDED=new Set(BONDS.filter(recommendationEligible).map(b=>b.code))}
+async function loadRecommendationSettings(){try{const response=await fetch('/api/bond-picker/preferences',{cache:'no-store'});if(response.ok){const payload=await response.json();RECOMMENDATION_SETTINGS={...DEFAULT_RECOMMENDATION_SETTINGS,...(payload.recommendation_settings||{})}}}catch(_error){}computeRecommendations()}
+function rating630Dot(b){if(b.rating630==='ok')return'';const note=b.rating630Note?`：${b.rating630Note}`:'';return `<span class="rating-dot" title="可能不满足合规630评级要求，投前请务必确认${escAttr(note)}"></span>`}
 
 function populateFilters(){
   const u=(f)=>[...new Set(BONDS.map(b=>b[f]))].filter(Boolean).sort();
@@ -817,6 +886,193 @@ function normalExportCSV(){
 }
 
 // ===================================================================
+//  NORMAL TRADING WORKBENCH (overrides the legacy nearby-bond renderer)
+// ===================================================================
+function inputNumber(id){
+  const value=document.getElementById(id).value.trim();
+  if(value==='')return null;
+  const number=Number(value);
+  return Number.isFinite(number)?number:null;
+}
+
+function updateMarketHeader(){
+  document.getElementById('hdrInfo').textContent=`共 ${BONDS.length.toLocaleString()} 只债券，DM有效报价 ${(MARKET_META.broker_quote_count||0).toLocaleString()} 只`;
+  document.getElementById('hdrTimestamp').textContent=MARKET_META.valuation_date||'-';
+  document.getElementById('hdrBrokerTime').textContent=MARKET_META.broker_snapshot_at||'尚无快照';
+  document.getElementById('hdrNextRun').textContent=MARKET_META.broker_next_run||'-';
+  const state=MARKET_META.broker_state||'idle';
+  const labels={success:'行情正常',running:'正在更新',retrying:'更新重试中',failed:'更新失败',stale:'行情已过期',idle:'等待首次更新'};
+  const pill=document.getElementById('marketStatusPill');
+  pill.className='market-pill '+((MARKET_META.broker_stale||state==='failed'||state==='stale')?'bad':(state==='running'||state==='retrying'||state==='idle')?'warn':'ok');
+  document.getElementById('hdrMarketStatus').textContent=labels[state]||state;
+  const error=document.getElementById('hdrMarketError');
+  error.textContent=MARKET_META.broker_error||'';
+  error.title=MARKET_META.broker_error||'';
+}
+
+function getNormalFilters(){
+  return {
+    ct:document.getElementById('nfCT').value,
+    rating:getMSValues('nmsRating'),
+    ir:getMSValues('nmsIR'),
+    entity:document.getElementById('nfEntity').value,
+    sub:document.getElementById('nfSub').value,
+    minY:inputNumber('nfMinYield'),maxY:inputNumber('nfMaxYield'),
+    search:document.getElementById('nfSearch').value.trim().toLowerCase(),
+    minTerm:inputNumber('nfMinTerm'),maxTerm:inputNumber('nfMaxTerm'),
+    minOfferVolume:inputNumber('nfMinOfferVolume'),maxValuationOffer:inputNumber('nfMaxValOfr'),
+    hasOffer:document.getElementById('nfHasOffer').checked,
+    twoSided:document.getElementById('nfTwoSided').checked,
+    favoritesOnly:document.getElementById('nfFavorites').checked,
+    offerAtOrAboveValuation:document.getElementById('nfOfferAtOrAboveVal').checked,
+    pageSize:parseInt(document.getElementById('nfPageSize').value)||50,
+  };
+}
+
+function bondMatchesFilter(b,f){
+  if(f.ct&&b.ct!==f.ct)return false;if(f.entity&&b.entity!==f.entity)return false;if(f.sub&&b.sub!==f.sub)return false;
+  if(f.search&&!`${b.issuer} ${b.name} ${b.code}`.toLowerCase().includes(f.search))return false;
+  if(f.rating.length&&!f.rating.includes(b.rating))return false;if(f.ir.length&&!f.ir.includes(b.ir))return false;
+  if(f.minTerm!==null&&b.term<f.minTerm)return false;if(f.maxTerm!==null&&b.term>f.maxTerm)return false;
+  if(f.minY!==null&&b.ytm<f.minY)return false;if(f.maxY!==null&&b.ytm>f.maxY)return false;
+  if(f.hasOffer&&!b.hasOfr)return false;if(f.twoSided&&!b.twoSided)return false;
+  if(f.favoritesOnly&&!STATE.favorites.has(b.code))return false;
+  if(f.minOfferVolume!==null&&(b.ofrVol===null||b.ofrVol<f.minOfferVolume))return false;
+  if(f.maxValuationOffer!==null&&(b.valOfr===null||b.valOfr>f.maxValuationOffer))return false;
+  if(f.offerAtOrAboveValuation&&(b.valOfr===null||b.valOfr>0))return false;
+  return true;
+}
+
+function sortValue(b,key){
+  return {term:b.term,ytm:b.ytm,bidVolume:b.bidVol,bid:b.bid,ofr:b.ofr,ofrVolume:b.ofrVol,
+    valuationOffer:b.valOfr,bidOffer:b.bidOfr,issuer:b.issuer,name:b.name}[key];
+}
+function compareNullable(a,b,dir){
+  const aNull=a===null||a===undefined||a==='';const bNull=b===null||b===undefined||b==='';
+  if(aNull||bNull)return aNull===bNull?0:(aNull?1:-1);
+  const value=(typeof a==='string'||typeof b==='string')?String(a).localeCompare(String(b),'zh'):a-b;
+  return dir==='desc'?-value:value;
+}
+function applyNormalFilters(){
+  const filters=getNormalFilters();
+  const filtered=BONDS.filter(b=>bondMatchesFilter(b,filters));
+  filtered.sort((a,b)=>{
+    for(const rule of STATE.normalSort){const result=compareNullable(sortValue(a,rule.key),sortValue(b,rule.key),rule.dir);if(result)return result}
+    return a.issuer.localeCompare(b.issuer,'zh')||a.term-b.term;
+  });
+  return {filtered,filters};
+}
+
+function normalOnFilter(keepPage=false){
+  const result=applyNormalFilters();STATE.normalFiltered=result.filtered;
+  if(!keepPage)STATE.normalPage=1;
+  const offers=result.filtered.filter(b=>b.hasOfr).length;
+  const spreads=result.filtered.map(b=>b.valOfr).filter(v=>v!==null);
+  document.getElementById('nsTotal').textContent=BONDS.length.toLocaleString();
+  document.getElementById('nsFiltered').textContent=result.filtered.length.toLocaleString();
+  document.getElementById('nsOffers').textContent=offers.toLocaleString();
+  document.getElementById('nsAvgSpread').textContent=spreads.length?(spreads.reduce((a,b)=>a+b,0)/spreads.length).toFixed(2):'-';
+  renderNormalTable(result.filtered,result.filters);
+}
+
+function sortIndicator(key){
+  const index=STATE.normalSort.findIndex(item=>item.key===key);if(index<0)return'';
+  return `<span class="sort-rank">${STATE.normalSort[index].dir==='asc'?'▲':'▼'}${index+1}</span>`;
+}
+function normalSortBy(key,append){
+  const current=STATE.normalSort.find(item=>item.key===key);
+  const next={key,dir:current&&current.dir==='asc'?'desc':'asc'};
+  if(append){STATE.normalSort=STATE.normalSort.filter(item=>item.key!==key);STATE.normalSort.push(next);STATE.normalSort=STATE.normalSort.slice(-3)}
+  else{STATE.normalSort=[next]}
+  normalOnFilter(true);
+}
+function fmt(value,digits=4){return value===null||value===undefined?'--':Number(value).toFixed(digits)}
+function volumeDisplay(text,value){return esc(String(text||((value===null||value===undefined)?'--':value)))}
+function spreadClass(value){return value===null?'':value<0?'spread-cheap':value>0?'spread-rich':'spread-flat'}
+function quoteTitle(side,b){const broker=side==='bid'?b.bidBroker:b.ofrBroker;const stamp=side==='bid'?b.bidTime:b.ofrTime;return escAttr(`${broker||'经纪商未标注'}${stamp?' | '+stamp:''}`)}
+
+function renderNormalTable(bonds,filters){
+  const pageSize=filters.pageSize,totalPages=Math.ceil(bonds.length/pageSize),page=Math.min(STATE.normalPage,totalPages||1);STATE.normalPage=page;
+  const start=(page-1)*pageSize,pageBonds=bonds.slice(start,start+pageSize),el=document.getElementById('normalResults');
+  if(!pageBonds.length){el.innerHTML='<div class="empty"><div class="empty-icon">--</div><div class="empty-text">未找到符合条件的债券</div></div>';document.getElementById('nPagination').innerHTML='';return}
+  let html='<table class="trading-table"><thead><tr>';
+  html+='<th class="sticky-1" style="width:38px">关注</th><th class="sticky-2" style="width:40px">#</th><th class="sticky-3">简称</th><th>代码</th>';
+  html+=`<th class="num sortable" onclick="normalSortBy('term',event.shiftKey)">期限${sortIndicator('term')}</th>`;
+  html+=`<th class="num sortable" onclick="normalSortBy('ytm',event.shiftKey)">中债估值${sortIndicator('ytm')}</th>`;
+  html+=`<th class="num sortable" onclick="normalSortBy('bidVolume',event.shiftKey)">买量${sortIndicator('bidVolume')}</th>`;
+  html+=`<th class="num sortable quote-bid" onclick="normalSortBy('bid',event.shiftKey)">Bid${sortIndicator('bid')}</th>`;
+  html+=`<th class="num sortable quote-ofr" onclick="normalSortBy('ofr',event.shiftKey)">Ofr${sortIndicator('ofr')}</th>`;
+  html+=`<th class="num sortable" onclick="normalSortBy('ofrVolume',event.shiftKey)">卖量${sortIndicator('ofrVolume')}</th>`;
+  html+=`<th class="num sortable" onclick="normalSortBy('valuationOffer',event.shiftKey)">中债-Ofr(bp)${sortIndicator('valuationOffer')}</th>`;
+  html+=`<th class="num sortable" onclick="normalSortBy('bidOffer',event.shiftKey)">Bid-Ofr(bp)${sortIndicator('bidOffer')}</th>`;
+  html+='<th>隐含评级</th><th>参考内评</th><th>主体性质</th><th>城投</th><th>次级</th><th>主体名称</th></tr></thead><tbody>';
+  pageBonds.forEach((b,idx)=>{
+    const globalIdx=start+idx+1,favorite=STATE.favorites.has(b.code);
+    html+=`<tr><td class="sticky-1"><button class="fav-btn${favorite?' active':''}" title="${favorite?'取消关注':'加入关注'}" onclick="toggleFavorite('${escAttr(b.code)}')">${favorite?'★':'☆'}</button></td>`;
+    html+=`<td class="sticky-2">${globalIdx}</td><td class="sticky-3"><strong>${esc(b.name)}</strong></td><td style="color:var(--tx2)">${esc(b.code)}</td>`;
+    html+=`<td class="num">${fmt(b.term,2)}</td><td class="num"><strong>${fmt(b.ytm)}</strong></td>`;
+    html+=`<td class="num">${volumeDisplay(b.bidVolText,b.bidVol)}</td><td class="num quote-bid quote-cell" title="${quoteTitle('bid',b)}">${b.hasBid?'<span class="quote-dot"></span>':''}${fmt(b.bid)}</td>`;
+    html+=`<td class="num quote-ofr quote-cell" title="${quoteTitle('ofr',b)}">${b.hasOfr?'<span class="quote-dot"></span>':''}${fmt(b.ofr)}</td><td class="num">${volumeDisplay(b.ofrVolText,b.ofrVol)}</td>`;
+    html+=`<td class="num ${spreadClass(b.valOfr)}">${fmt(b.valOfr,2)}</td><td class="num">${fmt(b.bidOfr,2)}</td>`;
+    html+=`<td>${esc(b.rating)}</td><td>${esc(b.ir)}</td><td>${esc(b.entity)}</td><td>${b.ct==='是'?'✔':''}</td><td>${b.sub==='是'?'✔':''}</td><td title="${escAttr(b.issuer)}">${esc(b.issuer)}</td></tr>`;
+  });
+  el.innerHTML=html+'</tbody></table>';renderNormalPagination(bonds.length,pageSize,page,totalPages);
+}
+
+function normalResetFilters(){
+  ['nfCT','nfEntity','nfSub'].forEach(id=>document.getElementById(id).value='');
+  ['nfMinTerm','nfMaxTerm','nfMinYield','nfMaxYield','nfSearch','nfMinOfferVolume','nfMaxValOfr'].forEach(id=>document.getElementById(id).value='');
+  document.getElementById('nfPageSize').value='50';document.getElementById('nfHasOffer').checked=true;
+  ['nfTwoSided','nfFavorites','nfOfferAtOrAboveVal'].forEach(id=>document.getElementById(id).checked=false);
+  clearMS('nmsRating');clearMS('nmsIR');STATE.normalSort=[{key:'valuationOffer',dir:'asc'},{key:'ofrVolume',dir:'desc'}];
+  document.getElementById('nfPreset').value='';normalOnFilter();
+}
+
+function csvCell(value){const text=String(value??'');return `"${text.replace(/"/g,'""')}"`}
+function normalExportCSV(){
+  const headers=['序号','证券简称','证券代码','期限','中债估值%','买量','Bid%','Ofr%','卖量','中债-Ofr(bp)','Bid-Ofr(bp)','买方经纪商','卖方经纪商','买价时间','卖价时间','隐含评级','参考内评','主体性质','城投','次级','主体名称'];
+  let csv='\uFEFF'+headers.map(csvCell).join(',')+'\n';
+  STATE.normalFiltered.forEach((b,i)=>{csv+=[i+1,b.name,b.code,b.term,b.ytm,b.bidVolText||b.bidVol,b.bid,b.ofr,b.ofrVolText||b.ofrVol,b.valOfr,b.bidOfr,b.bidBroker,b.ofrBroker,b.bidTime,b.ofrTime,b.rating,b.ir,b.entity,b.ct,b.sub,b.issuer].map(csvCell).join(',')+'\n'});
+  const blob=new Blob([csv],{type:'text/csv;charset=utf-8'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download='正常择券交易工作台.csv';a.click();URL.revokeObjectURL(url);
+}
+
+async function loadPreferences(){
+  try{const response=await fetch('/api/bond-picker/preferences',{cache:'no-store'});if(!response.ok)return;const data=await response.json();STATE.favorites=new Set(data.favorites||[]);STATE.presets=data.presets||[];renderPresetOptions();normalOnFilter(true)}catch(_error){}
+}
+async function persistPreferences(){
+  const payload={favorites:[...STATE.favorites],presets:STATE.presets};
+  const response=await fetch('/api/bond-picker/preferences',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+  if(!response.ok)throw new Error('偏好保存失败');const saved=await response.json();STATE.favorites=new Set(saved.favorites||[]);STATE.presets=saved.presets||[];renderPresetOptions();
+}
+function toggleFavorite(code){if(STATE.favorites.has(code))STATE.favorites.delete(code);else STATE.favorites.add(code);normalOnFilter(true);persistPreferences().catch(()=>{})}
+function renderPresetOptions(){const select=document.getElementById('nfPreset'),selected=select.value;select.innerHTML='<option value="">共享筛选预设</option>'+STATE.presets.map(p=>`<option value="${escAttr(p.id)}">${esc(p.name)}</option>`).join('');select.value=selected}
+function setMSValues(id,values){const wanted=new Set(values||[]),wrap=document.getElementById(id);wrap.querySelectorAll('input[type=checkbox]').forEach(c=>c.checked=wanted.has(c.value));onMSChange(id)}
+function currentPresetFilters(){return getNormalFilters()}
+async function saveCurrentPreset(){
+  const name=(window.prompt('请输入共享筛选预设名称：')||'').trim();if(!name)return;
+  const existing=STATE.presets.find(p=>p.name===name),id=existing?existing.id:'p'+Date.now();
+  const preset={id,name,filters:currentPresetFilters(),sort:STATE.normalSort};STATE.presets=STATE.presets.filter(p=>p.id!==id);STATE.presets.push(preset);
+  try{await persistPreferences();document.getElementById('nfPreset').value=id}catch(_error){window.alert('预设保存失败')}
+}
+function applySelectedPreset(){
+  const preset=STATE.presets.find(p=>p.id===document.getElementById('nfPreset').value);if(!preset)return;const f=preset.filters||{};
+  document.getElementById('nfCT').value=f.ct||'';document.getElementById('nfEntity').value=f.entity||'';document.getElementById('nfSub').value=f.sub||'';
+  const values={nfMinYield:f.minY,nfMaxYield:f.maxY,nfSearch:f.search,nfMinTerm:f.minTerm,nfMaxTerm:f.maxTerm,nfMinOfferVolume:f.minOfferVolume,nfMaxValOfr:f.maxValuationOffer,nfPageSize:f.pageSize||50};
+  Object.entries(values).forEach(([id,value])=>document.getElementById(id).value=value===null||value===undefined?'':value);
+  document.getElementById('nfHasOffer').checked=f.hasOffer!==false;document.getElementById('nfTwoSided').checked=!!f.twoSided;document.getElementById('nfFavorites').checked=!!f.favoritesOnly;document.getElementById('nfOfferAtOrAboveVal').checked=!!f.offerAtOrAboveValuation;
+  setMSValues('nmsRating',f.rating||[]);setMSValues('nmsIR',f.ir||[]);STATE.normalSort=(preset.sort&&preset.sort.length)?preset.sort:[{key:'valuationOffer',dir:'asc'},{key:'ofrVolume',dir:'desc'}];normalOnFilter();
+}
+async function deleteSelectedPreset(){const id=document.getElementById('nfPreset').value;if(!id)return;STATE.presets=STATE.presets.filter(p=>p.id!==id);try{await persistPreferences();document.getElementById('nfPreset').value=''}catch(_error){window.alert('预设删除失败')}}
+
+async function checkForMarketUpdate(){
+  try{
+    const response=await fetch('/api/bond-picker/data',{headers:{'If-None-Match':STATE.etag},cache:'no-store'});if(response.status===304)return;if(!response.ok)return;
+    const payload=await response.json();STATE.dataVersion=payload.version;STATE.etag=response.headers.get('ETag')||('"'+payload.version+'"');RAW=payload.bonds||[];BONDS=RAW.map(toB);MARKET_META=payload.meta||{};computeRecommendations();
+    onAnalyze();
+  }catch(_error){}
+}
+
+// ===================================================================
 //  INVERSION ANALYSIS ENGINE (原版)
 // ===================================================================
 function runAnalysis(termTh,yieldTh,excludeK){
@@ -883,8 +1139,12 @@ function getFilters(){
     minY:parseFloat(document.getElementById('fMinYield').value)||null,
     maxY:parseFloat(document.getElementById('fMaxYield').value)||null,
     search:document.getElementById('fSearch').value.trim().toLowerCase(),
+    recommendedOnly:document.getElementById('fRecommendedOnly').checked,
+    hasOffer:document.getElementById('fHasOffer').checked,
   };
 }
+
+function matchQuickBond(b,f){if(f.recommendedOnly&&!RECOMMENDED.has(b.code))return false;if(f.hasOffer&&!b.hasOfr)return false;return true}
 
 function matchGroup(g,f){
   if(f.ct && g.ct!==f.ct)return false;
@@ -907,7 +1167,7 @@ function matchConvex(c,f){
   if(f.ir.length && !f.ir.includes(c.bond.ir))return false;
   if(f.minY!==null && c.bond.ytm<f.minY)return false;
   if(f.maxY!==null && c.bond.ytm>f.maxY)return false;
-  return true;
+  return matchQuickBond(c.bond,f);
 }
 
 function applyFilters(analysis){
@@ -915,7 +1175,11 @@ function applyFilters(analysis){
   const groups={};
   let pairsShown=0;
   Object.entries(analysis.issuerGroups).forEach(([k,g])=>{
-    if(matchGroup(g,f)){groups[k]=g;pairsShown+=g.inversions.length;}
+    if(!matchGroup(g,f))return;
+    const inversions=g.inversions.filter(inv=>matchQuickBond(inv.s,f)&&matchQuickBond(inv.l,f));
+    if(!inversions.length)return;
+    const bonds=g.bonds.filter(b=>matchQuickBond(b,f));
+    groups[k]={...g,bonds,inversions,maxYd:Math.max(...inversions.map(inv=>inv.yd))};pairsShown+=inversions.length;
   });
   const convex=analysis.convex.filter(c=>matchConvex(c,f));
   return {groups,convex,pairsShown,issuerCount:Object.keys(groups).length};
@@ -985,7 +1249,7 @@ function renderGroupDetail(g){
     if(highCodes.has(b.code)&&!lowCodes.has(b.code)){fillClass='fill-high';rowClass=' class="highlight-row"';}
     else if(lowCodes.has(b.code)&&!highCodes.has(b.code)){fillClass='fill-low';}
     html+=`<tr${rowClass}>
-      <td title="${esc(b.code)}">${esc(b.name)}</td>
+      <td title="${esc(b.code)}">${esc(b.name)}${rating630Dot(b)}</td>
       <td class="num">${b.term.toFixed(2)}</td>
       <td class="num"><strong>${b.ytm.toFixed(4)}</strong></td>
       <td><div class="yield-bar"><div class="yield-fill ${fillClass}" style="width:${pct.toFixed(0)}%"></div></div></td>
@@ -1004,10 +1268,10 @@ function renderGroupDetail(g){
   sorted.forEach((inv,i)=>{
     html+=`<tr>
       <td>${i+1}</td>
-      <td style="color:var(--red)" title="${esc(inv.s.code)}">${esc(inv.s.name)}</td>
+      <td style="color:var(--red)" title="${esc(inv.s.code)}">${esc(inv.s.name)}${rating630Dot(inv.s)}</td>
       <td class="num">${inv.s.term.toFixed(2)}</td><td class="num">${inv.s.ytm.toFixed(4)}</td>
       <td style="text-align:center;color:var(--tx3)">vs</td>
-      <td style="color:var(--grn)" title="${esc(inv.l.code)}">${esc(inv.l.name)}</td>
+      <td style="color:var(--grn)" title="${esc(inv.l.code)}">${esc(inv.l.name)}${rating630Dot(inv.l)}</td>
       <td class="num">${inv.l.term.toFixed(2)}</td><td class="num">${inv.l.ytm.toFixed(4)}</td>
       <td class="num">${inv.td.toFixed(2)}</td>
       <td class="num"><strong style="color:var(--red)">${inv.yd.toFixed(1)}</strong></td>
@@ -1026,26 +1290,24 @@ function renderConvex(convex){
   let html='<div class="card"><div class="card-body"><p style="font-size:.82rem;color:var(--tx2);margin-bottom:10px">';
   html+='凸点定义：在同一主体的期限序列中，该债券的估值收益率同时<strong>高于</strong>期限更短和更长的相邻债券，形成曲线凸出（即该期限位置的债券被市场给予了更高的收益率/更低的价格）。</p>';
   html+='<div class="tbl-wrap"><table class="convex-table"><thead><tr>';
-  html+='<th>#</th><th>主体</th><th>类型</th><th>凸点债券</th><th class="num">期限(年)</th>';
-  html+='<th class="num">绝对收益(%)</th><th>隐含评级</th><th>参考内评</th>';
+  html+='<th style="width:15%">凸点债券</th><th class="num" style="width:7%">期限(年)</th>';
+  html+='<th class="num" style="width:9%">绝对收益(%)</th><th class="num" style="width:8%">Ofr(%)</th><th class="num" style="width:9%">Ofr量</th><th style="width:8%">隐含评级</th><th style="width:8%">参考内评</th>';
   html+='<th class="num">高于短邻(bp)</th><th class="num">高于长邻(bp)</th>';
   html+='<th>短邻债券</th><th>长邻债券</th>';
   html+='</tr></thead><tbody>';
-  convex.forEach((c,i)=>{
-    const subTag=c.sub==='是'?'次级':'普通';
+  convex.forEach(c=>{
     html+=`<tr>
-      <td>${i+1}</td>
-      <td>${esc(c.issuer)}</td>
-      <td>${subTag}</td>
-      <td title="${esc(c.bond.code)}"><strong>${esc(c.bond.name)}</strong></td>
+      <td class="bond-name" title="${esc(c.bond.code)}"><strong>${esc(c.bond.name)}</strong>${rating630Dot(c.bond)}</td>
       <td class="num">${c.bond.term.toFixed(2)}</td>
       <td class="num"><strong style="color:var(--red)">${c.bond.ytm.toFixed(4)}</strong></td>
+      <td class="num quote-ofr">${c.bond.ofr===null?'-':c.bond.ofr.toFixed(4)}</td>
+      <td class="num">${esc(c.bond.ofrVolText||c.bond.ofrVol||'')}</td>
       <td>${esc(c.bond.rating)}</td>
       <td>${esc(c.bond.ir)}</td>
       <td class="num" style="color:var(--red)">${c.dp.toFixed(1)}</td>
       <td class="num" style="color:var(--red)">${c.dn.toFixed(1)}</td>
-      <td title="${c.prev.ytm.toFixed(4)}%">${esc(c.prev.name)}</td>
-      <td title="${c.next.ytm.toFixed(4)}%">${esc(c.next.name)}</td>
+      <td class="bond-name" title="${c.prev.ytm.toFixed(4)}%">${esc(c.prev.name)}${rating630Dot(c.prev)}</td>
+      <td class="bond-name" title="${c.next.ytm.toFixed(4)}%">${esc(c.next.name)}${rating630Dot(c.next)}</td>
     </tr>`;
   });
   html+='</tbody></table></div></div></div>';
@@ -1073,6 +1335,7 @@ function onFilter(){
 function resetFilters(){
   ['fCT','fEntity','fSub'].forEach(id=>document.getElementById(id).value='');
   ['fMinYield','fMaxYield','fSearch'].forEach(id=>document.getElementById(id).value='');
+  ['fRecommendedOnly','fHasOffer'].forEach(id=>document.getElementById(id).checked=false);
   clearMS('msRating');clearMS('msIR');
   onFilter();
 }
@@ -1109,9 +1372,9 @@ function exportCSV(type){
       });
     });
   } else {
-    csv='\uFEFF主体,类型,凸点债券,代码,期限,绝对收益%,隐含评级,参考内评,高于短邻bp,高于长邻bp\n';
+    csv='\uFEFF凸点债券,代码,期限,绝对收益%,Ofr%,Ofr量,隐含评级,参考内评,高于短邻bp,高于长邻bp\n';
     STATE.filtered.convex.forEach(c=>{
-      csv+=`"${c.issuer}",${c.sub==='是'?'次级':'普通'},"${c.bond.name}","${c.bond.code}",${c.bond.term},${c.bond.ytm},${c.bond.rating},${c.bond.ir},${c.dp},${c.dn}\n`;
+      csv+=`"${c.bond.name}","${c.bond.code}",${c.bond.term},${c.bond.ytm},${c.bond.ofr??''},"${c.bond.ofrVolText||c.bond.ofrVol||''}",${c.bond.rating},${c.bond.ir},${c.dp},${c.dn}\n`;
     });
   }
   const blob=new Blob([csv],{type:'text/csv;charset=utf-8'});

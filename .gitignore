@@ -31,3 +31,5 @@ primary_market_pricing/大智慧财汇元数据表结构 (1).xlsx
 *.log
 *.tmp
 /.test_runtime/
+broker_market/dm_client_local.py
+.venv/

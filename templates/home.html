@@ -13,7 +13,8 @@
 <main class="main">
   <div class="section-title">工具入口</div>
   <div class="grid">
-    <a class="card" href="{{ url_for('bond_picker') }}"><h2>信用债择券辅助工具</h2><p>支持筛选、同主体比较、收益率倒挂和凸点分析。</p><div class="meta">更新日期：{{ status.bond_picker.updated }}</div></a>
+    <a class="card" href="{{ url_for('secondary_bond_picker') }}"><h2>二级择券工具</h2><p>融合中债估值与经纪商挂盘，提供情绪、推荐名单和交易筛选。</p><div class="meta">更新日期：{{ status.bond_picker.updated }}</div></a>
+    <a class="card" href="{{ url_for('bond_picker') }}"><h2>收益率倒挂挖掘工具</h2><p>寻找同主体期限倒挂与收益率曲线凸点。</p><div class="meta">更新日期：{{ status.bond_picker.updated }}</div></a>
     <a class="card" href="{{ url_for('strategy_dashboard') }}"><h2>信用债策略仪表盘</h2><p>寻找目前市场占优信用策略。</p><div class="meta">更新日期：{{ status.strategy_dashboard.updated }}</div></a>
     <a class="card" href="{{ url_for('spread_monitor') }}"><h2>存量债利差监控</h2><p>查看全市场、重点债券利差变化。</p><div class="meta">更新日期：{{ status.spread_monitor.updated }}</div></a>
     <a class="card" href="{{ url_for('primary_market_pricing.index') }}"><h2>一级发行研究</h2><p>分析发行人一级发行定价偏离、非市场化比例与发飞情况。</p><div class="meta">缓存更新：{{ status.primary_market_pricing.updated }}</div></a>

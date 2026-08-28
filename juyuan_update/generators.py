@@ -3,7 +3,7 @@
 import json
 import os
 import re
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from openpyxl import load_workbook
@@ -11,20 +11,22 @@ from openpyxl import load_workbook
 from . import config
 from .db import (
     connect,
+    fetch_bond_rating_facts,
     fetch_cnbd_yields_by_symbol,
     fetch_curve_series,
     fetch_curve_series_for_dates,
     latest_curve_date,
+    latest_cnbd_valuation_date,
     resolve_curve_codes,
-    shclest_reference_dates,
+    cnbd_reference_dates,
 )
+from .rating_compliance import persist_rating_facts
+from .oracle_bonds import refresh_oracle_bond_universe
 from .strategy_dashboard import build_dashboard as build_strategy_dashboard
 from .unified_excel import (
     get_bond_picker_bonds,
     get_spread_monitor_bonds,
-    load_update_settings,
     load_spread_history_cache,
-    refresh_bond_terms,
     save_bond_picker_yields_cache,
     save_spread_history_cache,
 )
@@ -271,18 +273,17 @@ def normalize_bond_code(code) -> str:
 def load_project2_bond_list(path: Path | None = None) -> list[dict]:
     if path is None:
         unified_bonds = get_spread_monitor_bonds()
-        if unified_bonds:
-            return [
-                {
-                    "code": bond["code"],
-                    "raw_code": bond.get("raw_code") or bond["code"],
-                    "name": bond.get("name") or "",
-                    "term": bond["term"],
-                    "implied_rating": bond.get("implied_rating") or "",
-                    "is_holding": bool(bond.get("is_holding")),
-                }
-                for bond in unified_bonds
-            ]
+        return [
+            {
+                "code": bond["code"],
+                "raw_code": bond.get("raw_code") or bond["code"],
+                "name": bond.get("name") or "",
+                "term": bond["term"],
+                "implied_rating": bond.get("implied_rating") or "",
+                "is_holding": bool(bond.get("is_holding")),
+            }
+            for bond in unified_bonds
+        ]
     path = path or config.PROJECT2_BOND_EXCEL
     if not path.exists():
         return []
@@ -457,7 +458,7 @@ def generate_spread_monitor(progress=None) -> dict:
         end_date = latest_curve_date(conn)
         cache = load_spread_history_cache()
         cached_dates = cache.setdefault("dates", {})
-        dates = normalize_reference_date_labels(shclest_reference_dates(conn, end_date))
+        dates = normalize_reference_date_labels(cnbd_reference_dates(conn, end_date))
         if not dates:
             dates = cached_reference_dates(cached_dates, end_date)
         if not dates:
@@ -587,12 +588,28 @@ def generate_bond_picker_yields(progress=None) -> dict:
     bonds = get_bond_picker_bonds()
     if not bonds:
         raise RuntimeError("未找到符合 BBB- 及以上且无担保人的择券工具债券")
+    rating_facts = None
+    rating_error = ""
     with connect() as conn:
-        trade_date = latest_curve_date(conn)
+        trade_date = latest_cnbd_valuation_date(conn)
         if progress:
             progress(f"查询择券工具最新中债估值 {dash_date(trade_date)}", 45)
         yields = fetch_cnbd_yields_by_symbol(conn, [b["code"] for b in bonds], trade_date)
+        if progress:
+            progress("查询债券主体/债项评级记录（合规630校验）", 60)
+        try:
+            rating_facts = fetch_bond_rating_facts(conn, [b["code"] for b in bonds])
+        except Exception as exc:
+            rating_error = str(exc)
     payload = save_bond_picker_yields_cache(trade_date, yields)
+    if rating_facts is not None:
+        persist_rating_facts(rating_facts, bonds, date.today())
+        if progress:
+            progress(f"630评级事实缓存完成 {len(rating_facts)} 条", 85)
+    payload["rating_facts"] = {
+        "updated": rating_facts is not None,
+        "error": rating_error,
+    }
     if progress:
         progress(f"择券工具估值缓存完成 {len(payload['yields'])} 条", 90)
     return payload
@@ -637,22 +654,34 @@ def run_all(progress=None, modules: list[str] | None = None) -> dict:
     selected = [m for m in selected if m in {"bond_picker", "spread_monitor", "strategy_dashboard", "credit_std_dev", "institution_flow_rates"}]
     if not selected:
         raise RuntimeError("未选择任何更新模块")
-    settings = load_update_settings()
+    try:
+        from .neiping_portal_fetch import update_portal_data
+
+        if progress:
+            progress("同步信评门户内评/限额/持仓", 3)
+        portal_result = update_portal_data(progress=progress)
+    except Exception as exc:
+        if progress:
+            progress(f"信评门户同步失败（沿用最近一次缓存）：{exc}", None)
+        portal_result = "failed"
     with connect() as conn:
-        term_target_date = latest_curve_date(conn)
-    term_result = refresh_bond_terms(
-        term_target_date,
-        base_date=settings["excel_term_base_date"],
-    )
+        bond_as_of_date = latest_cnbd_valuation_date(conn)
+        if progress:
+            progress(f"从 Oracle 刷新债券池（行权期限口径 {dash_date(bond_as_of_date)}）", 4)
+        bond_universe = refresh_oracle_bond_universe(conn, bond_as_of_date)
     if progress:
-        progress(
-            "重算待偿期限："
-            f"Excel 基准日 {term_result['base_date']} -> 最近交易日 {term_result['target_trade_date']}，"
-            f"{term_result['updated']}/{term_result['total_bonds']} 条",
-            2,
-        )
+        if bond_universe.get("applied"):
+            progress(f"Oracle 债券池已更新：{bond_universe['total_bonds']:,} 只", 6)
+        else:
+            diff = bond_universe.get("comparison") or {}
+            progress(
+                "Oracle 债券池差异超过阈值，已生成候选但保留旧池："
+                f"旧 {diff.get('old_total', 0):,} / 新 {diff.get('new_total', 0):,} / "
+                f"旧独有 {diff.get('old_only', 0):,} / 新增 {diff.get('new_only', 0):,}",
+                6,
+            )
     total = len(selected)
-    results = {"bond_terms": term_result}
+    results = {"bond_universe": bond_universe, "portal_data": portal_result}
     for idx, module in enumerate(selected, start=1):
         base = int((idx - 1) / total * 100)
         end = int(idx / total * 100)

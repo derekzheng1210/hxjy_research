@@ -6,7 +6,7 @@ import re
 import shutil
 import tempfile
 import threading
-from datetime import datetime
+from datetime import date, datetime
 from functools import wraps
 from pathlib import Path
 from urllib.parse import urlparse
@@ -16,7 +16,6 @@ load_dotenv()
 
 import requests
 from flask import Flask, Response, jsonify, redirect, render_template, request, send_file, session, url_for
-from openpyxl import load_workbook
 from juyuan_update import config as juyuan_config
 from juyuan_update.tasks import get_status as get_update_status, start_update
 from juyuan_update.unified_excel import (
@@ -24,13 +23,31 @@ from juyuan_update.unified_excel import (
     import_unified_excel,
     load_bond_picker_yields_cache,
     load_bond_static,
-    load_update_settings,
-    save_update_settings,
+    load_counterparty_limits,
+)
+from juyuan_update.oracle_bonds import load_oracle_reconciliation
+from juyuan_update.rating_compliance import (
+    evaluate_rating_compliance,
+    load_rating_facts_cache,
 )
 from primary_market_pricing.app import pricing_bp
 from internal_knowledge_base import bp as internal_knowledge_base_bp
 import institution_flow_config
 import institution_flow_data
+from broker_market import (
+    MARKET_DIR,
+    data_version as bond_picker_data_version,
+    ensure_directories as ensure_broker_directories,
+    load_emotion_history,
+    load_preferences as load_broker_preferences,
+    load_snapshot as load_broker_snapshot,
+    merge_bond_rows,
+    record_market_emotion,
+    public_status as broker_scheduler_status,
+    save_preferences as save_broker_preferences,
+    start_scheduler as start_broker_scheduler,
+    trigger_update as trigger_broker_update,
+)
 
 # 运态数据路径统一由 paths.py 管理（PORTAL_DATA_ROOT 环境变量定位）
 from paths import (
@@ -46,7 +63,6 @@ from paths import (
     PRIMARY_PRICING_CACHE,
 )
 
-BOND_EXCEL = BOND_DIR / "数据.xlsx"
 STRATEGY_HTML = STRATEGY_DIR / "信用债策略仪表盘.html"
 SPREAD_JS = SPREAD_DIR / "spread_data.js"
 INDUSTRY_HTML = INDUSTRY_DIR / "行业景气度跟踪.html"
@@ -54,7 +70,6 @@ STD_DEV_HTML = STD_DEV_DIR / "index.html"
 STD_DEV_JS = STD_DEV_DIR / "data" / "spread_data.js"
 INSTITUTION_FLOW_CACHE = institution_flow_config.RATE_CURVES_CACHE
 MAPPING_FILE = CONFIG_DIR / "映射表.xlsx"
-SHEET_NAME = "万得"
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "dev-secret-change-before-deploy")
@@ -186,7 +201,7 @@ def file_updated_time(path: Path):
     return datetime.fromtimestamp(path.stat().st_mtime).strftime("%Y - %m - %d %H:%M")
 
 
-def read_excel(path: Path):
+def read_excel(_path: Path | None = None):
     static_bonds = get_bond_picker_bonds()
     if static_bonds:
         yield_cache = load_bond_picker_yields_cache()
@@ -215,66 +230,72 @@ def read_excel(path: Path):
             ])
         data_date = yield_cache.get("trade_date") or load_bond_static().get("generated_at") or ""
         return bonds, data_date
-
-    wb = load_workbook(path, read_only=True, data_only=True)
-    ws = wb[SHEET_NAME]
-
-    n1_value = ws.cell(row=1, column=14).value
-    data_date = str(n1_value).strip() if n1_value else ""
-    rows = list(ws.iter_rows(min_row=2, values_only=True))
-    wb.close()
-
-    bonds = []
-    for row in rows:
-        if not row or len(row) < 11:
-            continue
-        code = str(row[0] or "").strip()
-        name = str(row[1] or "").strip()
-        term = row[2]
-        rating = str(row[3] or "").strip()
-        issuer = str(row[4] or "").strip()
-        ytm = row[5]
-        entity = str(row[6] or "").strip()
-        ct = str(row[7] or "").strip()
-        sub = str(row[8] or "").strip()
-        tech = str(row[9] or "").strip()
-        ir = str(row[10] or "").strip()
-        if not code or not name or term is None or ytm is None:
-            continue
-        try:
-            term = round(float(term), 4)
-            ytm = round(float(ytm), 4)
-        except (TypeError, ValueError):
-            continue
-        bonds.append([code, name, term, rating, issuer, ytm, entity, ct, sub, tech, ir])
-    return bonds, data_date
+    return [], load_bond_static().get("generated_at") or ""
 
 
 def load_bond_data():
     global BONDS_CACHE, DATA_TIMESTAMP
-    if not BOND_EXCEL.exists() and not juyuan_config.BOND_STATIC_JSON.exists():
+    if not juyuan_config.BOND_STATIC_JSON.exists():
         BONDS_CACHE = []
         DATA_TIMESTAMP = "数据文件未找到"
         return
     try:
-        bonds, data_date = read_excel(BOND_EXCEL)
-        BONDS_CACHE = bonds
-        DATA_TIMESTAMP = format_date_only(data_date) or file_updated(BOND_EXCEL)
+        bonds, data_date = read_excel()
+        BONDS_CACHE = merge_bond_rows(bonds)
+        limits = load_counterparty_limits().get("limits") or {}
+        rating_cache = load_rating_facts_cache()
+        compliance = rating_cache.get("compliance") or {}
+        rating_facts = rating_cache.get("facts") or {}
+        # 缓存仅每日更新时覆盖；跨日未刷新时按事实现算兜底（不回写缓存）
+        cache_current = str(rating_cache.get("as_of_date") or "") == date.today().strftime("%Y-%m-%d")
+        today = date.today()
+        for row in BONDS_CACHE:
+            value = limits.get(str(row[4] or "").strip())
+            try:
+                row.append(float(value) if value is not None else None)
+            except (TypeError, ValueError):
+                row.append(None)
+            code = str(row[0] or "").strip().upper()
+            bare = code.split(".", 1)[0]
+            verdict = (compliance.get(code) or compliance.get(bare)) if cache_current else None
+            if not verdict:
+                fact = rating_facts.get(code) or rating_facts.get(bare) or {}
+                result = evaluate_rating_compliance(today, fact)
+                verdict = [result["status"], result["reason"]]
+            row.append(verdict)
+        DATA_TIMESTAMP = format_date_only(data_date) or file_updated(juyuan_config.BOND_STATIC_JSON)
     except Exception as exc:
         BONDS_CACHE = []
         DATA_TIMESTAMP = f"读取失败: {exc}"
+
+
+def rating_compliance_status():
+    cache = load_rating_facts_cache()
+    counts = {"ok": 0, "fail": 0, "unknown": 0}
+    for verdict in (cache.get("compliance") or {}).values():
+        status = verdict[0] if isinstance(verdict, list) and verdict[0] in counts else "unknown"
+        counts[status] += 1
+    return {
+        "missing": not bool(cache.get("facts")),
+        "updated": file_updated_time(juyuan_config.RATING_FACTS_CACHE),
+        "as_of": str(cache.get("as_of_date") or ""),
+        "ok": f"{counts['ok']:,}",
+        "fail": f"{counts['fail']:,}",
+        "unknown": f"{counts['unknown']:,}",
+    }
 
 
 def status_info():
     load_bond_data()
     static_payload = load_bond_static()
     unified_updated = file_updated_time(juyuan_config.UNIFIED_EXCEL)
-    settings = load_update_settings()
+    reconciliation = load_oracle_reconciliation()
     return {
         "bond_picker": {
             "updated": DATA_TIMESTAMP,
             "total": f"{len(BONDS_CACHE):,}",
         },
+        "rating_compliance": rating_compliance_status(),
         "strategy_dashboard": {
             "updated": file_updated(STRATEGY_HTML),
             "size": file_size(STRATEGY_HTML),
@@ -282,8 +303,6 @@ def status_info():
         "spread_monitor": {
             "updated": file_updated(SPREAD_JS),
             "size": file_size(SPREAD_JS),
-            "bond_list_updated": file_updated_time(juyuan_config.PROJECT2_BOND_EXCEL),
-            "bond_list_size": file_size(juyuan_config.PROJECT2_BOND_EXCEL),
         },
         "industry_prosperity": {
             "updated": file_updated(INDUSTRY_HTML),
@@ -306,18 +325,25 @@ def status_info():
         "unified_excel": {
             "updated": unified_updated,
             "size": file_size(juyuan_config.UNIFIED_EXCEL),
-            "total_bonds": static_payload.get("total_bonds", 0),
-            "source_generated": static_payload.get("generated_at") or "-",
             "fund_updated": file_updated_time(juyuan_config.STRATEGY_FUND_PRICES_FROZEN),
         },
-        "settings": settings,
+        "oracle_bonds": {
+            "updated": static_payload.get("generated_at") or "-",
+            "as_of": static_payload.get("as_of_date") or reconciliation.get("as_of_date") or "-",
+            "total": static_payload.get("total_bonds", 0),
+            "source": static_payload.get("source_file") or "-",
+            "review_required": bool(reconciliation.get("review_required")),
+            "comparison": reconciliation.get("comparison") or {},
+        },
+        "broker_market": broker_scheduler_status(),
     }
 
 
 def portal_nav(active_endpoint: str):
     links = [
         ("home", "首页"),
-        ("bond_picker", "择券工具"),
+        ("secondary_bond_picker", "二级择券工具"),
+        ("bond_picker", "收益率倒挂挖掘工具"),
         ("strategy_dashboard", "策略仪表盘"),
         ("spread_monitor", "利差监控"),
         ("primary_market_pricing.index", "一级发行研究"),
@@ -331,7 +357,7 @@ def portal_nav(active_endpoint: str):
     items.append(
         ".portal-nav{position:sticky;top:0;z-index:10000;background:#fff;color:#1e293b;"
         "height:44px;display:flex;align-items:center;gap:6px;padding:0 16px;"
-        "border-bottom:1px solid #e2e8f0;font-family:-apple-system,BlinkMacSystemFont,"
+        "border-bottom:1px solid #e2e8f0;overflow-x:auto;white-space:nowrap;font-family:-apple-system,BlinkMacSystemFont,"
         '"Segoe UI","Microsoft YaHei",sans-serif;box-sizing:border-box}'
         ".portal-nav *{box-sizing:border-box}"
         ".portal-nav .brand{font-weight:800;color:#2563eb;font-size:15px;margin-right:16px;letter-spacing:.5px}"
@@ -636,13 +662,117 @@ def home():
 @login_required
 def bond_picker():
     load_bond_data()
+    market_meta = bond_picker_market_meta(include_emotion=True)
+    version = bond_picker_data_version()
     return render_portal_template(
         "bond_picker.html",
         "bond_picker",
         bond_data=json.dumps(BONDS_CACHE, ensure_ascii=False),
+        market_meta=json.dumps(market_meta, ensure_ascii=False),
+        data_version=version,
         timestamp=DATA_TIMESTAMP,
         total=len(BONDS_CACHE),
     )
+
+
+@app.route("/secondary-bond-picker")
+@login_required
+def secondary_bond_picker():
+    load_bond_data()
+    market_meta = bond_picker_market_meta(include_emotion=True)
+    version = bond_picker_data_version()
+    return render_portal_template(
+        "secondary_bond_picker.html",
+        "secondary_bond_picker",
+        bond_data=json.dumps(BONDS_CACHE, ensure_ascii=False),
+        market_meta=json.dumps(market_meta, ensure_ascii=False),
+        data_version=version,
+        timestamp=DATA_TIMESTAMP,
+        total=len(BONDS_CACHE),
+    )
+
+
+def _ensure_latest_emotion(snapshot):
+    generated_at = str(snapshot.get("generated_at") or "")
+    history = load_emotion_history()
+    matching = next(
+        (p for p in history.get("points") or [] if p.get("observed_at") == generated_at),
+        None,
+    )
+    if not generated_at or (matching and "tier2_capital" in matching):
+        return history
+    try:
+        scheduled_for = None
+        if matching and matching.get("scheduled_for"):
+            scheduled_for = datetime.strptime(matching["scheduled_for"], "%Y-%m-%d %H:%M:%S")
+        record_market_emotion(snapshot, scheduled_for=scheduled_for)
+    except Exception:
+        return history
+    return load_emotion_history()
+
+
+def bond_picker_market_meta(include_emotion=True):
+    snapshot = load_broker_snapshot()
+    scheduler = broker_scheduler_status()
+    broker_state = scheduler.get("broker", {})
+    valuation_state = scheduler.get("bond_picker", {})
+    payload = {
+        "valuation_date": DATA_TIMESTAMP,
+        "broker_snapshot_at": snapshot.get("generated_at") or "尚无经纪商快照",
+        "broker_quote_count": int(snapshot.get("quote_count") or 0),
+        "broker_state": broker_state.get("state") or "idle",
+        "broker_stale": bool(broker_state.get("stale")),
+        "broker_error": broker_state.get("last_error") or "",
+        "broker_next_run": broker_state.get("next_run") or "",
+        "broker_attempt": int(broker_state.get("attempt") or 0),
+        "broker_scheduled_for": broker_state.get("scheduled_for") or "",
+        "valuation_state": valuation_state.get("state") or "idle",
+        "valuation_stale": bool(valuation_state.get("stale")),
+        "valuation_error": valuation_state.get("last_error") or "",
+        "valuation_attempt": int(valuation_state.get("attempt") or 0),
+        "valuation_scheduled_for": valuation_state.get("scheduled_for") or "",
+        "rating_compliance": rating_compliance_status(),
+    }
+    if include_emotion:
+        history = _ensure_latest_emotion(snapshot)
+        points = history.get("points") or []
+        payload["emotion"] = points[-1] if points else {"value": None, "count": 0, "breakdown": {}}
+        payload["emotion_history"] = points
+        payload["emotion_history_version"] = history.get("version") or ""
+    return payload
+
+
+@app.route("/api/bond-picker/data")
+@app.route("/api/secondary-bond-picker/data")
+@login_required
+def api_bond_picker_data():
+    _ensure_latest_emotion(load_broker_snapshot())
+    version = bond_picker_data_version()
+    if request.if_none_match.contains(version):
+        response = Response(status=304)
+        response.set_etag(version)
+        return response
+    load_bond_data()
+    response = jsonify({
+        "version": version,
+        "bonds": BONDS_CACHE,
+        "meta": bond_picker_market_meta(),
+    })
+    response.set_etag(version)
+    response.headers["Cache-Control"] = "private, no-cache"
+    return response
+
+
+@app.route("/api/bond-picker/preferences", methods=["GET", "PUT"])
+@app.route("/api/secondary-bond-picker/preferences", methods=["GET", "PUT"])
+@login_required
+def api_bond_picker_preferences():
+    if request.method == "GET":
+        return jsonify(load_broker_preferences())
+    try:
+        return jsonify(save_broker_preferences(request.get_json(silent=False)))
+    except (TypeError, ValueError) as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
 
 
 @app.route("/strategy-dashboard")
@@ -826,20 +956,20 @@ def admin():
                 if target == "unified_excel":
                     save_upload(file, juyuan_config.UNIFIED_EXCEL, {".xlsx", ".xls"}, "unified_excel")
                     result = import_unified_excel(juyuan_config.UNIFIED_EXCEL)
-                    load_bond_data()
                     message = (
-                        "统一 Excel 上传成功："
-                        f"债券 {result['bonds']:,} 条，择券候选 {result['bond_picker_bonds']:,} 条，"
-                        f"基金指数 {result['fund_prices']:,} 条（{result['fund_start']} 至 {result['fund_end']}）。"
+                        "基金指数 Excel 上传成功："
+                        f"中长期纯债基金指数 {result['fund_prices']:,} 条"
+                        f"（{result['fund_start']} 至 {result['fund_end']}）。"
+                        "债券池、内评、限额和持仓未从该 Excel 读取。"
                     )
                 elif target == "bond_picker":
-                    error = "该上传入口已合并为统一数据 Excel"
+                    error = "债券清单由 Oracle 自动更新，不再支持 Excel 上传"
                 elif target == "strategy_dashboard":
-                    error = "策略仪表盘 HTML 上传入口已停用，请使用统一数据 Excel 和一键更新"
+                    error = "策略仪表盘 HTML 上传入口已停用，请使用基金指数 Excel 和一键更新"
                 elif target == "spread_monitor_js":
                     error = "利差监控 JS 上传入口已停用，请使用一键更新"
                 elif target == "spread_monitor_bond_list":
-                    error = "存量债券清单上传入口已合并为统一数据 Excel"
+                    error = "存量债券清单由 Oracle 自动更新，不再支持 Excel 上传"
                 elif target == "industry_prosperity":
                     save_upload(file, INDUSTRY_HTML, {".html", ".htm"}, "industry_prosperity")
                     message = "行业景气度跟踪 HTML 上传成功。"
@@ -871,32 +1001,14 @@ def admin_start_db_update():
     return redirect(url_for("admin"))
 
 
-@app.route("/admin/update-settings", methods=["POST"])
+@app.route("/admin/start-broker-update", methods=["POST"])
 @login_required
 @admin_required
-def admin_update_settings():
-    try:
-        settings = save_update_settings({
-            "excel_term_base_date": request.form.get("excel_term_base_date", ""),
-        })
-        return render_portal_template(
-            "admin.html",
-            "admin",
-            status=status_info(),
-            update_status=get_update_status(),
-            message=f"Excel 待偿期限基准日已保存为 {settings['excel_term_base_date']}。",
-            error=None,
-        )
-    except Exception as exc:
-        return render_portal_template(
-            "admin.html",
-            "admin",
-            status=status_info(),
-            update_status=get_update_status(),
-            message=None,
-            error=f"保存失败: {exc}",
-        )
-
+def admin_start_broker_update():
+    ok, message = trigger_broker_update("broker")
+    if request.headers.get("X-Requested-With") == "XMLHttpRequest":
+        return {"ok": ok, "message": message, "status": broker_scheduler_status()}
+    return redirect(url_for("admin"))
 
 
 @app.route("/api/status")
@@ -913,12 +1025,16 @@ def api_update_status():
     return get_update_status()
 
 
-for directory in [BOND_DIR, STRATEGY_DIR, SPREAD_DIR, INDUSTRY_DIR, STD_DEV_JS.parent, INSTITUTION_FLOW_CACHE.parent, PRIMARY_PRICING_CACHE.parent, CONFIG_DIR, UPLOADS_DIR, juyuan_config.PROJECT2_BOND_EXCEL.parent, juyuan_config.STRATEGY_FUND_PRICES_FROZEN.parent, juyuan_config.BOND_STATIC_JSON.parent, juyuan_config.BOND_PICKER_YIELDS_CACHE.parent]:
+for directory in [BOND_DIR, STRATEGY_DIR, SPREAD_DIR, INDUSTRY_DIR, STD_DEV_JS.parent, INSTITUTION_FLOW_CACHE.parent, PRIMARY_PRICING_CACHE.parent, CONFIG_DIR, UPLOADS_DIR, juyuan_config.PROJECT2_BOND_EXCEL.parent, juyuan_config.STRATEGY_FUND_PRICES_FROZEN.parent, juyuan_config.BOND_STATIC_JSON.parent, juyuan_config.BOND_PICKER_YIELDS_CACHE.parent, MARKET_DIR]:
     directory.mkdir(parents=True, exist_ok=True)
 
+ensure_broker_directories()
 load_bond_data()
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", "5000"))
-    debug = os.environ.get("FLASK_DEBUG", "1") == "1"
-    app.run(host="0.0.0.0", port=port, debug=debug)
+    port = int(os.environ.get("PORT", "5011"))
+    host = os.environ.get("HOST", "127.0.0.1")
+    debug = os.environ.get("FLASK_DEBUG", "0") == "1"
+    if os.environ.get("BROKER_SCHEDULER_ENABLED", "1") == "1":
+        start_broker_scheduler()
+    app.run(host=host, port=port, debug=debug, use_reloader=False)
