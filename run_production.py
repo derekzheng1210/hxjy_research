@@ -23,6 +23,16 @@ from waitress import serve
 
 from app import app
 
+# 经纪商行情调度器：app.py 开发模式下在 __main__ 启动，waitress 部署时在此启动。
+# BROKER_SCHEDULER_ENABLED=0 可关闭；锁文件被其他进程持有时说明已有实例在调度，跳过。
+if os.environ.get("BROKER_SCHEDULER_ENABLED", "1") == "1":
+    from broker_market import start_scheduler as start_broker_scheduler
+
+    if start_broker_scheduler():
+        print("[production] 经纪商行情调度器已启动", flush=True)
+    else:
+        print("[production] 经纪商行情调度器锁被占用（已有实例在运行），本进程跳过启动", flush=True)
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "5000"))
     threads = int(os.environ.get("WAITRESS_THREADS", "4"))

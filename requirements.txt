@@ -4,6 +4,7 @@ gunicorn>=21.2
 waitress>=3.0  # Windows 生产 WSGI 服务器（gunicorn 不支持 Windows）
 oracledb>=2.0
 requests>=2.31
+cryptography>=42.0  # 信评门户登录加解密（neiping_portal_fetch）
 python-dotenv>=1.0
 pandas>=2.0
 numpy>=1.24
