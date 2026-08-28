@@ -225,12 +225,6 @@ class BondTradingScheduler:
             self._job_lock.release()
 
     def _run_with_retries(self, kind: str, scheduled_for: datetime) -> None:
-        if kind == "broker":
-            from .fetcher import fetch_and_save_latest
-            runner = fetch_and_save_latest
-        else:
-            from juyuan_update.generators import run_all
-            runner = lambda: run_all(modules=["bond_picker"])
         total_attempts = 1 + len(RETRY_DELAYS)
         for index in range(total_attempts):
             attempt = index + 1
@@ -245,6 +239,14 @@ class BondTradingScheduler:
             })
             save_status(status)
             try:
+                # runner 的导入（含 dm_client_local 凭证模块）放在 try 内：
+                # 缺文件时错误会写入状态并在重试间隔后自动恢复，而不是被调度循环静默吞掉。
+                if kind == "broker":
+                    from .fetcher import fetch_and_save_latest
+                    runner = fetch_and_save_latest
+                else:
+                    from juyuan_update.generators import run_all
+                    runner = lambda: run_all(modules=["bond_picker"])
                 result = runner()
                 if kind == "broker" and isinstance(result, dict):
                     try:
