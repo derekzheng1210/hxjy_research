@@ -170,6 +170,78 @@ def latest_curve_date(conn, fallback_days: int = 20) -> str:
     return today
 
 
+def latest_cnbd_valuation_date(conn, fallback_days: int = 20) -> str:
+    """Latest indexed ChinaBond valuation date from the primary source."""
+    cur = conn.cursor()
+    today = date.today().strftime("%Y%m%d")
+    since = (date.today() - timedelta(days=fallback_days)).strftime("%Y%m%d")
+    cur.execute(
+        """
+        SELECT TRADEDATE
+        FROM (
+            SELECT TRADEDATE
+            FROM TQ_QT_CBESTIMATE
+            WHERE TRADEDATE >= :since
+              AND TRADEDATE <= :today
+              AND DATASOURCE = '1'
+              AND ISVALID = 1
+            ORDER BY TRADEDATE DESC
+        )
+        WHERE ROWNUM = 1
+        """,
+        {"since": since, "today": today},
+    )
+    row = cur.fetchone()
+    if row and row[0]:
+        return str(row[0])
+    raise RuntimeError("近 20 日未找到 TQ_QT_CBESTIMATE 中债估值日期")
+
+
+def nearest_cnbd_valuation_date(
+    conn,
+    target_date: str,
+    before: bool = False,
+    lookback_days: int = 14,
+) -> str | None:
+    cur = conn.cursor()
+    op = "<" if before else "<="
+    target = datetime.strptime(str(target_date), "%Y%m%d").date()
+    since = (target - timedelta(days=lookback_days)).strftime("%Y%m%d")
+    cur.execute(
+        f"""
+        SELECT TRADEDATE
+        FROM (
+            SELECT TRADEDATE
+            FROM TQ_QT_CBESTIMATE
+            WHERE TRADEDATE >= :since
+              AND TRADEDATE {op} :target_date
+              AND DATASOURCE = '1'
+              AND ISVALID = 1
+            ORDER BY TRADEDATE DESC
+        )
+        WHERE ROWNUM = 1
+        """,
+        {"since": since, "target_date": target_date},
+    )
+    row = cur.fetchone()
+    return str(row[0]) if row and row[0] else None
+
+
+def cnbd_reference_dates(conn, end_date: str) -> dict[str, str]:
+    current = nearest_cnbd_valuation_date(conn, end_date)
+    if not current:
+        return {}
+    current_dt = datetime.strptime(current, "%Y%m%d").date()
+    targets = {
+        "当前": current,
+        "昨日": nearest_cnbd_valuation_date(conn, current, before=True),
+        "一周前": nearest_cnbd_valuation_date(conn, (current_dt - timedelta(days=7)).strftime("%Y%m%d")),
+        "一月前": nearest_cnbd_valuation_date(conn, (current_dt - timedelta(days=30)).strftime("%Y%m%d")),
+        "年初": nearest_cnbd_valuation_date(conn, f"{current_dt.year}0101", before=True),
+    }
+    return {label: dt for label, dt in targets.items() if dt}
+
+
 def trading_dates(conn, start_date: str, end_date: str) -> list[str]:
     cur = conn.cursor()
     curve_code = _default_curve_code()
@@ -455,24 +527,14 @@ def _wind_exchange_codes(raw_code: str) -> tuple[str, ...]:
 
 def _valuation_type_rank(valuation_type: str | None) -> int:
     text = str(valuation_type or "").strip()
-    if text == "2":
-        return 0
     if text == "1":
-        return 1
-    return 2
+        return 0
+    return 1
 
 
 def _select_cnbd_yield(rows: list[tuple[str, str | None, str | None, float]]) -> float:
-    # DATASOURCE=5 + VALUATIONTYPE=1 stores callable/exercise valuation rows
-    # for examples like 21天投债01. Other DATASOURCE=5 rows are not a safe
-    # substitute for non-callable bonds, so fall back to DATASOURCE=1.
-    exercise_rows = [
-        row for row in rows
-        if str(row[1] or "").strip() == "5" and str(row[2] or "").strip() == "1"
-    ]
-    if exercise_rows:
-        exercise_rows.sort(key=lambda row: row[0])
-        return exercise_rows[0][3]
+    # 中债估值固定使用 DATASOURCE=1；同日多行优先 VALUATIONTYPE=1，
+    # 不平均，也不以 DATASOURCE=5 的行权估值替代。
     datasource_one_rows = [row for row in rows if str(row[1] or "").strip() == "1"]
     selected_rows = datasource_one_rows or rows
     selected_rows.sort(key=lambda row: (_valuation_type_rank(row[2]), row[0]))
@@ -497,7 +559,7 @@ def fetch_cnbd_yields_by_symbol(conn, symbols: Iterable[str], trade_date: str, b
           ON b.SECODE = e.SECODE
          AND b.ISVALID = 1
         WHERE e.TRADEDATE = :trade_date
-          AND e.DATASOURCE IN ('1', '5')
+          AND e.DATASOURCE = '1'
           AND e.ISVALID = 1
           AND e.YIELD IS NOT NULL
         """,

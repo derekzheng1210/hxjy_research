@@ -75,17 +75,20 @@ class BrokerMarketStorageTests(unittest.TestCase):
 
     def test_market_emotion_is_equal_weighted_and_has_breakdowns(self):
         base = [
-            ["1.IB", "强", 0.8, "AA+", "主体甲", 2.10, "国企", "否", "否", "", "AA"],
+            ["1.IB", "24甲行二级资本债01", 0.8, "AA+", "主体甲", 2.10, "国企", "否", "是", "", "AA"],
             ["2.IB", "弱", 4.0, "AA", "主体乙", 2.00, "国企", "否", "否", "", "BBB"],
+            ["3.IB", "24券商次级01", 3.0, "AA", "主体丙", 2.00, "国企", "否", "是", "", "AA"],
         ]
         snapshot = {"quotes": [
             {"code": "1.IB", "bid_yield": 2.05, "ofr_yield": 2.07},
             {"code": "2.IB", "bid_yield": 2.01, "ofr_yield": 2.03},
+            {"code": "3.IB", "bid_yield": 2.03, "ofr_yield": 2.05},
         ]}
         result = storage.calculate_market_emotion(base, snapshot)
-        self.assertEqual(result["value"], -1.0)
-        self.assertEqual(result["count"], 2)
-        self.assertEqual({x["label"] for x in result["breakdown"]["term"]}, {"≤1Y", "3-5Y"})
+        self.assertEqual(result["value"], 0.67)
+        self.assertEqual(result["count"], 3)
+        self.assertEqual({x["label"] for x in result["breakdown"]["term"]}, {"≤1Y", "1-3Y", "3-5Y"})
+        self.assertEqual(result["tier2_capital"], {"value": -4.0, "count": 1})
 
     def test_emotion_history_keeps_intraday_scheduled_points(self):
         target = Path.cwd() / ".test-market-emotion-history.json"
@@ -100,6 +103,17 @@ class BrokerMarketStorageTests(unittest.TestCase):
                 self.assertEqual(len(points), 2)
                 self.assertEqual(points[0]["scheduled_for"], "2026-08-27 09:30:00")
                 self.assertEqual(points[1]["scheduled_for"], "2026-08-27 10:00:00")
+        finally:
+            target.unlink(missing_ok=True)
+
+    def test_scheduler_status_changes_picker_data_version(self):
+        target = Path.cwd() / ".test-scheduler-status-version.json"
+        try:
+            with patch.object(storage, "STATUS_PATH", target):
+                target.write_text("{}", encoding="utf-8")
+                before = storage.data_version()
+                target.write_text('{"broker":{"state":"running"}}', encoding="utf-8")
+                self.assertNotEqual(storage.data_version(), before)
         finally:
             target.unlink(missing_ok=True)
 

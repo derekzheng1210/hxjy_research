@@ -16,7 +16,6 @@ load_dotenv()
 
 import requests
 from flask import Flask, Response, jsonify, redirect, render_template, request, send_file, session, url_for
-from openpyxl import load_workbook
 from juyuan_update import config as juyuan_config
 from juyuan_update.tasks import get_status as get_update_status, start_update
 from juyuan_update.unified_excel import (
@@ -25,13 +24,11 @@ from juyuan_update.unified_excel import (
     load_bond_picker_yields_cache,
     load_bond_static,
     load_counterparty_limits,
-    load_update_settings,
-    save_update_settings,
 )
+from juyuan_update.oracle_bonds import load_oracle_reconciliation
 from juyuan_update.rating_compliance import (
     evaluate_rating_compliance,
     load_rating_facts_cache,
-    refresh_rating_compliance_cache,
 )
 from primary_market_pricing.app import pricing_bp
 from internal_knowledge_base import bp as internal_knowledge_base_bp
@@ -66,7 +63,6 @@ from paths import (
     PRIMARY_PRICING_CACHE,
 )
 
-BOND_EXCEL = BOND_DIR / "数据.xlsx"
 STRATEGY_HTML = STRATEGY_DIR / "信用债策略仪表盘.html"
 SPREAD_JS = SPREAD_DIR / "spread_data.js"
 INDUSTRY_HTML = INDUSTRY_DIR / "行业景气度跟踪.html"
@@ -74,7 +70,6 @@ STD_DEV_HTML = STD_DEV_DIR / "index.html"
 STD_DEV_JS = STD_DEV_DIR / "data" / "spread_data.js"
 INSTITUTION_FLOW_CACHE = institution_flow_config.RATE_CURVES_CACHE
 MAPPING_FILE = CONFIG_DIR / "映射表.xlsx"
-SHEET_NAME = "万得"
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "dev-secret-change-before-deploy")
@@ -195,7 +190,7 @@ def file_updated_time(path: Path):
     return datetime.fromtimestamp(path.stat().st_mtime).strftime("%Y - %m - %d %H:%M")
 
 
-def read_excel(path: Path):
+def read_excel(_path: Path | None = None):
     static_bonds = get_bond_picker_bonds()
     if static_bonds:
         yield_cache = load_bond_picker_yields_cache()
@@ -224,49 +219,17 @@ def read_excel(path: Path):
             ])
         data_date = yield_cache.get("trade_date") or load_bond_static().get("generated_at") or ""
         return bonds, data_date
-
-    wb = load_workbook(path, read_only=True, data_only=True)
-    ws = wb[SHEET_NAME]
-
-    n1_value = ws.cell(row=1, column=14).value
-    data_date = str(n1_value).strip() if n1_value else ""
-    rows = list(ws.iter_rows(min_row=2, values_only=True))
-    wb.close()
-
-    bonds = []
-    for row in rows:
-        if not row or len(row) < 11:
-            continue
-        code = str(row[0] or "").strip()
-        name = str(row[1] or "").strip()
-        term = row[2]
-        rating = str(row[3] or "").strip()
-        issuer = str(row[4] or "").strip()
-        ytm = row[5]
-        entity = str(row[6] or "").strip()
-        ct = str(row[7] or "").strip()
-        sub = str(row[8] or "").strip()
-        tech = str(row[9] or "").strip()
-        ir = str(row[10] or "").strip()
-        if not code or not name or term is None or ytm is None:
-            continue
-        try:
-            term = round(float(term), 4)
-            ytm = round(float(ytm), 4)
-        except (TypeError, ValueError):
-            continue
-        bonds.append([code, name, term, rating, issuer, ytm, entity, ct, sub, tech, ir])
-    return bonds, data_date
+    return [], load_bond_static().get("generated_at") or ""
 
 
 def load_bond_data():
     global BONDS_CACHE, DATA_TIMESTAMP
-    if not BOND_EXCEL.exists() and not juyuan_config.BOND_STATIC_JSON.exists():
+    if not juyuan_config.BOND_STATIC_JSON.exists():
         BONDS_CACHE = []
         DATA_TIMESTAMP = "数据文件未找到"
         return
     try:
-        bonds, data_date = read_excel(BOND_EXCEL)
+        bonds, data_date = read_excel()
         BONDS_CACHE = merge_bond_rows(bonds)
         limits = load_counterparty_limits().get("limits") or {}
         rating_cache = load_rating_facts_cache()
@@ -289,7 +252,7 @@ def load_bond_data():
                 result = evaluate_rating_compliance(today, fact)
                 verdict = [result["status"], result["reason"]]
             row.append(verdict)
-        DATA_TIMESTAMP = format_date_only(data_date) or file_updated(BOND_EXCEL)
+        DATA_TIMESTAMP = format_date_only(data_date) or file_updated(juyuan_config.BOND_STATIC_JSON)
     except Exception as exc:
         BONDS_CACHE = []
         DATA_TIMESTAMP = f"读取失败: {exc}"
@@ -315,7 +278,7 @@ def status_info():
     load_bond_data()
     static_payload = load_bond_static()
     unified_updated = file_updated_time(juyuan_config.UNIFIED_EXCEL)
-    settings = load_update_settings()
+    reconciliation = load_oracle_reconciliation()
     return {
         "bond_picker": {
             "updated": DATA_TIMESTAMP,
@@ -329,8 +292,6 @@ def status_info():
         "spread_monitor": {
             "updated": file_updated(SPREAD_JS),
             "size": file_size(SPREAD_JS),
-            "bond_list_updated": file_updated_time(juyuan_config.PROJECT2_BOND_EXCEL),
-            "bond_list_size": file_size(juyuan_config.PROJECT2_BOND_EXCEL),
         },
         "industry_prosperity": {
             "updated": file_updated(INDUSTRY_HTML),
@@ -353,11 +314,16 @@ def status_info():
         "unified_excel": {
             "updated": unified_updated,
             "size": file_size(juyuan_config.UNIFIED_EXCEL),
-            "total_bonds": static_payload.get("total_bonds", 0),
-            "source_generated": static_payload.get("generated_at") or "-",
             "fund_updated": file_updated_time(juyuan_config.STRATEGY_FUND_PRICES_FROZEN),
         },
-        "settings": settings,
+        "oracle_bonds": {
+            "updated": static_payload.get("generated_at") or "-",
+            "as_of": static_payload.get("as_of_date") or reconciliation.get("as_of_date") or "-",
+            "total": static_payload.get("total_bonds", 0),
+            "source": static_payload.get("source_file") or "-",
+            "review_required": bool(reconciliation.get("review_required")),
+            "comparison": reconciliation.get("comparison") or {},
+        },
         "broker_market": broker_scheduler_status(),
     }
 
@@ -685,12 +651,13 @@ def home():
 @login_required
 def bond_picker():
     load_bond_data()
+    market_meta = bond_picker_market_meta(include_emotion=True)
     version = bond_picker_data_version()
     return render_portal_template(
         "bond_picker.html",
         "bond_picker",
         bond_data=json.dumps(BONDS_CACHE, ensure_ascii=False),
-        market_meta=json.dumps(bond_picker_market_meta(include_emotion=False), ensure_ascii=False),
+        market_meta=json.dumps(market_meta, ensure_ascii=False),
         data_version=version,
         timestamp=DATA_TIMESTAMP,
         total=len(BONDS_CACHE),
@@ -717,10 +684,17 @@ def secondary_bond_picker():
 def _ensure_latest_emotion(snapshot):
     generated_at = str(snapshot.get("generated_at") or "")
     history = load_emotion_history()
-    if not generated_at or any(p.get("observed_at") == generated_at for p in history.get("points") or []):
+    matching = next(
+        (p for p in history.get("points") or [] if p.get("observed_at") == generated_at),
+        None,
+    )
+    if not generated_at or (matching and "tier2_capital" in matching):
         return history
     try:
-        record_market_emotion(snapshot)
+        scheduled_for = None
+        if matching and matching.get("scheduled_for"):
+            scheduled_for = datetime.strptime(matching["scheduled_for"], "%Y-%m-%d %H:%M:%S")
+        record_market_emotion(snapshot, scheduled_for=scheduled_for)
     except Exception:
         return history
     return load_emotion_history()
@@ -739,9 +713,13 @@ def bond_picker_market_meta(include_emotion=True):
         "broker_stale": bool(broker_state.get("stale")),
         "broker_error": broker_state.get("last_error") or "",
         "broker_next_run": broker_state.get("next_run") or "",
+        "broker_attempt": int(broker_state.get("attempt") or 0),
+        "broker_scheduled_for": broker_state.get("scheduled_for") or "",
         "valuation_state": valuation_state.get("state") or "idle",
         "valuation_stale": bool(valuation_state.get("stale")),
         "valuation_error": valuation_state.get("last_error") or "",
+        "valuation_attempt": int(valuation_state.get("attempt") or 0),
+        "valuation_scheduled_for": valuation_state.get("scheduled_for") or "",
         "rating_compliance": rating_compliance_status(),
     }
     if include_emotion:
@@ -967,33 +945,20 @@ def admin():
                 if target == "unified_excel":
                     save_upload(file, juyuan_config.UNIFIED_EXCEL, {".xlsx", ".xls"}, "unified_excel")
                     result = import_unified_excel(juyuan_config.UNIFIED_EXCEL)
-                    # 债券清单/起息日已变化，同步重建630评级合规缓存（单版本覆盖）
-                    try:
-                        rating = refresh_rating_compliance_cache()
-                        verdicts = [v[0] for v in (rating.get("compliance") or {}).values()]
-                        rating_note = (
-                            f"；630评级缓存已刷新：{rating['total_bonds']:,} 条"
-                            f"（满足 {verdicts.count('ok'):,}，不满足 {verdicts.count('fail'):,}，"
-                            f"待确认 {verdicts.count('unknown'):,}）"
-                        )
-                    except Exception as exc:
-                        rating_note = f"；630评级缓存刷新失败: {exc}（每日更新任务会自动重试）"
-                    load_bond_data()
                     message = (
-                        "统一 Excel 上传成功："
-                        f"债券 {result['bonds']:,} 条，择券候选 {result['bond_picker_bonds']:,} 条，"
-                        f"基金指数 {result['fund_prices']:,} 条（{result['fund_start']} 至 {result['fund_end']}）"
-                        + rating_note
-                        + "。"
+                        "基金指数 Excel 上传成功："
+                        f"中长期纯债基金指数 {result['fund_prices']:,} 条"
+                        f"（{result['fund_start']} 至 {result['fund_end']}）。"
+                        "债券池、内评、限额和持仓未从该 Excel 读取。"
                     )
                 elif target == "bond_picker":
-                    error = "该上传入口已合并为统一数据 Excel"
+                    error = "债券清单由 Oracle 自动更新，不再支持 Excel 上传"
                 elif target == "strategy_dashboard":
-                    error = "策略仪表盘 HTML 上传入口已停用，请使用统一数据 Excel 和一键更新"
+                    error = "策略仪表盘 HTML 上传入口已停用，请使用基金指数 Excel 和一键更新"
                 elif target == "spread_monitor_js":
                     error = "利差监控 JS 上传入口已停用，请使用一键更新"
                 elif target == "spread_monitor_bond_list":
-                    error = "存量债券清单上传入口已合并为统一数据 Excel"
+                    error = "存量债券清单由 Oracle 自动更新，不再支持 Excel 上传"
                 elif target == "industry_prosperity":
                     save_upload(file, INDUSTRY_HTML, {".html", ".htm"}, "industry_prosperity")
                     message = "行业景气度跟踪 HTML 上传成功。"
@@ -1033,34 +998,6 @@ def admin_start_broker_update():
     if request.headers.get("X-Requested-With") == "XMLHttpRequest":
         return {"ok": ok, "message": message, "status": broker_scheduler_status()}
     return redirect(url_for("admin"))
-
-
-@app.route("/admin/update-settings", methods=["POST"])
-@login_required
-@admin_required
-def admin_update_settings():
-    try:
-        settings = save_update_settings({
-            "excel_term_base_date": request.form.get("excel_term_base_date", ""),
-        })
-        return render_portal_template(
-            "admin.html",
-            "admin",
-            status=status_info(),
-            update_status=get_update_status(),
-            message=f"Excel 待偿期限基准日已保存为 {settings['excel_term_base_date']}。",
-            error=None,
-        )
-    except Exception as exc:
-        return render_portal_template(
-            "admin.html",
-            "admin",
-            status=status_info(),
-            update_status=get_update_status(),
-            message=None,
-            error=f"保存失败: {exc}",
-        )
-
 
 
 @app.route("/api/status")

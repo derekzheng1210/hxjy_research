@@ -268,6 +268,11 @@ def _term_bucket(term: float | None) -> str:
     return ">7Y"
 
 
+def _is_tier2_capital_bond(row: list[Any]) -> bool:
+    """Identify bank Tier-2 capital bonds from the standardized short name."""
+    return "二级资本债" in str(row[1] or "").replace(" ", "")
+
+
 def calculate_market_emotion(
     base_rows: list[list[Any]], snapshot: dict[str, Any] | None = None
 ) -> dict[str, Any]:
@@ -278,6 +283,7 @@ def calculate_market_emotion(
     """
     merged = merge_bond_rows(base_rows, snapshot)
     values: list[float] = []
+    tier2_capital_values: list[float] = []
     dimensions: dict[str, dict[str, list[float]]] = {
         "implied_rating": {}, "internal_rating": {}, "term": {},
     }
@@ -289,6 +295,8 @@ def calculate_market_emotion(
             continue
         value = ((bid + ofr) / 2 - ytm) * 100
         values.append(value)
+        if _is_tier2_capital_bond(row):
+            tier2_capital_values.append(value)
         labels = {
             "implied_rating": str(row[3] or "未评级"),
             "internal_rating": str(row[10] or "未评级"),
@@ -303,7 +311,15 @@ def calculate_market_emotion(
             {"label": label, "value": _average(group), "count": len(group)}
             for label, group in groups.items()
         ]
-    return {"value": _average(values), "count": len(values), "breakdown": breakdown}
+    return {
+        "value": _average(values),
+        "count": len(values),
+        "breakdown": breakdown,
+        "tier2_capital": {
+            "value": _average(tier2_capital_values),
+            "count": len(tier2_capital_values),
+        },
+    }
 
 
 def load_current_bond_rows() -> list[list[Any]]:
@@ -371,7 +387,10 @@ def record_market_emotion(
     keep_dates = set(dates[:EMOTION_HISTORY_TRADING_DAYS])
     points = [item for item in points if str(item.get("scheduled_for") or "")[:10] in keep_dates]
     version = hashlib.sha256(
-        "|".join(f"{p.get('scheduled_for')}:{p.get('value')}" for p in points).encode("utf-8")
+        "|".join(
+            f"{p.get('scheduled_for')}:{p.get('value')}:{(p.get('tier2_capital') or {}).get('value')}"
+            for p in points
+        ).encode("utf-8")
     ).hexdigest()[:20]
     payload = {"version": version, "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "points": points}
     atomic_write_json(EMOTION_HISTORY_PATH, payload)
@@ -382,6 +401,7 @@ def data_version(*paths: Path) -> str:
     pieces: list[str] = []
     for path in paths or (
         SNAPSHOT_PATH,
+        STATUS_PATH,
         BOND_DIR / "oracle_latest_yields_cache.json",
         BOND_DIR / "rating_facts_cache.json",
         EMOTION_HISTORY_PATH,

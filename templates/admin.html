@@ -46,7 +46,7 @@ button:disabled{background:#94a3b8;cursor:not-allowed}
   <div class="grid">
     <section class="card wide">
       <h2>数据库一键更新</h2>
-      <p>从公司 Oracle 数据库生成两倍标准差最新曲线、策略仪表盘、存量债利差监控和机构行为曲线数据；策略仪表盘基金指数暂沿用冻结序列。任务异步运行，失败不会覆盖旧数据。</p>
+      <p>从公司 Oracle 数据库刷新债券池、中债估值、两倍标准差最新曲线、策略仪表盘、存量债利差监控和机构行为曲线数据；策略仪表盘基金指数沿用上传的冻结序列。债券池采用首次行权剩余期限，任务异步运行，异常差异不会覆盖旧数据。</p>
       <form id="dbUpdateForm" method="post" action="{{ url_for('admin_start_db_update') }}">
         <div class="module-list">
           <label><input type="checkbox" name="modules" value="bond_picker" checked>择券工具估值</label>
@@ -88,17 +88,20 @@ button:disabled{background:#94a3b8;cursor:not-allowed}
         <button type="submit">立即更新经纪商行情</button>
       </form>
     </section>
-    <form class="card wide" method="post" action="{{ url_for('admin_update_settings') }}">
-      <h2>Excel 静态时间基准</h2>
-      <p>用于把统一 Excel 中的静态待偿年限重算到 Oracle 最近交易日；一键更新会先按这里的日期重算待偿期限。</p>
-      <div class="field">
-        <label for="excelTermBaseDate">Excel 待偿期限基准日</label>
-        <input id="excelTermBaseDate" type="date" name="excel_term_base_date" value="{{ status.settings.excel_term_base_date }}" required>
+    <section class="card wide">
+      <h2>Oracle 债券池</h2>
+      <p>筛选条件：剩余首次行权期限不少于 0.2 年、公募、非永续、固定利率、有中债隐含评级的中票、短融、超短融、金融债、企业债、普通公司债、铁道部一般债和汇金债；不含项目收益票据，并剔除国开行、进出口行和农发行。日常更新先写缓存，首次切换或日间差异超过阈值时保留旧池并提示核对。</p>
+      <div class="status">
+        <div>数据日：{{ status.oracle_bonds.as_of }}</div>
+        <div>当前债券：{{ status.oracle_bonds.total }}</div>
+        <div>生成时间：{{ status.oracle_bonds.updated }}</div>
+        <div>来源：{{ status.oracle_bonds.source }}</div>
       </div>
-      <button type="submit">保存基准日</button>
-      <div class="meta">当前基准日：{{ status.settings.excel_term_base_date }}</div>
-    </form>
-    <form class="card wide" method="post" enctype="multipart/form-data"><h2>统一数据 Excel</h2><p>上传数据最新版格式 Excel：Sheet3 更新择券工具和利差监控债券信息，Sheet1 更新策略仪表盘中长期纯债基金指数；估值数据由 Oracle 一键更新。上传成功后会自动按最新债券清单从 Oracle 重建合规630评级缓存（单版本覆盖）。</p><input type="hidden" name="target" value="unified_excel"><input type="file" name="file" accept=".xlsx,.xls" required><button type="submit">上传统一 Excel</button><div class="meta">当前文件：{{ status.unified_excel.updated }} / {{ status.unified_excel.size }}；债券：{{ status.unified_excel.total_bonds }} 条；基金指数：{{ status.unified_excel.fund_updated }}</div><div class="meta">择券工具当前估值缓存：{{ status.bond_picker.updated }} / {{ status.bond_picker.total }} 条；利差监控：{{ status.spread_monitor.updated }} / {{ status.spread_monitor.size }}</div><div class="meta">630评级合规缓存：{{ status.rating_compliance.updated }}（判定基准日 {{ status.rating_compliance.as_of }}）；满足 {{ status.rating_compliance.ok }} / 不满足 {{ status.rating_compliance.fail }} / 待确认 {{ status.rating_compliance.unknown }}</div></form>
+      {% if status.oracle_bonds.review_required %}
+      <div class="msg err" style="margin-top:12px;margin-bottom:0">Oracle 候选与旧债券池差异超过阈值，尚未覆盖线上池：旧 {{ status.oracle_bonds.comparison.old_total }} / 新 {{ status.oracle_bonds.comparison.new_total }} / 旧独有 {{ status.oracle_bonds.comparison.old_only }} / 新增 {{ status.oracle_bonds.comparison.new_only }}。请先核对筛选口径。</div>
+      {% endif %}
+    </section>
+    <form class="card wide" method="post" enctype="multipart/form-data"><h2>中长期纯债基金指数 Excel</h2><p>上传含 Sheet1 的基金指数 Excel；系统只读取日期和收盘价，不再读取债券清单、内评、限额、持仓或 Excel 待偿期限基准日。</p><input type="hidden" name="target" value="unified_excel"><input type="file" name="file" accept=".xlsx,.xls" required><button type="submit">上传基金指数 Excel</button><div class="meta">当前文件：{{ status.unified_excel.updated }} / {{ status.unified_excel.size }}；基金指数：{{ status.unified_excel.fund_updated }}</div><div class="meta">择券工具当前估值缓存：{{ status.bond_picker.updated }} / {{ status.bond_picker.total }} 条；利差监控：{{ status.spread_monitor.updated }} / {{ status.spread_monitor.size }}</div><div class="meta">630评级合规缓存：{{ status.rating_compliance.updated }}（判定基准日 {{ status.rating_compliance.as_of }}）；满足 {{ status.rating_compliance.ok }} / 不满足 {{ status.rating_compliance.fail }} / 待确认 {{ status.rating_compliance.unknown }}</div></form>
     <form class="card" method="post" enctype="multipart/form-data"><h2>行业景气度 HTML</h2><p>上传行业景气度跟踪静态 HTML，访问时由 Flask 注入统一顶部导航。</p><input type="hidden" name="target" value="industry_prosperity"><input type="file" name="file" accept=".html,.htm" required><button type="submit">上传 HTML</button><div class="meta">当前：{{ status.industry_prosperity.updated }} / {{ status.industry_prosperity.size }}</div></form>
     <form class="card" method="post" enctype="multipart/form-data"><h2>两倍标准差数据</h2><p>页面随代码发布；数据库一键更新会从 Oracle 拉取最新曲线日并合并到现有 spread_data.js，历史序列继续沿用旧数据。</p><input type="hidden" name="target" value="credit_std_dev_js"><input type="file" name="file" accept=".js" required><button type="submit">上传 JS</button><div class="meta">当前：{{ status.credit_std_dev.data_updated }} / {{ status.credit_std_dev.data_size }}</div></form>
   </div>

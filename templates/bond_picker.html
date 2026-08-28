@@ -122,7 +122,8 @@ tr:hover td{background:#f8fafc}
 .sec-label{font-size:.78rem;font-weight:600;color:var(--tx2);margin:10px 0 4px;padding-bottom:3px;border-bottom:1px solid var(--bdr)}
 
 /* ====== Convex table ====== */
-.convex-table tr.dip td{background:var(--grn-l)}
+.convex-table{table-layout:fixed;font-size:.76rem}.convex-table th,.convex-table td{padding:6px 7px}.convex-table .bond-name{overflow:hidden;text-overflow:ellipsis}.convex-table tr.dip td{background:var(--grn-l)}
+.rating-dot{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--red);margin-left:4px;vertical-align:middle;cursor:help}
 
 /* ====== Empty state ====== */
 .empty{text-align:center;padding:40px;color:var(--tx3)}
@@ -472,6 +473,10 @@ tr:hover td{background:#f8fafc}
             <input type="text" id="fSearch" placeholder="输入关键词..." oninput="onFilter()">
           </div>
         </div>
+        <div class="quick-row">
+          <label class="check-control"><input type="checkbox" id="fRecommendedOnly" onchange="onFilter()">只看推荐</label>
+          <label class="check-control"><input type="checkbox" id="fHasOffer" onchange="onFilter()">只看有卖盘</label>
+        </div>
         <div style="margin-top:10px;text-align:right">
           <button class="btn btn-out btn-sm" onclick="resetFilters()">重置筛选</button>
         </div>
@@ -490,12 +495,12 @@ tr:hover td{background:#f8fafc}
 
     <!-- Tabs -->
     <div class="tabs">
-      <button class="tab-btn active" data-tab="inversions" onclick="switchTab('inversions')">倒挂明细</button>
-      <button class="tab-btn" data-tab="convex" onclick="switchTab('convex')">凸点提示</button>
+      <button class="tab-btn active" data-tab="convex" onclick="switchTab('convex')">凸点提示</button>
+      <button class="tab-btn" data-tab="inversions" onclick="switchTab('inversions')">倒挂明细</button>
     </div>
 
     <!-- 倒挂明细 -->
-    <div class="tab-pane active" id="pane-inversions">
+    <div class="tab-pane" id="pane-inversions">
       <div class="export-bar">
         <button class="btn btn-out btn-sm" onclick="exportCSV('inversions')">导出 CSV</button>
         <button class="btn btn-out btn-sm" onclick="collapseAll()">全部折叠</button>
@@ -504,7 +509,7 @@ tr:hover td{background:#f8fafc}
     </div>
 
     <!-- 凸点提示 -->
-    <div class="tab-pane" id="pane-convex">
+    <div class="tab-pane active" id="pane-convex">
       <div class="export-bar">
         <button class="btn btn-out btn-sm" onclick="exportCSV('convex')">导出 CSV</button>
       </div>
@@ -525,18 +530,21 @@ let MARKET_META = {{ market_meta | safe }};
 const INITIAL_DATA_VERSION = {{ data_version | tojson }};
 const F={CODE:0,NAME:1,TERM:2,RATING:3,ISSUER:4,YTM:5,ENTITY:6,CT:7,SUB:8,TECH:9,IR:10,
   BID_VOL_TEXT:11,BID_VOL:12,BID:13,OFR:14,OFR_VOL_TEXT:15,OFR_VOL:16,VAL_OFR:17,BID_OFR:18,
-  BID_BROKER:19,OFR_BROKER:20,BID_TIME:21,OFR_TIME:22,QUOTE_TIME:23,HAS_BID:24,HAS_OFR:25,TWO_SIDED:26};
-function toB(a){return{code:a[F.CODE],name:a[F.NAME],term:a[F.TERM],rating:a[F.RATING],issuer:a[F.ISSUER],ytm:a[F.YTM],entity:a[F.ENTITY],ct:a[F.CT],sub:a[F.SUB],tech:a[F.TECH],ir:a[F.IR],
+  BID_BROKER:19,OFR_BROKER:20,BID_TIME:21,OFR_TIME:22,QUOTE_TIME:23,HAS_BID:24,HAS_OFR:25,TWO_SIDED:26,COUNTERPARTY_LIMIT:27,RATING630:28};
+function toB(a){const r630=Array.isArray(a[F.RATING630])?a[F.RATING630]:[];return{code:a[F.CODE],name:a[F.NAME],term:a[F.TERM],rating:a[F.RATING],issuer:a[F.ISSUER],ytm:a[F.YTM],entity:a[F.ENTITY],ct:a[F.CT],sub:a[F.SUB],tech:a[F.TECH],ir:a[F.IR],
   bidVolText:a[F.BID_VOL_TEXT]||'',bidVol:numOrNull(a[F.BID_VOL]),bid:numOrNull(a[F.BID]),ofr:numOrNull(a[F.OFR]),ofrVolText:a[F.OFR_VOL_TEXT]||'',ofrVol:numOrNull(a[F.OFR_VOL]),
-  valOfr:numOrNull(a[F.VAL_OFR]),bidOfr:numOrNull(a[F.BID_OFR]),bidBroker:a[F.BID_BROKER]||'',ofrBroker:a[F.OFR_BROKER]||'',bidTime:a[F.BID_TIME]||'',ofrTime:a[F.OFR_TIME]||'',quoteTime:a[F.QUOTE_TIME]||'',hasBid:!!a[F.HAS_BID],hasOfr:!!a[F.HAS_OFR],twoSided:!!a[F.TWO_SIDED]}}
+  valOfr:numOrNull(a[F.VAL_OFR]),bidOfr:numOrNull(a[F.BID_OFR]),bidBroker:a[F.BID_BROKER]||'',ofrBroker:a[F.OFR_BROKER]||'',bidTime:a[F.BID_TIME]||'',ofrTime:a[F.OFR_TIME]||'',quoteTime:a[F.QUOTE_TIME]||'',hasBid:!!a[F.HAS_BID],hasOfr:!!a[F.HAS_OFR],twoSided:!!a[F.TWO_SIDED],counterpartyLimit:numOrNull(a[F.COUNTERPARTY_LIMIT]),rating630:r630[0]||'unknown',rating630Note:r630[1]||''}}
 function numOrNull(value){const n=Number(value);return value===null||value===''||!Number.isFinite(n)?null:n}
 let BONDS=RAW.map(toB);
+const DEFAULT_RECOMMENDATION_SETTINGS={min_yield:1.65,max_yield:3,min_offer_volume:1000,bbb_minus_max_term:3,require_better_than_market:true};
+let RECOMMENDATION_SETTINGS={...DEFAULT_RECOMMENDATION_SETTINGS};
+let RECOMMENDED=new Set();
 
 // ===================================================================
 //  STATE
 // ===================================================================
 let STATE={
-  analysis:null,filtered:null,activeTab:'inversions',
+  analysis:null,filtered:null,activeTab:'convex',
   // Normal page state
   normalFiltered:[],normalPage:1,normalExpanded:{},nearbyCache:{},
   favorites:new Set(),presets:[],normalSort:[{key:'valuationOffer',dir:'asc'},{key:'ofrVolume',dir:'desc'}],
@@ -555,12 +563,19 @@ Object.values(ISSUER_GROUPS).forEach(g=>g.sort((a,b)=>a.term-b.term));
 // ===================================================================
 //  INIT
 // ===================================================================
-function init(){
+async function init(){
   populateFilters();
+  await loadRecommendationSettings();
   onAnalyze();
   window.setInterval(checkForMarketUpdate,60000);
   document.addEventListener('click',e=>{if(!e.target.closest('.ms-wrap'))document.querySelectorAll('.ms-drop.open').forEach(d=>d.classList.remove('open'))});
 }
+
+function ratingEligible(b){const bbbPlusOrAbove=['AAA+','AAA','AAA-','AA+','AA','AA-','A+','A','A-','BBB+'];if(b.term!==null&&b.term>=5)return bbbPlusOrAbove.includes(b.ir);if(bbbPlusOrAbove.includes(b.ir)||b.ir==='BBB')return true;return b.ir==='BBB-'&&b.term!==null&&b.term<=RECOMMENDATION_SETTINGS.bbb_minus_max_term}
+function recommendationEligible(b){if(b.rating630!=='ok'||!ratingEligible(b)||b.counterpartyLimit===null||b.counterpartyLimit<=1||b.ytm===null||b.ytm<RECOMMENDATION_SETTINGS.min_yield||b.ytm>RECOMMENDATION_SETTINGS.max_yield||!b.hasOfr||b.ofrVol===null||b.ofrVol<RECOMMENDATION_SETTINGS.min_offer_volume)return false;if(RECOMMENDATION_SETTINGS.require_better_than_market){const m=numOrNull((MARKET_META.emotion||{}).value);if(m!==null&&((b.ofr-b.ytm)*100)<m)return false}return true}
+function computeRecommendations(){RECOMMENDED=new Set(BONDS.filter(recommendationEligible).map(b=>b.code))}
+async function loadRecommendationSettings(){try{const response=await fetch('/api/bond-picker/preferences',{cache:'no-store'});if(response.ok){const payload=await response.json();RECOMMENDATION_SETTINGS={...DEFAULT_RECOMMENDATION_SETTINGS,...(payload.recommendation_settings||{})}}}catch(_error){}computeRecommendations()}
+function rating630Dot(b){if(b.rating630==='ok')return'';const note=b.rating630Note?`：${b.rating630Note}`:'';return `<span class="rating-dot" title="可能不满足合规630评级要求，投前请务必确认${escAttr(note)}"></span>`}
 
 function populateFilters(){
   const u=(f)=>[...new Set(BONDS.map(b=>b[f]))].filter(Boolean).sort();
@@ -1052,7 +1067,7 @@ async function deleteSelectedPreset(){const id=document.getElementById('nfPreset
 async function checkForMarketUpdate(){
   try{
     const response=await fetch('/api/bond-picker/data',{headers:{'If-None-Match':STATE.etag},cache:'no-store'});if(response.status===304)return;if(!response.ok)return;
-    const payload=await response.json();STATE.dataVersion=payload.version;STATE.etag=response.headers.get('ETag')||('"'+payload.version+'"');RAW=payload.bonds||[];BONDS=RAW.map(toB);MARKET_META=payload.meta||{};
+    const payload=await response.json();STATE.dataVersion=payload.version;STATE.etag=response.headers.get('ETag')||('"'+payload.version+'"');RAW=payload.bonds||[];BONDS=RAW.map(toB);MARKET_META=payload.meta||{};computeRecommendations();
     onAnalyze();
   }catch(_error){}
 }
@@ -1124,8 +1139,12 @@ function getFilters(){
     minY:parseFloat(document.getElementById('fMinYield').value)||null,
     maxY:parseFloat(document.getElementById('fMaxYield').value)||null,
     search:document.getElementById('fSearch').value.trim().toLowerCase(),
+    recommendedOnly:document.getElementById('fRecommendedOnly').checked,
+    hasOffer:document.getElementById('fHasOffer').checked,
   };
 }
+
+function matchQuickBond(b,f){if(f.recommendedOnly&&!RECOMMENDED.has(b.code))return false;if(f.hasOffer&&!b.hasOfr)return false;return true}
 
 function matchGroup(g,f){
   if(f.ct && g.ct!==f.ct)return false;
@@ -1148,7 +1167,7 @@ function matchConvex(c,f){
   if(f.ir.length && !f.ir.includes(c.bond.ir))return false;
   if(f.minY!==null && c.bond.ytm<f.minY)return false;
   if(f.maxY!==null && c.bond.ytm>f.maxY)return false;
-  return true;
+  return matchQuickBond(c.bond,f);
 }
 
 function applyFilters(analysis){
@@ -1156,7 +1175,11 @@ function applyFilters(analysis){
   const groups={};
   let pairsShown=0;
   Object.entries(analysis.issuerGroups).forEach(([k,g])=>{
-    if(matchGroup(g,f)){groups[k]=g;pairsShown+=g.inversions.length;}
+    if(!matchGroup(g,f))return;
+    const inversions=g.inversions.filter(inv=>matchQuickBond(inv.s,f)&&matchQuickBond(inv.l,f));
+    if(!inversions.length)return;
+    const bonds=g.bonds.filter(b=>matchQuickBond(b,f));
+    groups[k]={...g,bonds,inversions,maxYd:Math.max(...inversions.map(inv=>inv.yd))};pairsShown+=inversions.length;
   });
   const convex=analysis.convex.filter(c=>matchConvex(c,f));
   return {groups,convex,pairsShown,issuerCount:Object.keys(groups).length};
@@ -1226,7 +1249,7 @@ function renderGroupDetail(g){
     if(highCodes.has(b.code)&&!lowCodes.has(b.code)){fillClass='fill-high';rowClass=' class="highlight-row"';}
     else if(lowCodes.has(b.code)&&!highCodes.has(b.code)){fillClass='fill-low';}
     html+=`<tr${rowClass}>
-      <td title="${esc(b.code)}">${esc(b.name)}</td>
+      <td title="${esc(b.code)}">${esc(b.name)}${rating630Dot(b)}</td>
       <td class="num">${b.term.toFixed(2)}</td>
       <td class="num"><strong>${b.ytm.toFixed(4)}</strong></td>
       <td><div class="yield-bar"><div class="yield-fill ${fillClass}" style="width:${pct.toFixed(0)}%"></div></div></td>
@@ -1245,10 +1268,10 @@ function renderGroupDetail(g){
   sorted.forEach((inv,i)=>{
     html+=`<tr>
       <td>${i+1}</td>
-      <td style="color:var(--red)" title="${esc(inv.s.code)}">${esc(inv.s.name)}</td>
+      <td style="color:var(--red)" title="${esc(inv.s.code)}">${esc(inv.s.name)}${rating630Dot(inv.s)}</td>
       <td class="num">${inv.s.term.toFixed(2)}</td><td class="num">${inv.s.ytm.toFixed(4)}</td>
       <td style="text-align:center;color:var(--tx3)">vs</td>
-      <td style="color:var(--grn)" title="${esc(inv.l.code)}">${esc(inv.l.name)}</td>
+      <td style="color:var(--grn)" title="${esc(inv.l.code)}">${esc(inv.l.name)}${rating630Dot(inv.l)}</td>
       <td class="num">${inv.l.term.toFixed(2)}</td><td class="num">${inv.l.ytm.toFixed(4)}</td>
       <td class="num">${inv.td.toFixed(2)}</td>
       <td class="num"><strong style="color:var(--red)">${inv.yd.toFixed(1)}</strong></td>
@@ -1267,26 +1290,24 @@ function renderConvex(convex){
   let html='<div class="card"><div class="card-body"><p style="font-size:.82rem;color:var(--tx2);margin-bottom:10px">';
   html+='凸点定义：在同一主体的期限序列中，该债券的估值收益率同时<strong>高于</strong>期限更短和更长的相邻债券，形成曲线凸出（即该期限位置的债券被市场给予了更高的收益率/更低的价格）。</p>';
   html+='<div class="tbl-wrap"><table class="convex-table"><thead><tr>';
-  html+='<th>#</th><th>主体</th><th>类型</th><th>凸点债券</th><th class="num">期限(年)</th>';
-  html+='<th class="num">绝对收益(%)</th><th>隐含评级</th><th>参考内评</th>';
+  html+='<th style="width:15%">凸点债券</th><th class="num" style="width:7%">期限(年)</th>';
+  html+='<th class="num" style="width:9%">绝对收益(%)</th><th class="num" style="width:8%">Ofr(%)</th><th class="num" style="width:9%">Ofr量</th><th style="width:8%">隐含评级</th><th style="width:8%">参考内评</th>';
   html+='<th class="num">高于短邻(bp)</th><th class="num">高于长邻(bp)</th>';
   html+='<th>短邻债券</th><th>长邻债券</th>';
   html+='</tr></thead><tbody>';
-  convex.forEach((c,i)=>{
-    const subTag=c.sub==='是'?'次级':'普通';
+  convex.forEach(c=>{
     html+=`<tr>
-      <td>${i+1}</td>
-      <td>${esc(c.issuer)}</td>
-      <td>${subTag}</td>
-      <td title="${esc(c.bond.code)}"><strong>${esc(c.bond.name)}</strong></td>
+      <td class="bond-name" title="${esc(c.bond.code)}"><strong>${esc(c.bond.name)}</strong>${rating630Dot(c.bond)}</td>
       <td class="num">${c.bond.term.toFixed(2)}</td>
       <td class="num"><strong style="color:var(--red)">${c.bond.ytm.toFixed(4)}</strong></td>
+      <td class="num quote-ofr">${c.bond.ofr===null?'-':c.bond.ofr.toFixed(4)}</td>
+      <td class="num">${esc(c.bond.ofrVolText||c.bond.ofrVol||'')}</td>
       <td>${esc(c.bond.rating)}</td>
       <td>${esc(c.bond.ir)}</td>
       <td class="num" style="color:var(--red)">${c.dp.toFixed(1)}</td>
       <td class="num" style="color:var(--red)">${c.dn.toFixed(1)}</td>
-      <td title="${c.prev.ytm.toFixed(4)}%">${esc(c.prev.name)}</td>
-      <td title="${c.next.ytm.toFixed(4)}%">${esc(c.next.name)}</td>
+      <td class="bond-name" title="${c.prev.ytm.toFixed(4)}%">${esc(c.prev.name)}${rating630Dot(c.prev)}</td>
+      <td class="bond-name" title="${c.next.ytm.toFixed(4)}%">${esc(c.next.name)}${rating630Dot(c.next)}</td>
     </tr>`;
   });
   html+='</tbody></table></div></div></div>';
@@ -1314,6 +1335,7 @@ function onFilter(){
 function resetFilters(){
   ['fCT','fEntity','fSub'].forEach(id=>document.getElementById(id).value='');
   ['fMinYield','fMaxYield','fSearch'].forEach(id=>document.getElementById(id).value='');
+  ['fRecommendedOnly','fHasOffer'].forEach(id=>document.getElementById(id).checked=false);
   clearMS('msRating');clearMS('msIR');
   onFilter();
 }
@@ -1350,9 +1372,9 @@ function exportCSV(type){
       });
     });
   } else {
-    csv='\uFEFF主体,类型,凸点债券,代码,期限,绝对收益%,隐含评级,参考内评,高于短邻bp,高于长邻bp\n';
+    csv='\uFEFF凸点债券,代码,期限,绝对收益%,Ofr%,Ofr量,隐含评级,参考内评,高于短邻bp,高于长邻bp\n';
     STATE.filtered.convex.forEach(c=>{
-      csv+=`"${c.issuer}",${c.sub==='是'?'次级':'普通'},"${c.bond.name}","${c.bond.code}",${c.bond.term},${c.bond.ytm},${c.bond.rating},${c.bond.ir},${c.dp},${c.dn}\n`;
+      csv+=`"${c.bond.name}","${c.bond.code}",${c.bond.term},${c.bond.ytm},${c.bond.ofr??''},"${c.bond.ofrVolText||c.bond.ofrVol||''}",${c.bond.rating},${c.bond.ir},${c.dp},${c.dn}\n`;
     });
   }
   const blob=new Blob([csv],{type:'text/csv;charset=utf-8'});

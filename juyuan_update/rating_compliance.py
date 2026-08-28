@@ -23,7 +23,7 @@ from .unified_excel import load_json, write_json
 
 
 def persist_rating_facts(facts: dict, bonds: list[dict], as_of: date) -> dict:
-    """Merge issue dates from the unified Excel bond list and overwrite the cache."""
+    """Merge Oracle issue dates from the current bond pool and overwrite the cache."""
     issue_dates = {b["code"]: b.get("issue_date") or "" for b in bonds}
     for code, fact in facts.items():
         fact["issue_date"] = issue_dates.get(code, "")
@@ -33,8 +33,8 @@ def persist_rating_facts(facts: dict, bonds: list[dict], as_of: date) -> dict:
 def refresh_rating_compliance_cache() -> dict:
     """Re-fetch rating facts for the current picker pool and overwrite the cache.
 
-    供统一 Excel 后台上传后调用：债券清单或起息日变化时同步重建缓存
-    （单版本整体覆盖），也用于每日更新任务。
+    债券池或起息日随 Oracle 更新后同步重建缓存（单版本整体覆盖），
+    也可由维护任务单独调用。
     """
     from .db import connect, fetch_bond_rating_facts
     from .unified_excel import get_bond_picker_bonds
