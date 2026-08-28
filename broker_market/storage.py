@@ -18,11 +18,15 @@ SNAPSHOT_PATH = MARKET_DIR / "latest_snapshot.json"
 STATUS_PATH = MARKET_DIR / "scheduler_status.json"
 PREFERENCES_PATH = MARKET_DIR / "shared_preferences.json"
 EMOTION_HISTORY_PATH = MARKET_DIR / "market_emotion_history.json"
+HISTORY_DIR = MARKET_DIR / "history"
 COUNTERPARTY_LIMITS_PATH = DATA_DIR / "counterparty_limits.json"
 LOCK_PATH = MARKET_DIR / "scheduler.lock"
 
 OUTLIER_THRESHOLD_BP = 30.0
 EMOTION_HISTORY_TRADING_DAYS = 60
+# 经纪商报价历史快照保留窗口：盘中每个成功抓取时点独立留存，
+# 超出最近 QUOTE_HISTORY_TRADING_DAYS 个有数据交易日的快照自动清理。
+QUOTE_HISTORY_TRADING_DAYS = 10
 
 BASE_FIELD_COUNT = 11
 MARKET_FIELDS = (
@@ -177,7 +181,46 @@ def save_snapshot(rows: Iterable[dict[str, Any]], generated_at: datetime | None 
         "quotes": list(deduped.values()),
     }
     atomic_write_json(SNAPSHOT_PATH, payload)
+    _save_history_snapshot(payload)
     return payload
+
+
+def _save_history_snapshot(payload: dict[str, Any]) -> None:
+    """按抓取时刻把快照另存到 history/，并清理超出保留窗口的旧文件。
+
+    历史留存属于附属数据：写入失败不影响最新快照与本次任务结果。
+    """
+    try:
+        generated_at = str(payload.get("generated_at") or "")
+        try:
+            observed = datetime.strptime(generated_at, "%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            observed = datetime.now()
+        name = observed.strftime("%Y%m%d_%H%M%S") + ".json"
+        atomic_write_json(HISTORY_DIR / name, payload)
+        _prune_quote_history()
+    except OSError:
+        pass
+
+
+def _prune_quote_history() -> None:
+    files = sorted(HISTORY_DIR.glob("????????_??????.json"))
+    days: list[str] = []
+    for path in reversed(files):
+        day = path.name[:8]
+        if day not in days:
+            days.append(day)
+    keep = set(days[:QUOTE_HISTORY_TRADING_DAYS])
+    for path in files:
+        if path.name[:8] not in keep:
+            path.unlink(missing_ok=True)
+
+
+def list_quote_history() -> list[str]:
+    """历史快照文件名（抓取时刻键，升序），供后续历史行情类功能读取。"""
+    if not HISTORY_DIR.is_dir():
+        return []
+    return sorted(path.name for path in HISTORY_DIR.glob("????????_??????.json"))
 
 
 def load_snapshot() -> dict[str, Any]:

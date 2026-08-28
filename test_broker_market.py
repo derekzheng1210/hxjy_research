@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 import unittest
 from datetime import datetime
 from pathlib import Path
@@ -12,6 +13,53 @@ from openpyxl import Workbook
 
 
 class BrokerMarketStorageTests(unittest.TestCase):
+    def test_quote_history_retains_last_ten_trading_days(self):
+        snapshot_target = Path.cwd() / ".test-history-latest.json"
+        history_dir = Path.cwd() / ".test-quote-history"
+        shutil.rmtree(history_dir, ignore_errors=True)
+        try:
+            with patch.object(storage, "SNAPSHOT_PATH", snapshot_target), \
+                 patch.object(storage, "HISTORY_DIR", history_dir):
+                # 连续 12 个交易日、每天两个抓取时点
+                for day in range(1, 13):
+                    for hour in (9, 14):
+                        storage.save_snapshot(
+                            [{"bondCode": f"{day:02d}{hour}.IB", "ofrYield": 2.0}],
+                            generated_at=datetime(2026, 8, day, hour, 30, 0),
+                        )
+                names = storage.list_quote_history()
+                days = sorted({name[:8] for name in names})
+                # 只保留最近 10 个有数据的交易日（第 3~12 天），每天 2 个时点快照
+                self.assertEqual(len(days), storage.QUOTE_HISTORY_TRADING_DAYS)
+                self.assertEqual(days[0], "20260803")
+                self.assertEqual(days[-1], "20260812")
+                self.assertEqual(len(names), 20)
+                self.assertEqual(names, sorted(names))
+                # 最新快照不受历史清理影响
+                self.assertTrue(snapshot_target.exists())
+        finally:
+            shutil.rmtree(history_dir, ignore_errors=True)
+            snapshot_target.unlink(missing_ok=True)
+
+    def test_quote_history_same_moment_overwrites(self):
+        snapshot_target = Path.cwd() / ".test-history-latest.json"
+        history_dir = Path.cwd() / ".test-quote-history"
+        shutil.rmtree(history_dir, ignore_errors=True)
+        try:
+            with patch.object(storage, "SNAPSHOT_PATH", snapshot_target), \
+                 patch.object(storage, "HISTORY_DIR", history_dir):
+                moment = datetime(2026, 8, 28, 14, 0, 3)
+                storage.save_snapshot([{"bondCode": "1.IB", "ofrYield": 2.0}], generated_at=moment)
+                storage.save_snapshot([{"bondCode": "2.IB", "ofrYield": 2.1}], generated_at=moment)
+                names = storage.list_quote_history()
+                self.assertEqual(len(names), 1)
+                import json
+                payload = json.loads((history_dir / names[0]).read_text(encoding="utf-8"))
+                self.assertEqual(payload["quote_count"], 1)
+        finally:
+            shutil.rmtree(history_dir, ignore_errors=True)
+            snapshot_target.unlink(missing_ok=True)
+
     def test_neiping_counterparty_limit_parser_finds_real_headers(self):
         workbook = Workbook()
         sheet = workbook.active

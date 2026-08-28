@@ -2524,7 +2524,9 @@
   // ----------------------------------------------------------------------- //
   function showUploadModal(preset = null) {
     const today = new Date().toISOString().slice(0, 10);
-    const canChooseType = state.view === 'dashboard';
+    // 路演安排一键上传（带 roadshowScheduleId 预填）时锁定为路演报告：
+    // 防止误改类型导致报告与路演安排的关联丢失。
+    const canChooseType = state.view === 'dashboard' && !preset?.roadshowScheduleId;
     const initialType = preset?.reportType || (state.view === 'external-reports' ? 'external' : state.view === 'research-reports' ? 'research_visit' : state.view === 'roadshow-reports' ? 'roadshow' : 'internal');
     state.uploadFiles = [];
     state.uploadPreset = preset;
