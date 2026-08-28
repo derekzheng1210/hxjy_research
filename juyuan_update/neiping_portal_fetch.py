@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import base64
+import os
 import re
 import urllib.parse
 import warnings
@@ -40,8 +41,9 @@ LIMIT_FORM_ID = "d919a133-ff5b-4c86-92e3-52e3f298368f"
 # 「债项评级-有效1」表单：债项维度最新持仓金额
 BOND_FORM_ID = "57f2ed4e-ae0e-4bb7-ba17-70a5616654c8"
 
-IAM_USERNAME = "zhenghongbin"
-IAM_PASSWORD = "Abcd123%"
+# IAM 统一认证账号从环境变量（.env / 服务环境）读取，不写入代码。
+IAM_USERNAME = os.environ.get("IAM_USERNAME", "")
+IAM_PASSWORD = os.environ.get("IAM_PASSWORD", "")
 _AES_KEY = b"ruijiancloudbase"  # 与门户前端加密密钥一致
 
 FIELD_ISSUER = "youxiaozhutimingcheng"       # 有效主体名称
@@ -68,6 +70,10 @@ def _encrypt_password(plain: str) -> str:
 
 
 def login() -> requests.Session:
+    if not IAM_USERNAME or not IAM_PASSWORD:
+        raise RuntimeError(
+            "信评门户账号未配置：请在环境变量或 .env 中设置 IAM_USERNAME / IAM_PASSWORD"
+        )
     s = requests.Session()
     s.headers.update({"User-Agent": "Mozilla/5.0"})
     basic = "Basic " + base64.b64encode(b"rui:rui").decode()

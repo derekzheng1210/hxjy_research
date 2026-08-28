@@ -454,7 +454,7 @@ def validate_preferences(payload: Any) -> dict[str, Any]:
         raw_settings.get("require_better_than_market", settings["require_better_than_market"])
     )
     if settings["min_yield"] > settings["max_yield"]:
-        raise ValueError("推荐收益率下限不能高于上限")
+        raise ValueError("重点关注收益率下限不能高于上限")
     return {
         "favorites": favorites,
         "recommendation_settings": settings,

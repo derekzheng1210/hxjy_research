@@ -1515,6 +1515,40 @@ def api_report_authors():
     return jsonify({"authors": [public_user(item) for item in store.users()]})
 
 
+def _sha256_stream(stream) -> str:
+    digest = hashlib.sha256()
+    stream.seek(0)
+    for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+        digest.update(chunk)
+    stream.seek(0)
+    return digest.hexdigest()
+
+
+def _find_duplicate_report(sha256_hex: str):
+    """按内容哈希查找未删除的既有报告；历史文件没有存哈希时读盘计算并回填。"""
+    for report in store.reports():
+        if not report.get("fileStored"):
+            continue
+        digest = str(report.get("fileSha256") or "")
+        if not digest:
+            stored_name = str(report.get("fileUrl") or "").split("/")[-1]
+            path = os.path.join(UPLOAD_DIR, stored_name)
+            if not stored_name or not os.path.isfile(path):
+                continue
+            try:
+                with open(path, "rb") as fh:
+                    digest = _sha256_stream(fh)
+            except OSError:
+                continue
+            try:
+                store.update_report(report["id"], {"fileSha256": digest})
+            except Exception:
+                current_app.logger.exception("回填报告文件哈希失败：%s", report.get("id"))
+        if digest == sha256_hex:
+            return report
+    return None
+
+
 @app.route("/api/reports", methods=["POST"], defaults={"report_scope": None})
 @app.route("/api/reports/<report_scope>", methods=["POST"])
 def api_reports_upload(report_scope=None):
@@ -1623,6 +1657,19 @@ def api_reports_upload(report_scope=None):
         if size > MAX_UPLOAD_SIZE:
             return json_error(f"文件 {original} 超过 100MB 限制", 400)
 
+        # 内容级查重：按文件字节计算 SHA-256 与既有报告比对（不只看文件名），
+        # 历史报告首次比对时懒回填哈希；完全相同的内容直接拦截本次上传。
+        sha256_hex = _sha256_stream(f.stream)
+        duplicate = _find_duplicate_report(sha256_hex)
+        if duplicate is not None:
+            existing_date = str(duplicate.get("uploadedAt") or "")[:10]
+            existing_uploader = duplicate.get("uploadedByName") or duplicate.get("author") or "未知"
+            return json_error(
+                f"该文件内容与已上传的《{duplicate.get('title') or duplicate.get('fileName') or '未命名报告'}》"
+                f"（{existing_date} 由 {existing_uploader} 上传）完全相同，已拦截重复上传",
+                400,
+            )
+
         report_id = f"report-upload-{int(time.time() * 1000)}-{uuid.uuid4().hex[:8]}"
         save_name = stored_filename(report_id, original)
         save_path = os.path.join(UPLOAD_DIR, save_name)
@@ -1659,6 +1706,7 @@ def api_reports_upload(report_scope=None):
             "fileUrl": f"uploads/{save_name}",
             "fileType": ext.lstrip(".").upper() if ext else "FILE",
             "fileSize": format_bytes(size),
+            "fileSha256": sha256_hex,
             "fileStored": True,
             "preset": False,
             "scoringOrgs": scoring_orgs,

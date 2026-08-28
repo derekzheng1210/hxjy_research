@@ -245,9 +245,9 @@
     <footer class="page-footer">华夏久盈固收信用小组</footer>
 
     <template id="filterTemplate"><div class="check-grid">
-        <label class="check"><input type="checkbox" data-filter="exclude_short">剔除1Y以内</label>
-        <label class="check"><input type="checkbox" data-filter="only_public">只看公募</label>
-        <label class="check"><input type="checkbox" data-filter="exclude_perpetual">剔除永续债</label>
+        <label class="check"><input type="checkbox" data-filter="exclude_short" checked>剔除1Y以内</label>
+        <label class="check"><input type="checkbox" data-filter="only_public" checked>只看公募</label>
+        <label class="check"><input type="checkbox" data-filter="exclude_perpetual" checked>剔除永续债</label>
         <div></div>
         <div class="term-row"><span>期限区间(Y)</span><input type="number" min="0" step="0.5" placeholder="最小" data-filter="term_min"><span>至</span><input type="number" min="0" step="0.5" placeholder="最大" data-filter="term_max"></div>
     </div></template>
@@ -263,7 +263,7 @@
         const appState = {
             view: 'market', meta: null, issuer: '', sourceDate: '', sourceIssuers: [],
             marketData: null, dateData: null, issuerData: null, issuerSummaryData: null, issuerSummaryPage: 1, requestId: 0,
-            filters: { exclude_short: false, only_public: false, exclude_perpetual: false, term_min: '', term_max: '' }
+            filters: { exclude_short: true, only_public: true, exclude_perpetual: true, term_min: '', term_max: '' }
         };
         const charts = {};
         const sortState = {
@@ -299,7 +299,7 @@
         }
 
         function loadFiltersFromUrl(params) {
-            ['exclude_short', 'only_public', 'exclude_perpetual'].forEach(k => appState.filters[k] = params.get(k) === '1');
+            ['exclude_short', 'only_public', 'exclude_perpetual'].forEach(k => appState.filters[k] = params.get(k) !== '0');
             appState.filters.term_min = params.get('term_min') || '';
             appState.filters.term_max = params.get('term_max') || '';
             Object.entries(appState.filters).forEach(([key, value]) => document.querySelectorAll(`[data-filter="${key}"]`).forEach(el => {
