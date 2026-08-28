@@ -2,11 +2,9 @@ from __future__ import annotations
 
 import json
 import os
-import re
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 
-from openpyxl import load_workbook
 
 from . import config
 
@@ -72,41 +70,6 @@ def rating_at_least(value, floor: str = "BBB-") -> bool:
 
 def is_blank(value) -> bool:
     return normalize_text(value) == ""
-
-
-def is_yes(value) -> bool:
-    return normalize_text(value).lower() in {"是", "yes", "y", "1", "true"}
-
-
-def date_text(value) -> str:
-    if isinstance(value, datetime):
-        return value.strftime("%Y-%m-%d")
-    if isinstance(value, (int, float)) and 1 <= value <= 60000:
-        # Excel serial dates use 1899-12-30 as the practical epoch in openpyxl.
-        return (datetime(1899, 12, 30) + timedelta(days=int(value))).strftime("%Y-%m-%d")
-    text = normalize_text(value)
-    if not text:
-        return ""
-    text = (
-        text.replace("年", "-")
-        .replace("月", "-")
-        .replace("日", "")
-        .replace(".", "-")
-        .replace("/", "-")
-    )
-    text = re.sub(r"\s*-\s*", "-", text)
-    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d", "%Y-%m-%d %H:%M"):
-        try:
-            return datetime.strptime(text[:19], fmt).strftime("%Y-%m-%d")
-        except ValueError:
-            pass
-    if re.match(r"^\d{8}$", text):
-        return f"{text[:4]}-{text[4:6]}-{text[6:8]}"
-    match = re.match(r"^(\d{4})-(\d{1,2})-(\d{1,2})", text)
-    if match:
-        year, month, day = match.groups()
-        return f"{int(year):04d}-{int(month):02d}-{int(day):02d}"
-    return text[:10]
 
 
 _json_cache: dict[Path, tuple[float, float, object]] = {}
@@ -302,89 +265,6 @@ def _header_index(headers: list[str], candidates: list[str], default=None):
     return default
 
 
-def parse_bond_sheet(ws) -> list[dict]:
-    rows = list(ws.iter_rows(values_only=True))
-    if not rows:
-        return []
-    headers = [normalize_text(h) for h in rows[0]]
-
-    idx = {
-        "code": _header_index(headers, ["证券代码", "债券代码", "代码"], 0),
-        "name": _header_index(headers, ["证券简称", "证券名称", "债券名称", "名称"], 1),
-        "term": _header_index(headers, ["待偿年限", "待偿期限", "剩余期限", "期限"], 2),
-        "issue_date": _header_index(headers, ["起息日期", "起息日"], None),
-        "implied_rating": _header_index(headers, ["隐含评级"], None),
-        "issuer": _header_index(headers, ["债务主体中文名称", "融资主体", "主体名称"], None),
-        "entity": _header_index(headers, ["主体性质"], None),
-        "ct": _header_index(headers, ["是否城投债", "城投债"], None),
-        "sub": _header_index(headers, ["是否次级债", "次级债"], None),
-        "tech": _header_index(headers, ["是否科创债", "科创债"], None),
-        "guarantor": _header_index(headers, ["担保人"], None),
-        "internal_rating": _header_index(headers, ["内评", "内部评级"], None),
-        "holding": _header_index(headers, ["是否持仓", "持仓"], None),
-    }
-    required = ["code", "name", "term"]
-    missing = [name for name in required if idx[name] is None]
-    if missing:
-        raise RuntimeError("统一 Excel 的 Sheet3 缺少关键列: " + ", ".join(missing))
-
-    bonds = []
-    seen = set()
-    for row in rows[1:]:
-        code = normalize_bond_code(row[idx["code"]] if idx["code"] < len(row) else None)
-        if not code or code in seen:
-            continue
-        try:
-            term = float(row[idx["term"]])
-        except Exception:
-            continue
-        if term <= 0:
-            continue
-        seen.add(code)
-
-        def value(name):
-            col = idx.get(name)
-            return normalize_text(row[col]) if col is not None and col < len(row) else ""
-
-        bonds.append({
-            "code": code,
-            "raw_code": normalize_text(row[idx["code"]] if idx["code"] < len(row) else code),
-            "name": value("name"),
-            "term": round(term, 4),
-            "issue_date": date_text(row[idx["issue_date"]]) if idx["issue_date"] is not None and idx["issue_date"] < len(row) else "",
-            "implied_rating": normalize_rating(value("implied_rating")),
-            "issuer": value("issuer"),
-            "entity": value("entity"),
-            "ct": value("ct"),
-            "sub": value("sub"),
-            "tech": value("tech"),
-            "guarantor": value("guarantor"),
-            "internal_rating": normalize_rating(value("internal_rating")),
-            "is_holding": is_yes(value("holding")),
-        })
-    return bonds
-
-
-def parse_fund_sheet(ws) -> list[dict]:
-    rows = list(ws.iter_rows(values_only=True))
-    fund = []
-    for row in rows:
-        if len(row) < 3:
-            continue
-        dt = date_text(row[1])
-        try:
-            close = float(row[2])
-        except Exception:
-            continue
-        if re.match(r"^\d{4}-\d{2}-\d{2}$", dt) and close > 0:
-            fund.append({"date": dt, "close": round(close, 6)})
-    fund.sort(key=lambda x: x["date"])
-    dedup = {}
-    for row in fund:
-        dedup[row["date"]] = row
-    return [dedup[d] for d in sorted(dedup)]
-
-
 def parse_neiping_sheet(ws) -> dict[str, float]:
     rows = list(ws.iter_rows(values_only=True))
     header_row = None
@@ -413,24 +293,3 @@ def parse_neiping_sheet(ws) -> dict[str, float]:
             continue
         limits[issuer] = round(value, 6)
     return limits
-
-
-def import_unified_excel(path: Path) -> dict:
-    """Import only the frozen medium/long pure-bond fund index from Excel."""
-    wb = load_workbook(path, read_only=True, data_only=True)
-    try:
-        if "Sheet1" not in wb.sheetnames:
-            raise RuntimeError("统一 Excel 缺少 Sheet1 基金指数表")
-        fund_prices = parse_fund_sheet(wb["Sheet1"])
-    finally:
-        wb.close()
-
-    if not fund_prices:
-        raise RuntimeError("Sheet1 未读取到有效基金指数数据")
-
-    write_json(config.STRATEGY_FUND_PRICES_FROZEN, fund_prices)
-    return {
-        "fund_prices": len(fund_prices),
-        "fund_start": fund_prices[0]["date"],
-        "fund_end": fund_prices[-1]["date"],
-    }

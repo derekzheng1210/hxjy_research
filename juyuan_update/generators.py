@@ -664,6 +664,22 @@ def run_all(progress=None, modules: list[str] | None = None) -> dict:
         if progress:
             progress(f"信评门户同步失败（沿用最近一次缓存）：{exc}", None)
         portal_result = "failed"
+    try:
+        from .fund_index_mysql import refresh_fund_index
+
+        if progress:
+            progress("同步中长期纯债基金指数", 3)
+        fund_index_result = refresh_fund_index()
+        if progress:
+            progress(
+                f"中长期纯债基金指数已同步：{fund_index_result['fund_prices']:,} 条"
+                f"（{fund_index_result['fund_start']} ~ {fund_index_result['fund_end']}）",
+                None,
+            )
+    except Exception as exc:
+        if progress:
+            progress(f"基金指数同步失败（沿用最近一次缓存）：{exc}", None)
+        fund_index_result = "failed"
     with connect() as conn:
         bond_as_of_date = latest_cnbd_valuation_date(conn)
         if progress:
@@ -681,7 +697,7 @@ def run_all(progress=None, modules: list[str] | None = None) -> dict:
                 6,
             )
     total = len(selected)
-    results = {"bond_universe": bond_universe, "portal_data": portal_result}
+    results = {"bond_universe": bond_universe, "portal_data": portal_result, "fund_index": fund_index_result}
     for idx, module in enumerate(selected, start=1):
         base = int((idx - 1) / total * 100)
         end = int(idx / total * 100)

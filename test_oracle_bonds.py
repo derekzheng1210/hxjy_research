@@ -4,7 +4,6 @@ from datetime import date
 from pathlib import Path
 from unittest.mock import patch
 
-from openpyxl import Workbook
 
 from juyuan_update import config
 from juyuan_update.db import _select_cnbd_yield
@@ -17,7 +16,7 @@ from juyuan_update.oracle_bonds import (
     remaining_term,
     refresh_oracle_bond_universe,
 )
-from juyuan_update.unified_excel import import_unified_excel
+from juyuan_update.fund_index_mysql import refresh_fund_index
 
 
 class ExerciseTermTests(unittest.TestCase):
@@ -123,30 +122,89 @@ class ReconciliationTests(unittest.TestCase):
             self.assertTrue(report_json.exists())
 
 
-class FundOnlyExcelTests(unittest.TestCase):
-    def test_excel_with_only_sheet1_updates_fund_index(self):
-        with tempfile.TemporaryDirectory(dir=Path.cwd()) as directory:
-            root = Path(directory)
-            workbook_path = root / "fund.xlsx"
-            fund_json = root / "fund.json"
-            bond_json = root / "bond.json"
-            bond_json.write_text('{"bonds":[{"code":"KEEP.IB"}]}', encoding="utf-8")
-            wb = Workbook()
-            ws = wb.active
-            ws.title = "Sheet1"
-            ws.append([None, "日期", "收盘价"])
-            ws.append([None, "2026-07-30", 123.45])
-            ws.append([None, "2026-07-31", 123.67])
-            wb.save(workbook_path)
+class FundIndexMysqlTests(unittest.TestCase):
+    class _FakeCursor:
+        def __init__(self, rows):
+            self._rows = rows
 
+        def execute(self, sql, args):
+            pass
+
+        def fetchall(self):
+            return self._rows
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    class _FakeConnection:
+        def __init__(self, cursor):
+            self._cursor = cursor
+
+        def cursor(self):
+            return self._cursor
+
+        def close(self):
+            pass
+
+    _CREDS = patch.dict(
+        "os.environ", {"FUND_INDEX_DB_USER": "u", "FUND_INDEX_DB_PASSWORD": "p"}
+    )
+
+    def test_refresh_writes_frozen_json(self):
+        rows = [
+            {"TRADE_DT": "20260730", "S_DQ_CLOSE": 123.45},
+            {"TRADE_DT": "20260731", "S_DQ_CLOSE": 123.67},
+            {"TRADE_DT": "20260801", "S_DQ_CLOSE": 0},        # 非正收盘价剔除
+            {"TRADE_DT": "20260731", "S_DQ_CLOSE": 123.99},   # 同日重复取最后一条
+        ]
+        with tempfile.TemporaryDirectory(dir=Path.cwd()) as directory:
+            fund_json = Path(directory) / "fund.json"
+            connection = self._FakeConnection(self._FakeCursor(rows))
             with (
                 patch.object(config, "STRATEGY_FUND_PRICES_FROZEN", fund_json),
-                patch.object(config, "BOND_STATIC_JSON", bond_json),
+                patch("pymysql.connect", return_value=connection),
+                self._CREDS,
             ):
-                result = import_unified_excel(workbook_path)
+                result = refresh_fund_index()
 
             self.assertEqual(result["fund_prices"], 2)
-            self.assertIn("KEEP.IB", bond_json.read_text(encoding="utf-8"))
+            self.assertEqual(result["fund_start"], "2026-07-30")
+            self.assertEqual(result["fund_end"], "2026-07-31")
+            import json
+            saved = json.loads(fund_json.read_text(encoding="utf-8"))
+            self.assertEqual(saved[-1], {"date": "2026-07-31", "close": 123.99})
+
+    def test_missing_credentials_raises_clear_error(self):
+        import os
+
+        saved = {k: os.environ.pop(k, None) for k in
+                 ("FUND_INDEX_DB_USER", "FUND_INDEX_DB_PASSWORD")}
+        try:
+            with self.assertRaises(RuntimeError) as ctx:
+                refresh_fund_index()
+            self.assertIn("FUND_INDEX_DB_USER", str(ctx.exception))
+        finally:
+            for key, value in saved.items():
+                if value is not None:
+                    os.environ[key] = value
+
+    def test_empty_result_keeps_previous_cache(self):
+        with tempfile.TemporaryDirectory(dir=Path.cwd()) as directory:
+            fund_json = Path(directory) / "fund.json"
+            fund_json.write_text('[{"date": "2026-07-30", "close": 1.0}]', encoding="utf-8")
+            connection = self._FakeConnection(self._FakeCursor([]))
+            with (
+                patch.object(config, "STRATEGY_FUND_PRICES_FROZEN", fund_json),
+                patch("pymysql.connect", return_value=connection),
+                self._CREDS,
+            ):
+                with self.assertRaises(RuntimeError):
+                    refresh_fund_index()
+            # 查询为空时保留旧缓存
+            self.assertIn("2026-07-30", fund_json.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

@@ -5,6 +5,7 @@ waitress>=3.0  # Windows 生产 WSGI 服务器（gunicorn 不支持 Windows）
 oracledb>=2.0
 requests>=2.31
 cryptography>=42.0  # 信评门户登录加解密（neiping_portal_fetch）
+pymysql>=1.0  # 中长期纯债基金指数量化数据库（fund_index_mysql）
 python-dotenv>=1.0
 pandas>=2.0
 numpy>=1.24

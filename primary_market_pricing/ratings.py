@@ -2,52 +2,32 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
-from openpyxl import load_workbook
-
 from juyuan_update import config as portal_config
-from juyuan_update.unified_excel import parse_bond_sheet
-
+from juyuan_update.unified_excel import normalize_rating
 
 _CACHE_MTIME_NS: int | None = None
 _CACHE: dict[str, str] = {}
 
 
-def _date_key(value: object) -> str:
-    return str(value or "").replace("-", "")[:8]
+def _load_ratings() -> dict[str, str]:
+    """按主体读取信评门户最新内评（每日更新任务自动同步的 portal_data 缓存）。"""
+    from juyuan_update.neiping_portal_fetch import load_portal_data
 
-
-def _load_ratings(path: Path) -> dict[str, str]:
-    if not path.exists():
-        return {}
-    workbook = load_workbook(path, read_only=True, data_only=True)
-    try:
-        if "Sheet3" not in workbook.sheetnames:
-            return {}
-        bonds = parse_bond_sheet(workbook["Sheet3"])
-    finally:
-        workbook.close()
-
-    latest: dict[str, tuple[str, str]] = {}
-    for bond in bonds:
-        issuer = str(bond.get("issuer") or "").strip()
-        rating = str(bond.get("internal_rating") or "").strip()
-        if not issuer or not rating:
-            continue
-        candidate = (_date_key(bond.get("issue_date")), rating)
-        if issuer not in latest or candidate[0] >= latest[issuer][0]:
-            latest[issuer] = candidate
-    return {issuer: value[1] for issuer, value in latest.items()}
+    ratings = load_portal_data().get("ratings") or {}
+    return {
+        issuer: normalize_rating(rating)
+        for issuer, rating in ratings.items()
+        if normalize_rating(rating)
+    }
 
 
 def internal_rating_by_issuer() -> dict[str, str]:
     """Return the latest non-empty portal internal rating for each issuer."""
     global _CACHE_MTIME_NS, _CACHE
-    path = portal_config.UNIFIED_EXCEL
+    path = portal_config.PORTAL_DATA_JSON
     mtime_ns = path.stat().st_mtime_ns if path.exists() else None
     if mtime_ns != _CACHE_MTIME_NS:
-        _CACHE = _load_ratings(path)
+        _CACHE = _load_ratings()
         _CACHE_MTIME_NS = mtime_ns
     return _CACHE
 

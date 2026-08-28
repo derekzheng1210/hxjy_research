@@ -20,7 +20,6 @@ from juyuan_update import config as juyuan_config
 from juyuan_update.tasks import get_status as get_update_status, start_update
 from juyuan_update.unified_excel import (
     get_bond_picker_bonds,
-    import_unified_excel,
     load_bond_picker_yields_cache,
     load_bond_static,
     load_counterparty_limits,
@@ -288,7 +287,6 @@ def rating_compliance_status():
 def status_info():
     load_bond_data()
     static_payload = load_bond_static()
-    unified_updated = file_updated_time(juyuan_config.UNIFIED_EXCEL)
     reconciliation = load_oracle_reconciliation()
     return {
         "bond_picker": {
@@ -322,10 +320,9 @@ def status_info():
             "updated": file_updated_time(INSTITUTION_FLOW_CACHE),
             "size": file_size(INSTITUTION_FLOW_CACHE),
         },
-        "unified_excel": {
-            "updated": unified_updated,
-            "size": file_size(juyuan_config.UNIFIED_EXCEL),
-            "fund_updated": file_updated_time(juyuan_config.STRATEGY_FUND_PRICES_FROZEN),
+        "fund_index": {
+            "updated": file_updated_time(juyuan_config.STRATEGY_FUND_PRICES_FROZEN),
+            "size": file_size(juyuan_config.STRATEGY_FUND_PRICES_FROZEN),
         },
         "oracle_bonds": {
             "updated": static_payload.get("generated_at") or "-",
@@ -954,14 +951,7 @@ def admin():
         else:
             try:
                 if target == "unified_excel":
-                    save_upload(file, juyuan_config.UNIFIED_EXCEL, {".xlsx", ".xls"}, "unified_excel")
-                    result = import_unified_excel(juyuan_config.UNIFIED_EXCEL)
-                    message = (
-                        "基金指数 Excel 上传成功："
-                        f"中长期纯债基金指数 {result['fund_prices']:,} 条"
-                        f"（{result['fund_start']} 至 {result['fund_end']}）。"
-                        "债券池、内评、限额和持仓未从该 Excel 读取。"
-                    )
+                    error = "基金指数已改为每日自动从量化数据库同步，不再支持 Excel 上传"
                 elif target == "bond_picker":
                     error = "债券清单由 Oracle 自动更新，不再支持 Excel 上传"
                 elif target == "strategy_dashboard":

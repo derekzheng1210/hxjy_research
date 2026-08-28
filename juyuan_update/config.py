@@ -12,7 +12,6 @@ from paths import (
 )
 
 PROJECT2_BOND_EXCEL = SPREAD_DIR / "bond_list.xlsx"
-UNIFIED_EXCEL = UPLOADS_DIR / "unified_credit_data.xlsx"
 BOND_STATIC_JSON = DATA_DIR / "bond_static.json"
 ORACLE_BOND_CANDIDATE_JSON = DATA_DIR / "oracle_bond_candidate.json"
 ORACLE_BOND_RECONCILIATION_JSON = DATA_DIR / "oracle_bond_reconciliation.json"
