@@ -167,8 +167,10 @@ class BrokerMarketStorageTests(unittest.TestCase):
 
     def test_empty_refresh_does_not_replace_last_success(self):
         target = Path.cwd() / ".test-latest-snapshot.json"
+        history_dir = Path.cwd() / ".test-empty-refresh-history"
+        shutil.rmtree(history_dir, ignore_errors=True)
         try:
-            with patch.object(storage, "SNAPSHOT_PATH", target):
+            with patch.object(storage, "SNAPSHOT_PATH", target),                  patch.object(storage, "HISTORY_DIR", history_dir):
                 storage.save_snapshot([{"bondCode": "1.IB", "ofrYield": 2.1}])
                 before = target.read_bytes()
                 with self.assertRaises(RuntimeError):
@@ -176,6 +178,7 @@ class BrokerMarketStorageTests(unittest.TestCase):
                 self.assertEqual(target.read_bytes(), before)
         finally:
             target.unlink(missing_ok=True)
+            shutil.rmtree(history_dir, ignore_errors=True)
 
     def test_preferences_are_bounded_and_validated(self):
         payload = storage.validate_preferences({
