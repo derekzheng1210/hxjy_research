@@ -2,7 +2,7 @@
 
 ## 背景
 
-生产门户将部署在 **http://10.6.8.78:5000/**，该服务器没有 Wind 终端。
+生产门户将部署在 **http://10.6.8.78:5090/**，该服务器没有 Wind 终端。
 门户中唯一依赖 Wind 的模块是 **行业景气高频跟踪（ipm_tracker）**，其余模块
 （超长端利率利差、新老券利差、国债地方债发行、一级发行定价、聚源主数据等）
 走 Oracle/MySQL，服务器可自行更新。
@@ -17,7 +17,7 @@
 └─────────┬───────────┘         ③ POST 推送增量 JSON（令牌鉴权）
           │                     ④ 服务器合并进缓存并归档，服务立即生效
 ┌─────────▼───────────────────────────────┐
-│ 服务器 10.6.8.78:5000（无 Wind）          │
+│ 服务器 10.6.8.78:5090（无 Wind）          │
 │ POST /api/ingest/ipm  （ipm_tracker/ingest.py）│
 └─────────────────────────────────────────┘
 ```
@@ -55,16 +55,16 @@ IPM_INGEST_TOKEN=<上一步生成的令牌>
 
 ```bash
 # 无令牌 → 应返回 503（通道未启用 或 令牌无效）
-curl http://127.0.0.1:5000/api/ingest/ipm/preflight
+curl http://127.0.0.1:5090/api/ingest/ipm/preflight
 
 # 带令牌 → 应返回 {"status": "ok", "data_latest_date": "...", ...}
-curl -H "X-Ingest-Token: <令牌>" http://127.0.0.1:5000/api/ingest/ipm/preflight
+curl -H "X-Ingest-Token: <令牌>" http://127.0.0.1:5090/api/ingest/ipm/preflight
 ```
 
 ### 4. 防火墙 / 网络建议
 
-- 5000 端口只对内网（10.x 网段）开放；ingest 接口有令牌保护，但仍建议收敛来源 IP。
-- 确认本机能访问 `10.6.8.78:5000`（`curl http://10.6.8.78:5000/api/health`）。
+- 5090 端口只对内网（10.x 网段）开放；ingest 接口有令牌保护，但仍建议收敛来源 IP。
+- 确认本机能访问 `10.6.8.78:5090`（`curl http://10.6.8.78:5090/ipm-tracker/api/health`）。
 
 ### 5. 「一键更新」注意事项
 
@@ -81,7 +81,7 @@ curl -H "X-Ingest-Token: <令牌>" http://127.0.0.1:5000/api/ingest/ipm/prefligh
 写入本机仓库 `.env`（已在 .gitignore 中，不会提交）：
 
 ```text
-IPM_SERVER_URL=http://10.6.8.78:5000
+IPM_SERVER_URL=http://10.6.8.78:5090
 IPM_INGEST_TOKEN=<与服务端一致的令牌>
 ```
 
@@ -95,7 +95,7 @@ IPM_INGEST_TOKEN=<与服务端一致的令牌>
 .venv\Scripts\python.exe scripts\push_ipm_wind.py --full
 ```
 
-推送后打开 http://10.6.8.78:5000/ipm-tracker/ 确认数据已更新。
+推送后打开 http://10.6.8.78:5090/ipm-tracker/ 确认数据已更新。
 
 常用参数：
 
@@ -150,7 +150,7 @@ Wind 终端需要登录后才能取数，定时任务能稳定跑起来需满足
 | 退出码 1，日志含“Wind 连接超时” | Wind 终端未启动/未登录，见「无人值守运行的前提」 |
 | HTTP 503 | 服务端未配置 `IPM_INGEST_TOKEN`，见服务器设置第 2 步 |
 | HTTP 401 | 两端令牌不一致，核对 `.env` |
-| 连接拒绝/超时（HTTP 层） | 服务器未启动、端口/防火墙未放行，先 `curl http://10.6.8.78:5000/api/health` |
+| 连接拒绝/超时（HTTP 层） | 服务器未启动、端口/防火墙未放行，先 `curl http://10.6.8.78:5090/ipm-tracker/api/health` |
 | 页面数据未更新 | 看 `/ipm-tracker/api/data/status` 的 `data_latest_date`；必要时本机 `--days 7` 重推 |
 
 本机日志：`logs\wind_push.log`；服务器日志：门户进程日志（含 `ipm_ingest` 记录）。
