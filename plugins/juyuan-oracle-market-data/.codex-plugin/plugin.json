@@ -1,0 +1,22 @@
+{
+  "name": "juyuan-oracle-market-data",
+  "version": "0.1.0",
+  "description": "Read ChinaBond yield curves and bond valuations from Juyuan Oracle.",
+  "author": {
+    "name": "Juyuan Credit Research"
+  },
+  "interface": {
+    "displayName": "Juyuan Oracle Market Data",
+    "shortDescription": "Query ChinaBond curves and bond valuations from Oracle.",
+    "longDescription": "A read-only MCP server for Juyuan Oracle ChinaBond yield curves and bond valuation yields, with fixed curve mappings and source selection rules.",
+    "developerName": "Juyuan Credit Research",
+    "category": "Productivity",
+    "capabilities": ["Interactive"],
+    "defaultPrompt": [
+      "查询最新的国开债和中短票 AAA 曲线。",
+      "查询 102681601.IB 在 20260604 的中债估值。",
+      "比较本月中短票 AA+ 曲线的变化。"
+    ]
+  },
+  "mcpServers": "./.mcp.json"
+}

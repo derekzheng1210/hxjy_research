@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "juyuan-oracle-market-data": {
+      "command": "../../.venv/Scripts/python.exe",
+      "args": ["./server.py"],
+      "cwd": "."
+    }
+  }
+}
