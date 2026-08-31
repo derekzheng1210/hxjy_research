@@ -995,8 +995,7 @@ def admin():
                     save_upload(file, INDUSTRY_HTML, {".html", ".htm"}, "industry_prosperity")
                     message = "行业景气度跟踪 HTML 上传成功。"
                 elif target == "credit_std_dev_js":
-                    save_upload(file, STD_DEV_JS, {".js"}, "credit_std_dev_js")
-                    message = "信用债两倍标准差 spread_data.js 上传成功。"
+                    error = "两倍标准差数据由数据库一键更新自动维护，不再支持 JS 上传"
                 else:
                     error = "未知上传目标"
             except Exception as exc:

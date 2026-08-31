@@ -67,11 +67,14 @@ def _provider_defs() -> list[dict]:
         {
             "id": "deepseek_internal", "name": "DeepSeek 内网部署", "kind": "内网",
             "base_url": internal_base.rstrip("/"),
-            "model": os.environ.get("DEEPSEEK_INTERNAL_MODEL", "deepseek-chat"),
+            "model": os.environ.get("DEEPSEEK_INTERNAL_MODEL", "deepseek-v4-flash-0731"),
             # 内网 vLLM 部署常不校验密钥，配置了地址即视为可用，密钥缺省发 EMPTY
             "api_key": internal_key or "EMPTY", "configured": bool(internal_base),
             "key_hint": "DEEPSEEK_INTERNAL_BASE_URL",
-            "json_mode": True,
+            # 与自部署网关（10.9.x.x:3005）同款：不支持 response_format，JSON 输出
+            # 靠提示词约束；通过聊天模板参数关闭 thinking，直接输出答案降低延迟。
+            "json_mode": False,
+            "chat_template_kwargs": {"thinking": False},
         },
         {
             "id": "mimo", "name": "MiMo", "kind": "公网",

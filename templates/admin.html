@@ -233,7 +233,6 @@ button.ghost{background:#eef2ff;color:#3730a3;font-weight:700;padding:0 10px;hei
     </section>
 
     <form class="card" method="post" enctype="multipart/form-data"><h2>行业景气度 HTML</h2><p>上传行业景气度跟踪静态 HTML，访问时由 Flask 注入统一顶部导航。</p><input type="hidden" name="target" value="industry_prosperity"><input type="file" name="file" accept=".html,.htm" required><button type="submit">上传 HTML</button><div class="meta">当前：{{ status.industry_prosperity.updated }} / {{ status.industry_prosperity.size }}</div></form>
-    <form class="card" method="post" enctype="multipart/form-data"><h2>两倍标准差数据</h2><p>页面随代码发布；数据库一键更新会从 Oracle 拉取最新曲线日并合并到现有 spread_data.js，历史序列继续沿用旧数据。</p><input type="hidden" name="target" value="credit_std_dev_js"><input type="file" name="file" accept=".js" required><button type="submit">上传 JS</button><div class="meta">当前：{{ status.credit_std_dev.data_updated }} / {{ status.credit_std_dev.data_size }}</div></form>
   </div>
   <div class="note">数据库更新依赖公司内网 Oracle。线上部署请设置 SITE_PASSWORD、ADMIN_PASSWORD、SECRET_KEY、JUYUAN_DB_USER、JUYUAN_DB_PASSWORD、JUYUAN_DB_DSN 和 JUYUAN_ORACLE_CLIENT 环境变量。信评门户同步依赖 IAM_USERNAME / IAM_PASSWORD，经纪商行情依赖 DM 凭证。大模型配置：SELF_LLM_*、DEEPSEEK_INTERNAL_BASE_URL / DEEPSEEK_INTERNAL_API_KEY / DEEPSEEK_INTERNAL_MODEL、MIMO_*、DEEPSEEK_*。</div>
 </main>
