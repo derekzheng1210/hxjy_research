@@ -36,6 +36,7 @@ import llm_config
 from primary_market_pricing.app import pricing_bp
 from internal_knowledge_base import bp as internal_knowledge_base_bp
 from ipm_tracker import bp as ipm_tracker_bp, init_app as init_ipm_tracker
+from ipm_tracker.ingest import bp as ipm_ingest_bp
 from ipm_tracker.routes import CACHE_FILE as IPM_TRACKER_CACHE
 from interest_bond import (
     bond_switch_bp,
@@ -109,6 +110,7 @@ app.register_blueprint(spread_bp)
 app.register_blueprint(bond_switch_bp)
 app.register_blueprint(issuance_bp)
 app.register_blueprint(ipm_tracker_bp, url_prefix="/ipm-tracker")
+app.register_blueprint(ipm_ingest_bp)
 
 BONDS_CACHE = []
 DATA_TIMESTAMP = "尚未加载"
