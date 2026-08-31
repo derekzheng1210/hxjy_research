@@ -6,6 +6,7 @@ import re
 import shutil
 import tempfile
 import threading
+import time
 from datetime import date, datetime
 from functools import wraps
 from pathlib import Path
@@ -28,7 +29,10 @@ from juyuan_update.oracle_bonds import load_oracle_reconciliation
 from juyuan_update.rating_compliance import (
     evaluate_rating_compliance,
     load_rating_facts_cache,
+    refresh_rating_compliance_cache,
 )
+from juyuan_update.neiping_portal_fetch import load_portal_data
+import llm_config
 from primary_market_pricing.app import pricing_bp
 from internal_knowledge_base import bp as internal_knowledge_base_bp
 import institution_flow_config
@@ -284,16 +288,37 @@ def rating_compliance_status():
     }
 
 
+def portal_data_status():
+    """信评门户同步的内评 / 对手限额 / 债项持仓缓存状态。"""
+    payload = load_portal_data()
+    if not payload:
+        return {"missing": True, "updated": "-"}
+    holdings = payload.get("holdings") or {}
+    holding_count = sum(1 for b in holdings.values() if isinstance(b, dict) and b.get("is_holding"))
+    return {
+        "missing": False,
+        "updated": payload.get("generated_at") or "-",
+        "limits_date": payload.get("limits_date") or "-",
+        "limit_issuers": len(payload.get("limits") or {}),
+        "rating_issuers": len(payload.get("ratings") or {}),
+        "holdings_date": payload.get("holdings_refresh_date") or "-",
+        "holding_bonds": holding_count,
+        "total_bonds": len(holdings),
+    }
+
+
 def status_info():
     load_bond_data()
     static_payload = load_bond_static()
     reconciliation = load_oracle_reconciliation()
+    broker_snapshot = load_broker_snapshot()
     return {
         "bond_picker": {
             "updated": DATA_TIMESTAMP,
             "total": f"{len(BONDS_CACHE):,}",
         },
         "rating_compliance": rating_compliance_status(),
+        "portal_data": portal_data_status(),
         "strategy_dashboard": {
             "updated": file_updated(STRATEGY_HTML),
             "size": file_size(STRATEGY_HTML),
@@ -333,6 +358,10 @@ def status_info():
             "comparison": reconciliation.get("comparison") or {},
         },
         "broker_market": broker_scheduler_status(),
+        "broker_snapshot": {
+            "updated": broker_snapshot.get("generated_at") or "-",
+            "quotes": int(broker_snapshot.get("quote_count") or 0),
+        },
     }
 
 
@@ -592,7 +621,9 @@ def save_upload(file_storage, destination: Path, allowed_exts, backup_key: str) 
             return False
         backup_created = False
         if destination.exists():
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+            # 部分机器 datetime.now() 微秒粒度只有几毫秒，连续上传会产生同名备份
+            # 互相覆盖；改用纳秒尾数避免碰撞，同时保持文件名按时间排序。
+            timestamp = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{time.time_ns() % 1_000_000_000:09d}"
             backup_path = UPLOADS_DIR / f"{backup_key}_backup_{timestamp}{destination.suffix}"
             shutil.copy2(destination, backup_path)
             backup_created = True
@@ -999,6 +1030,44 @@ def admin_start_broker_update():
     if request.headers.get("X-Requested-With") == "XMLHttpRequest":
         return {"ok": ok, "message": message, "status": broker_scheduler_status()}
     return redirect(url_for("admin"))
+
+
+@app.route("/admin/refresh-rating-cache", methods=["POST"])
+@login_required
+@admin_required
+def admin_refresh_rating_cache():
+    """单独重建合规630评级事实缓存（Oracle 在线时可用，无需跑完整一键更新）。"""
+    try:
+        payload = refresh_rating_compliance_cache()
+        return {"ok": True, "message": f"630评级缓存已重建：{len(payload['facts']):,} 条（基准日 {payload['as_of_date']}）"}
+    except Exception as exc:
+        return {"ok": False, "message": f"630评级缓存重建失败：{exc}"}, 500
+
+
+@app.route("/admin/api/llm", methods=["GET"])
+@login_required
+@admin_required
+def admin_llm_overview():
+    return {"providers": llm_config.provider_overview(), "priority": llm_config.get_settings()["priority"]}
+
+
+@app.route("/admin/api/llm/test", methods=["POST"])
+@login_required
+@admin_required
+def admin_llm_test():
+    return {"results": llm_config.test_all_providers()}
+
+
+@app.route("/admin/api/llm/priority", methods=["POST"])
+@login_required
+@admin_required
+def admin_llm_priority():
+    data = request.get_json(silent=True) or {}
+    priority = data.get("priority")
+    if not isinstance(priority, list):
+        return {"ok": False, "message": "请提供模型优先级列表"}, 400
+    settings = llm_config.save_priority([str(p) for p in priority])
+    return {"ok": True, "message": "大模型优先级已保存，即时生效", "priority": settings["priority"]}
 
 
 @app.route("/api/status")

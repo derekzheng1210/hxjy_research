@@ -102,79 +102,19 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 
 # --------------------------------------------------------------------------- #
-# 大模型配置：优先自部署模型（阿里云，OpenAI 兼容网关），MiMo 兜底，DeepSeek 二层兜底。
-# 密钥不写入文件：优先读环境变量，Windows 下回退读注册表 HKCU\Environment
+# 大模型配置统一在项目根 llm_config.py：四个模型（自部署 / DeepSeek 内网部署 /
+# MiMo / DeepSeek 官方），优先级由后台"大模型管理"持久化，调用时实时读取。
 # --------------------------------------------------------------------------- #
-def _env_or_registry(name):
-    r"""Resolve an env var with a Windows HKCU\Environment registry fallback."""
-    value = os.environ.get(name, "").strip()
-    if value or os.name != "nt":
-        return value
-    try:
-        import winreg
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment") as env_key:
-            return str(winreg.QueryValueEx(env_key, name)[0]).strip()
-    except OSError:
-        return ""
-
-
-def _self_llm_api_key():
-    return _env_or_registry("SELF_LLM_API_KEY")
-
-
-def _mimo_api_key():
-    return _env_or_registry("MIMO_API_KEY")
-
-
-def _deepseek_api_key():
-    return _env_or_registry("DEEPSEEK_API_KEY")
+import llm_config
 
 
 def _llm_api_key():
     """任一模型密钥可用即视为大模型已配置。"""
-    return _self_llm_api_key() or _mimo_api_key() or _deepseek_api_key()
+    return llm_config.llm_api_key()
 
 
-# 自部署模型（阿里云 OpenAI 兼容网关，内网直连）。网关不支持 thinking /
-# response_format 参数（会返回 400）：关闭思考与 JSON 输出模式均靠提示词约束。
-SELF_LLM_BASE_URL = os.environ.get("SELF_LLM_BASE_URL", "http://10.9.50.201:3005/v1").rstrip("/")
-SELF_LLM_MODEL = os.environ.get("SELF_LLM_MODEL", "glm-5.2")
-# MiMo（小米开放平台 https://platform.xiaomimimo.com，OpenAI 兼容协议）。
-# mimo-v2.5 为最便宜的文本模型；它是推理模型，默认会先输出 reasoning_content
-# 再给答案，等待时间长。业务场景（信息抽取/知识问答）不需要深度思考，
-# 统一传 thinking.type=disabled 关闭思考，首 token 响应可从约 15s 降至 1-4s。
-MIMO_BASE_URL = os.environ.get("MIMO_BASE_URL", "https://api.xiaomimimo.com/v1").rstrip("/")
-MIMO_MODEL = os.environ.get("MIMO_MODEL", "mimo-v2.5")
-DEEPSEEK_BASE_URL = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com").rstrip("/")
-DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")
 LLM_TIMEOUT = 90
 LLM_MAX_TEXT_CHARS = 6000  # 发送给 LLM 的文档文本最大长度
-
-
-def _llm_providers():
-    """按优先级返回当前可用的大模型 provider 列表：自部署 → MiMo → DeepSeek。
-
-    每次调用重新解析密钥：Windows 服务更新环境变量并重启、或管理员补充
-    .env 后，不会因为模块导入时缓存了空值而一直不可用。
-    """
-    providers = []
-    self_key = _self_llm_api_key()
-    if self_key:
-        providers.append({"name": "自部署模型", "base_url": SELF_LLM_BASE_URL,
-                          "model": SELF_LLM_MODEL, "api_key": self_key,
-                          "json_mode": False,
-                          "chat_template_kwargs": {"enable_thinking": False}})
-    mimo_key = _mimo_api_key()
-    if mimo_key:
-        providers.append({"name": "MiMo", "base_url": MIMO_BASE_URL,
-                          "model": MIMO_MODEL, "api_key": mimo_key,
-                          "json_mode": True, "disable_thinking": True})
-    deepseek_key = _deepseek_api_key()
-    if deepseek_key:
-        providers.append({"name": "DeepSeek", "base_url": DEEPSEEK_BASE_URL,
-                          "model": DEEPSEEK_MODEL, "api_key": deepseek_key,
-                          "json_mode": True, "disable_thinking": False})
-    return providers
 KNOWLEDGE_INDEX_TEXT_CHARS = 60000
 KNOWLEDGE_VECTOR_DIM = 512
 KNOWLEDGE_VECTOR_VERSION = "local-char-ngram-v1-d512"
@@ -187,11 +127,19 @@ _knowledge_index_lock = threading.Lock()
 # LibreOffice 查找与转换
 # --------------------------------------------------------------------------- #
 def find_soffice():
-    candidates = [
+    # LIBREOFFICE_PATH 显式指定（.env / 服务环境），优先级最高；
+    # 其后依次尝试标准安装目录与免安装解压目录（D:\LibreOffice），最后搜 PATH。
+    explicit = os.environ.get("LIBREOFFICE_PATH", "").strip()
+    candidates = [explicit] if explicit else []
+    candidates += [
         r"C:\Program Files\LibreOffice\program\soffice.com",
         r"C:\Program Files\LibreOffice\program\soffice.exe",
         r"C:\Program Files (x86)\LibreOffice\program\soffice.com",
         r"C:\Program Files (x86)\LibreOffice\program\soffice.exe",
+        r"D:\LibreOffice\program\soffice.com",
+        r"D:\LibreOffice\program\soffice.exe",
+        r"D:\LibreOffice\LibreOffice\program\soffice.com",
+        r"D:\LibreOffice\LibreOffice\program\soffice.exe",
     ]
     for path in candidates:
         if os.path.isfile(path):
@@ -228,7 +176,12 @@ def convert_to_pdf(input_path, output_dir):
     cmd = [SOFFICE, f"-env:UserInstallation={profile_uri}",
            "--headless", "--norestore", "--nolockcheck",
            "--convert-to", "pdf", "--outdir", output_dir, input_path]
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    # soffice 在中文 Windows 上按控制台代码页（GBK）输出日志，显式容错解码，
+    # 避免读取 stderr 的线程因编码异常崩溃。
+    result = subprocess.run(
+        cmd, capture_output=True, timeout=120,
+        encoding="utf-8", errors="replace",
+    )
     if result.returncode != 0:
         raise RuntimeError(f"LibreOffice 转换失败: {result.stderr or result.stdout}")
     base_name = os.path.splitext(os.path.basename(input_path))[0]
@@ -621,9 +574,9 @@ def _call_llm(prompt, system=None, max_tokens=None, json_mode=True):
     返回前统一剥离 ``` 围栏。知识问答需要流式展示纯文本，传 False。
     """
     messages = _llm_messages(prompt, system=system)
-    providers = _llm_providers()
+    providers = llm_config.available_providers()
     if not providers:
-        raise RuntimeError("未配置大模型 API 密钥（SELF_LLM_API_KEY / MIMO_API_KEY / DEEPSEEK_API_KEY）")
+        raise RuntimeError("未配置任何大模型（SELF_LLM_API_KEY / DEEPSEEK_INTERNAL_BASE_URL / MIMO_API_KEY / DEEPSEEK_API_KEY）")
     last_error = None
     for provider in providers:
         try:
@@ -642,9 +595,9 @@ def _stream_llm(prompt, system=None, max_tokens=None):
     由调用方解析。若当前 provider 已推送过内容则不再回退（回退会导致答案重复）。
     """
     messages = _llm_messages(prompt, system=system)
-    providers = _llm_providers()
+    providers = llm_config.available_providers()
     if not providers:
-        raise RuntimeError("未配置大模型 API 密钥（SELF_LLM_API_KEY / MIMO_API_KEY / DEEPSEEK_API_KEY）")
+        raise RuntimeError("未配置任何大模型（SELF_LLM_API_KEY / DEEPSEEK_INTERNAL_BASE_URL / MIMO_API_KEY / DEEPSEEK_API_KEY）")
     last_error = None
     for provider in providers:
         try:

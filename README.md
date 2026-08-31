@@ -21,8 +21,10 @@ pip install -r requirements.txt
 $env:SITE_PASSWORD="your-password"
 $env:ADMIN_PASSWORD="your-admin-password"
 $env:SECRET_KEY="change-this-secret"
-# 大模型：自部署模型（阿里云网关，OpenAI 兼容）优先，MiMo 兜底，DeepSeek 二层兜底；Windows 服务安装脚本会写入服务进程环境。
+# 大模型（4 个，OpenAI 兼容）：自部署模型（阿里云网关）、DeepSeek 内网部署、MiMo、DeepSeek 官方；
+# 默认按此顺序回退，优先级可在后台"大模型管理"调整；Windows 服务安装脚本会写入服务进程环境。
 $env:SELF_LLM_API_KEY="sk-..."
+# $env:DEEPSEEK_INTERNAL_BASE_URL="http://10.x.x.x:8000/v1"  # DeepSeek 内网部署，密钥可缺省
 $env:MIMO_API_KEY="sk-..."
 $env:DEEPSEEK_API_KEY="sk-..."
 # 可选：数据不在项目同级时设置
@@ -134,10 +136,13 @@ sudo nginx -t && sudo systemctl reload nginx
   `PORTAL_DATA_ROOT/internal_knowledge_base/knowledge_base.db`。
 - 上传文件、永久 PDF 缓存和转换临时文件分别保存在该目录的 `uploads/`、`pdf_cache/` 和 `temp/`。
 - PDF 缓存不会自动过期，超级管理员可在后台查看占用空间并按文件、报告或全部删除。
-- Office 文档在线预览依赖本机 LibreOffice；PDF 查看和文件下载不受影响。
+- Office 文档在线预览依赖本机 LibreOffice（标准安装目录、`D:\LibreOffice` 免安装目录或
+  `LIBREOFFICE_PATH` 环境变量指定的 soffice 均可）；PDF 查看和文件下载不受影响。
 - 超级管理员密码保存在数据库中并进行哈希，可在后台“安全设置”中修改。
-- 大模型按优先级调用：自部署模型（阿里云 OpenAI 兼容网关，默认 `http://10.9.50.201:3005/v1` + `glm-5.2`）→
-  MiMo（小米开放平台，`mimo-v2.5`）→ DeepSeek（`deepseek-chat`）。某一层失败自动回退下一层。
+- 大模型共 4 个（均 OpenAI 兼容协议）：自部署模型（阿里云网关，默认 `http://10.9.50.201:3005/v1` + `glm-5.2`）、
+  DeepSeek 内网部署（`DEEPSEEK_INTERNAL_BASE_URL`，密钥可缺省）、MiMo（小米开放平台，`mimo-v2.5`）、
+  DeepSeek 官方（`deepseek-chat`）。默认按上述顺序回退；顺序可在门户后台
+  “大模型管理”卡片中调整（持久化到数据目录 `llm_settings.json`，即时生效），并支持一键连通性测试。
   智能补全、知识搜索、路演文本识别、路演报告自动匹配统一使用该配置；自部署模型通过
   `chat_template_kwargs.enable_thinking=false`、MiMo 通过 `thinking.type=disabled` 关闭深度思考，
   只取 `content`、不消费 `reasoning_content`，以降低延迟与 token 消耗。
@@ -146,11 +151,12 @@ sudo nginx -t && sudo systemctl reload nginx
   `python scripts/rebuild_knowledge_vectors.py --data-root "D:\path\to\juyuan_credit_data"` 完成全量回填。
 - 知识问答会先在本地判断任务意图：报告查找和核心观点查询沿用逐篇报告框架，统计、比较、归纳、提纲和推演等任务使用通用工作框架。
 - 知识搜索默认覆盖全部报告来源，用户仍可在筛选器中限制报告类型、主题、作者和时间范围。
-- 设置 `SELF_LLM_API_KEY`（自部署模型）与 `MIMO_API_KEY`、`DEEPSEEK_API_KEY`（兜底，均可选）后即可启用，
-  三层至少配置一层；密钥仅保存在 `.env` 或服务进程环境变量中，不会下发到浏览器。
+- 设置 `SELF_LLM_API_KEY`（自部署模型）、`DEEPSEEK_INTERNAL_BASE_URL`（DeepSeek 内网部署）、
+  `MIMO_API_KEY`、`DEEPSEEK_API_KEY`（均可选）后即可启用，至少配置一层；
+  密钥仅保存在 `.env` 或服务进程环境变量中，不会下发到浏览器。
   已安装的 Windows 服务需要同步更新其 NSSM 环境变量并重启服务。
   管理员可运行 `powershell -ExecutionPolicy Bypass -File scripts/sync_windows_service_deepseek_key.ps1` 同步 DeepSeek 密钥；
-  MiMo / 自部署模型密钥参照该脚本把 `MIMO_API_KEY` / `SELF_LLM_API_KEY` 追加到服务的 `AppEnvironmentExtra` 后重启服务
+  MiMo / 自部署模型 / DeepSeek 内网部署密钥参照该脚本把对应变量追加到服务的 `AppEnvironmentExtra` 后重启服务
   （重新执行 install_windows_service.ps1 或 scripts/install_windows_service_silent.ps1 亦可）。
 
 ## 测试环境（隔离于正式系统）

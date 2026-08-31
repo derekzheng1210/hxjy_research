@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
@@ -9,7 +9,7 @@
 body{margin:0;background:#f3f4f6;color:#111827;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif}
 
 /* ===== Main Content ===== */
-.main{max-width:980px;margin:0 auto;padding:24px}
+.main{max-width:1060px;margin:0 auto;padding:24px}
 .msg{border-radius:6px;padding:10px 12px;font-size:13px;margin-bottom:14px}
 .ok{background:#ecfdf5;color:#047857;border:1px solid #a7f3d0}
 .err{background:#fef2f2;color:#b91c1c;border:1px solid #fecaca}
@@ -18,23 +18,48 @@ body{margin:0;background:#f3f4f6;color:#111827;font-family:-apple-system,BlinkMa
 .card h2{font-size:16px;margin:0 0 8px}
 .card p{font-size:13px;color:#4b5563;line-height:1.6;margin:0 0 14px}
 input[type=file],input[type=date]{width:100%;font-size:13px;border:1px solid #d1d5db;border-radius:6px;padding:8px;background:#fff}
-input[type=checkbox]{width:14px;height:14px;accent-color:#2563eb}
-button{height:34px;margin-top:12px;border:0;border-radius:6px;background:#2563eb;color:#fff;font-weight:700;padding:0 14px;cursor:pointer}
+button{height:34px;border:0;border-radius:6px;background:#2563eb;color:#fff;font-weight:700;padding:0 14px;cursor:pointer;font-size:13px}
 button:disabled{background:#94a3b8;cursor:not-allowed}
+button.secondary{background:#475569}
+button.ghost{background:#eef2ff;color:#3730a3;font-weight:700;padding:0 10px;height:26px;font-size:12px}
 .meta{margin-top:14px;font-size:12px;color:#6b7280;background:#f9fafb;border-radius:6px;padding:8px 10px}
 .note{font-size:12px;color:#6b7280;margin-top:18px;line-height:1.6}
 .wide{grid-column:1/-1}
 .status{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:8px;margin-top:12px}
 .status div{background:#f9fafb;border:1px solid #eef2f7;border-radius:6px;padding:8px 10px;font-size:12px;color:#475569}
 .log{margin-top:12px;background:#0f172a;color:#e2e8f0;border-radius:6px;padding:10px;max-height:220px;overflow:auto;font-family:Consolas,monospace;font-size:12px;white-space:pre-wrap}
-.secondary{background:#475569}
 .progress{height:10px;background:#e5e7eb;border-radius:999px;overflow:hidden;margin-top:12px}
 .bar{height:100%;background:#2563eb;width:{{ update_status.percent or 0 }}%;transition:width .2s}
 .module-list{display:flex;flex-wrap:wrap;gap:10px;margin-top:12px}
 .module-list label{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:#334155;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:7px 10px}
-.field{max-width:260px;margin-top:12px}
-.field label{display:block;font-size:12px;font-weight:700;color:#334155;margin-bottom:6px}
 .admin-actions{display:flex;justify-content:flex-end;margin-bottom:12px}.admin-actions a{font-size:13px;color:#475569;text-decoration:none}.admin-actions a:hover{color:#2563eb}
+
+/* ===== 数据状态总览表 ===== */
+.overview{width:100%;border-collapse:collapse;margin-top:6px;font-size:13px}
+.overview th,.overview td{padding:9px 10px;border-bottom:1px solid #eef2f7;text-align:left;vertical-align:top}
+.overview th{background:#f8fafc;color:#334155;font-size:12px;white-space:nowrap}
+.overview td:first-child{font-weight:700;white-space:nowrap}
+.overview .mode{display:inline-block;font-size:11px;padding:2px 8px;border-radius:999px;white-space:nowrap}
+.mode-auto{background:#eff6ff;color:#1d4ed8}
+.mode-manual{background:#fef3c7;color:#92400e}
+.mode-db{background:#ecfdf5;color:#047857}
+.badge-warn{display:inline-block;background:#fef2f2;color:#b91c1c;border:1px solid #fecaca;border-radius:6px;padding:3px 8px;font-size:12px;margin-top:4px}
+.badge-ok{display:inline-block;background:#ecfdf5;color:#047857;border:1px solid #a7f3d0;border-radius:6px;padding:3px 8px;font-size:12px;margin-top:4px}
+
+/* ===== 大模型管理 ===== */
+.llm-table{width:100%;border-collapse:collapse;margin-top:10px;font-size:13px}
+.llm-table th,.llm-table td{padding:9px 10px;border-bottom:1px solid #eef2f7;text-align:left;vertical-align:middle}
+.llm-table th{background:#f8fafc;color:#334155;font-size:12px;white-space:nowrap}
+.llm-table .url{color:#64748b;font-size:12px;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dot{display:inline-block;width:9px;height:9px;border-radius:50%;background:#cbd5e1;margin-right:6px;vertical-align:middle}
+.dot.ok{background:#10b981}
+.dot.bad{background:#ef4444}
+.llm-latency{color:#64748b;font-size:12px;margin-left:4px}
+.llm-err{display:block;color:#b91c1c;font-size:11px;margin-top:2px;max-width:320px;white-space:normal}
+.prio-btn{display:inline-flex;gap:4px}
+.toolbar{display:flex;gap:10px;align-items:center;margin-top:12px;flex-wrap:wrap}
+#llmMessage{font-size:12px}
+.actions{display:flex;gap:10px;margin-top:12px;flex-wrap:wrap}
 </style>
 </head>
 <body>
@@ -44,19 +69,123 @@ button:disabled{background:#94a3b8;cursor:not-allowed}
   {% if message %}<div class="msg ok">{{ message }}</div>{% endif %}
   {% if error %}<div class="msg err">{{ error }}</div>{% endif %}
   <div class="grid">
+
+    <section class="card wide">
+      <h2>数据状态总览</h2>
+      <p>平台全部数据域的更新方式与最近状态一览。绿色为自动更新（一键更新 / 定时任务），黄色为手工上传。</p>
+      <table class="overview">
+        <thead><tr><th>数据</th><th>更新方式</th><th>最近更新</th><th>状态明细</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>Oracle 债券池</td>
+            <td><span class="mode mode-db">一键更新</span></td>
+            <td>数据日 {{ status.oracle_bonds.as_of }}<br><span style="color:#6b7280">生成 {{ status.oracle_bonds.updated }}</span></td>
+            <td>当前 {{ status.oracle_bonds.total }} 只；来源 {{ status.oracle_bonds.source }}
+              {% if status.oracle_bonds.review_required %}<br><span class="badge-warn">候选池差异超阈值待核对：旧 {{ status.oracle_bonds.comparison.old_total }} / 新 {{ status.oracle_bonds.comparison.new_total }} / 旧独有 {{ status.oracle_bonds.comparison.old_only }} / 新增 {{ status.oracle_bonds.comparison.new_only }}</span>{% endif %}
+            </td>
+          </tr>
+          <tr>
+            <td>择券工具估值</td>
+            <td><span class="mode mode-db">一键更新</span></td>
+            <td>{{ status.bond_picker.updated }}</td>
+            <td>{{ status.bond_picker.total }} 条（中债估值缓存）</td>
+          </tr>
+          <tr>
+            <td>合规630评级缓存</td>
+            <td><span class="mode mode-db">一键更新</span></td>
+            <td>{{ status.rating_compliance.updated }}<br><span style="color:#6b7280">判定基准日 {{ status.rating_compliance.as_of or '-' }}</span></td>
+            <td>
+              {% if status.rating_compliance.missing %}
+                <span class="badge-warn">缓存缺失：重点关注不可用</span>
+              {% else %}
+                满足 {{ status.rating_compliance.ok }} / 不满足 {{ status.rating_compliance.fail }} / 待确认 {{ status.rating_compliance.unknown }}
+                {% if status.rating_compliance.fail != '0' %}<span class="badge-warn">{{ status.rating_compliance.fail }} 只不满足630要求</span>{% endif %}
+              {% endif %}
+            </td>
+          </tr>
+          <tr>
+            <td>内评 / 限额 / 持仓</td>
+            <td><span class="mode mode-auto">门户自动同步</span></td>
+            <td>{{ status.portal_data.updated }}</td>
+            <td>
+              {% if status.portal_data.missing %}
+                <span class="badge-warn">门户缓存缺失：内评与持仓数据不可用，请执行一键更新</span>
+              {% else %}
+                授信主体 {{ status.portal_data.limit_issuers }} 家（{{ status.portal_data.limits_date }}）；持仓 {{ status.portal_data.holding_bonds }}/{{ status.portal_data.total_bonds }} 只（{{ status.portal_data.holdings_date }}）
+              {% endif %}
+            </td>
+          </tr>
+          <tr>
+            <td>外部经纪商行情（DM）</td>
+            <td><span class="mode mode-auto">盘中定时抓取</span></td>
+            <td>最近成功 {{ status.broker_market.broker.last_success or '-' }}<br><span style="color:#6b7280">快照 {{ status.broker_snapshot.updated }}</span></td>
+            <td>
+              状态 {{ status.broker_market.broker.state or 'idle' }}{% if status.broker_market.broker.stale %}（已过期）{% endif %}；报价 {{ status.broker_snapshot.quotes }} 条；下次运行 {{ status.broker_market.broker.next_run or '-' }}
+              {% if status.broker_market.broker.last_error %}<br><span class="badge-warn">{{ status.broker_market.broker.last_error }}</span>{% endif %}
+            </td>
+          </tr>
+          <tr>
+            <td>利差监控</td>
+            <td><span class="mode mode-db">一键更新</span></td>
+            <td>{{ status.spread_monitor.updated }}</td>
+            <td>{{ status.spread_monitor.size }}</td>
+          </tr>
+          <tr>
+            <td>策略仪表盘</td>
+            <td><span class="mode mode-db">一键更新</span></td>
+            <td>{{ status.strategy_dashboard.updated }}</td>
+            <td>{{ status.strategy_dashboard.size }}</td>
+          </tr>
+          <tr>
+            <td>中长期纯债基金指数</td>
+            <td><span class="mode mode-auto">量化库自动</span></td>
+            <td>{{ status.fund_index.updated }}</td>
+            <td>{{ status.fund_index.size }}（万得 885008.WI，随一键更新与每日定时任务同步）</td>
+          </tr>
+          <tr>
+            <td>两倍标准差</td>
+            <td><span class="mode mode-db">一键更新</span></td>
+            <td>{{ status.credit_std_dev.data_updated }}</td>
+            <td>数据 {{ status.credit_std_dev.data_size }}；页面 {{ status.credit_std_dev.updated }}</td>
+          </tr>
+          <tr>
+            <td>机构行为曲线</td>
+            <td><span class="mode mode-db">一键更新</span></td>
+            <td>{{ status.institution_flow.updated }}</td>
+            <td>{{ status.institution_flow.size }}</td>
+          </tr>
+          <tr>
+            <td>一级发行定价缓存</td>
+            <td><span class="mode mode-db">一键更新</span></td>
+            <td>{{ status.primary_market_pricing.updated }}</td>
+            <td>{{ status.primary_market_pricing.size }}</td>
+          </tr>
+          <tr>
+            <td>行业景气度</td>
+            <td><span class="mode mode-manual">手工上传</span></td>
+            <td>{{ status.industry_prosperity.updated }}</td>
+            <td>{{ status.industry_prosperity.size }}</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
     <section class="card wide">
       <h2>数据库一键更新</h2>
-      <p>从公司 Oracle 数据库刷新债券池、中债估值、两倍标准差最新曲线、策略仪表盘、存量债利差监控和机构行为曲线数据；中长期纯债基金指数由量化数据库自动同步。债券池采用首次行权剩余期限，任务异步运行，异常差异不会覆盖旧数据。</p>
+      <p>从公司 Oracle 数据库刷新债券池、中债估值、合规630评级事实、两倍标准差最新曲线、策略仪表盘、存量债利差监控和机构行为曲线数据；同步信评门户内评/限额/持仓与量化库基金指数。债券池采用首次行权剩余期限，任务异步运行，异常差异不会覆盖旧数据。</p>
       <form id="dbUpdateForm" method="post" action="{{ url_for('admin_start_db_update') }}">
         <div class="module-list">
-          <label><input type="checkbox" name="modules" value="bond_picker" checked>择券工具估值</label>
+          <label><input type="checkbox" name="modules" value="bond_picker" checked>择券工具估值（含630评级）</label>
           <label><input type="checkbox" name="modules" value="spread_monitor" checked>利差监控</label>
           <label><input type="checkbox" name="modules" value="strategy_dashboard" checked>策略仪表盘</label>
           <label><input type="checkbox" name="modules" value="credit_std_dev" checked>两倍标准差</label>
           <label><input type="checkbox" name="modules" value="institution_flow_rates" checked>机构行为曲线</label>
           <label><input type="checkbox" name="modules" value="primary_market_pricing" checked>一级发行定价缓存</label>
         </div>
-        <button id="dbUpdateButton" type="submit">开始数据库更新</button>
+        <div class="actions">
+          <button id="dbUpdateButton" type="submit">开始数据库更新</button>
+          <button id="ratingRefreshButton" type="button" class="secondary">单独刷新630评级缓存</button>
+        </div>
       </form>
       <div id="updateMessage" class="msg" style="display:none;margin-top:12px;margin-bottom:0"></div>
       <div class="status">
@@ -71,9 +200,23 @@ button:disabled{background:#94a3b8;cursor:not-allowed}
       <div class="log">{% for line in update_status.log[-20:] %}{{ line }}
 {% endfor %}</div>
     </section>
+
     <section class="card wide">
-      <h2>经纪商行情自动更新</h2>
-      <p>网页运行期间，周一至周五按盘中时点抓取DM最优报价；关闭独立项目窗口后自动更新同时停止。失败会保留最近成功快照并自动重试。</p>
+      <h2>大模型管理</h2>
+      <p>知识库问答 / 信息抽取使用的 4 个大模型（OpenAI 兼容协议）。调用时按优先级依次回退：第一个模型失败自动切换下一个。「测试连通性」对各模型发送一次最小请求验证可用性；调整优先级即时生效，无需重启服务。</p>
+      <table class="llm-table" id="llmTable">
+        <thead><tr><th>优先级</th><th>模型</th><th>部署</th><th>接口地址 / 模型名</th><th>连通性</th><th>调整</th></tr></thead>
+        <tbody><tr><td colspan="6" style="color:#6b7280">加载中...</td></tr></tbody>
+      </table>
+      <div class="toolbar">
+        <button id="llmTestButton" type="button">测试全部连通性</button>
+        <span id="llmMessage"></span>
+      </div>
+    </section>
+
+    <section class="card wide">
+      <h2>经纪商行情手动更新</h2>
+      <p>网页运行期间，周一至周五按盘中时点抓取 DM 最优报价；关闭独立项目窗口后自动更新同时停止。失败会保留最近成功快照并自动重试。</p>
       {% set broker = status.broker_market.broker %}
       {% set valuation = status.broker_market.bond_picker %}
       <div class="status">
@@ -88,24 +231,11 @@ button:disabled{background:#94a3b8;cursor:not-allowed}
         <button type="submit">立即更新经纪商行情</button>
       </form>
     </section>
-    <section class="card wide">
-      <h2>Oracle 债券池</h2>
-      <p>筛选条件：剩余首次行权期限不少于 0.2 年、公募、非永续、固定利率、有中债隐含评级的中票、短融、超短融、金融债、企业债、普通公司债、铁道部一般债和汇金债；不含项目收益票据，并剔除国开行、进出口行和农发行。日常更新先写缓存，首次切换或日间差异超过阈值时保留旧池并提示核对。</p>
-      <div class="status">
-        <div>数据日：{{ status.oracle_bonds.as_of }}</div>
-        <div>当前债券：{{ status.oracle_bonds.total }}</div>
-        <div>生成时间：{{ status.oracle_bonds.updated }}</div>
-        <div>来源：{{ status.oracle_bonds.source }}</div>
-      </div>
-      {% if status.oracle_bonds.review_required %}
-      <div class="msg err" style="margin-top:12px;margin-bottom:0">Oracle 候选与旧债券池差异超过阈值，尚未覆盖线上池：旧 {{ status.oracle_bonds.comparison.old_total }} / 新 {{ status.oracle_bonds.comparison.new_total }} / 旧独有 {{ status.oracle_bonds.comparison.old_only }} / 新增 {{ status.oracle_bonds.comparison.new_only }}。请先核对筛选口径。</div>
-      {% endif %}
-    </section>
-    <section class="card wide"><h2>中长期纯债基金指数</h2><p>万得 885008.WI 每日收盘价由量化数据库自动同步，随数据库一键更新与每日定时任务刷新，不再支持 Excel 上传。</p><div class="meta">基金指数缓存：{{ status.fund_index.updated }} / {{ status.fund_index.size }}</div><div class="meta">择券工具当前估值缓存：{{ status.bond_picker.updated }} / {{ status.bond_picker.total }} 条；利差监控：{{ status.spread_monitor.updated }} / {{ status.spread_monitor.size }}</div><div class="meta">630评级合规缓存：{{ status.rating_compliance.updated }}（判定基准日 {{ status.rating_compliance.as_of }}）；满足 {{ status.rating_compliance.ok }} / 不满足 {{ status.rating_compliance.fail }} / 待确认 {{ status.rating_compliance.unknown }}</div></section>
+
     <form class="card" method="post" enctype="multipart/form-data"><h2>行业景气度 HTML</h2><p>上传行业景气度跟踪静态 HTML，访问时由 Flask 注入统一顶部导航。</p><input type="hidden" name="target" value="industry_prosperity"><input type="file" name="file" accept=".html,.htm" required><button type="submit">上传 HTML</button><div class="meta">当前：{{ status.industry_prosperity.updated }} / {{ status.industry_prosperity.size }}</div></form>
     <form class="card" method="post" enctype="multipart/form-data"><h2>两倍标准差数据</h2><p>页面随代码发布；数据库一键更新会从 Oracle 拉取最新曲线日并合并到现有 spread_data.js，历史序列继续沿用旧数据。</p><input type="hidden" name="target" value="credit_std_dev_js"><input type="file" name="file" accept=".js" required><button type="submit">上传 JS</button><div class="meta">当前：{{ status.credit_std_dev.data_updated }} / {{ status.credit_std_dev.data_size }}</div></form>
   </div>
-  <div class="note">数据库更新依赖公司内网 Oracle。线上部署请设置 SITE_PASSWORD、ADMIN_PASSWORD、SECRET_KEY、JUYUAN_DB_USER、JUYUAN_DB_PASSWORD、JUYUAN_DB_DSN 和 JUYUAN_ORACLE_CLIENT 环境变量。机构行为数据通过现有上游接口代理。</div>
+  <div class="note">数据库更新依赖公司内网 Oracle。线上部署请设置 SITE_PASSWORD、ADMIN_PASSWORD、SECRET_KEY、JUYUAN_DB_USER、JUYUAN_DB_PASSWORD、JUYUAN_DB_DSN 和 JUYUAN_ORACLE_CLIENT 环境变量。信评门户同步依赖 IAM_USERNAME / IAM_PASSWORD，经纪商行情依赖 DM 凭证。大模型配置：SELF_LLM_*、DEEPSEEK_INTERNAL_BASE_URL / DEEPSEEK_INTERNAL_API_KEY / DEEPSEEK_INTERNAL_MODEL、MIMO_*、DEEPSEEK_*。</div>
 </main>
 <script>
 const statusBox = document.querySelector('.status');
@@ -115,6 +245,7 @@ const err = document.querySelector('.msg.err[style]');
 const dbUpdateForm = document.getElementById('dbUpdateForm');
 const dbUpdateButton = document.getElementById('dbUpdateButton');
 const updateMessage = document.getElementById('updateMessage');
+const ratingRefreshButton = document.getElementById('ratingRefreshButton');
 function statusText(s) {
   if (s.running) return '运行中';
   if (s.ok === true) return '成功';
@@ -172,9 +303,111 @@ dbUpdateForm.addEventListener('submit', (event) => {
       dbUpdateButton.textContent = '开始数据库更新';
     });
 });
+ratingRefreshButton.addEventListener('click', () => {
+  ratingRefreshButton.disabled = true;
+  ratingRefreshButton.textContent = '刷新中...（约1分钟）';
+  showUpdateMessage('正在单独刷新630评级缓存...', true);
+  fetch('{{ url_for("admin_refresh_rating_cache") }}', {method: 'POST'})
+    .then(r => r.json())
+    .then(data => {
+      showUpdateMessage(data.message || '刷新结束', !!data.ok);
+      if (data.ok) setTimeout(() => location.reload(), 1500);
+    })
+    .catch(() => showUpdateMessage('刷新失败：无法连接后台接口', false))
+    .finally(() => {
+      ratingRefreshButton.disabled = false;
+      ratingRefreshButton.textContent = '单独刷新630评级缓存';
+    });
+});
 setInterval(() => {
   fetch('{{ url_for("api_update_status") }}').then(r => r.json()).then(renderStatus).catch(() => {});
 }, 2000);
+
+/* ===== 大模型管理 ===== */
+const llmTable = document.getElementById('llmTable').querySelector('tbody');
+const llmTestButton = document.getElementById('llmTestButton');
+const llmMessage = document.getElementById('llmMessage');
+const llmNames = {};
+let llmOrder = [];
+let llmResults = {};
+function llmEscape(text) {
+  return String(text == null ? '' : text).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+}
+function renderLlm() {
+  llmTable.innerHTML = llmOrder.map((id, idx) => {
+    const p = llmNames[id] || {};
+    const r = llmResults[id];
+    let conn = '<span class="dot"></span>未检测';
+    if (r) {
+      if (r.ok) conn = `<span class="dot ok"></span>可用<span class="llm-latency">${r.latency_ms || '-'}ms</span>`;
+      else conn = `<span class="dot bad"></span>不可用<span class="llm-err">${llmEscape(r.error || '')}</span>`;
+    } else if (!p.configured) {
+      conn = `<span class="dot bad"></span>未配置<span class="llm-err">请设置 ${llmEscape(p.key_hint || '')}</span>`;
+    }
+    return `<tr>
+      <td>${idx + 1}</td>
+      <td>${llmEscape(p.name || id)}</td>
+      <td>${llmEscape(p.kind || '')}</td>
+      <td><div>${llmEscape(p.model || '')}</div><div class="url" title="${llmEscape(p.base_url)}">${llmEscape(p.base_url)}</div></td>
+      <td>${conn}</td>
+      <td><span class="prio-btn">
+        <button type="button" class="ghost" data-id="${id}" data-dir="-1" ${idx === 0 ? 'disabled' : ''}>↑</button>
+        <button type="button" class="ghost" data-id="${id}" data-dir="1" ${idx === llmOrder.length - 1 ? 'disabled' : ''}>↓</button>
+      </span></td>
+    </tr>`;
+  }).join('');
+  llmTable.querySelectorAll('button[data-id]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const id = btn.dataset.id;
+      const from = llmOrder.indexOf(id);
+      const to = from + parseInt(btn.dataset.dir, 10);
+      if (from < 0 || to < 0 || to >= llmOrder.length) return;
+      llmOrder.splice(to, 0, llmOrder.splice(from, 1)[0]);
+      renderLlm();
+      saveLlmPriority();
+    });
+  });
+}
+function saveLlmPriority() {
+  llmMessage.textContent = '保存优先级...';
+  fetch('{{ url_for("admin_llm_priority") }}', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({priority: llmOrder})
+  })
+    .then(r => r.json())
+    .then(data => { llmMessage.textContent = data.ok ? '优先级已保存并生效' : (data.message || '保存失败'); })
+    .catch(() => { llmMessage.textContent = '保存失败：无法连接后台接口'; });
+}
+function loadLlm() {
+  fetch('{{ url_for("admin_llm_overview") }}')
+    .then(r => r.json())
+    .then(data => {
+      llmOrder = data.priority || [];
+      (data.providers || []).forEach(p => { llmNames[p.id] = p; });
+      renderLlm();
+    })
+    .catch(() => { llmTable.innerHTML = '<tr><td colspan="6" style="color:#b91c1c">大模型状态加载失败</td></tr>'; });
+}
+llmTestButton.addEventListener('click', () => {
+  llmTestButton.disabled = true;
+  llmTestButton.textContent = '测试中...';
+  llmMessage.textContent = '';
+  fetch('{{ url_for("admin_llm_test") }}', {method: 'POST'})
+    .then(r => r.json())
+    .then(data => {
+      (data.results || []).forEach(r => { llmResults[r.id] = r; });
+      renderLlm();
+      const okCount = (data.results || []).filter(r => r.ok).length;
+      llmMessage.textContent = `测试完成：${okCount}/${(data.results || []).length} 个模型可用`;
+    })
+    .catch(() => { llmMessage.textContent = '测试失败：无法连接后台接口'; })
+    .finally(() => {
+      llmTestButton.disabled = false;
+      llmTestButton.textContent = '测试全部连通性';
+    });
+});
+loadLlm();
 </script>
 </body>
 </html>
