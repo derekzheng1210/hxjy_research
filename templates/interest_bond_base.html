@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{% block title %}内部研究工作台{% endblock %}</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='interest_bond/css/base.css') }}">
+{% block head %}{% endblock %}
+</head>
+<body>
+<main class="page">
+{% block content %}{% endblock %}
+</main>
+<footer class="foot">
+  <span>数据来源：聚源、财汇与本地缓存</span>
+  <span>中债估值优先估值类型1 · 历史发行口径2021—2025已固化</span>
+</footer>
+<div class="toast" id="toast"></div>
+{% block scripts %}{% endblock %}
+</body>
+</html>

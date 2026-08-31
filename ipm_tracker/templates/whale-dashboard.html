@@ -1,0 +1,2509 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>行业景气高频跟踪</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <style>
+        :root {
+            --deep-blue: #0C447C;
+            --brand-blue: #2563EB;
+            --light-brand-blue: #60A5FA;
+            --belly-blue: #DBEAFE;
+            --pink-mouth: #F472B6;
+            --up-red: #DC2626;
+            --down-green: #16A34A;
+            --bg: #F0F6FF;
+            --card-bg: #FFFFFF;
+            --text: #1E293B;
+            --text-secondary: #64748B;
+            --border: #CBD5E1;
+            --sidebar-width: 280px;
+            --rightbar-width: 300px;
+            --header-height: 64px;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            overflow: hidden;
+            height: 100vh;
+        }
+
+        /* Header */
+        .header {
+            height: var(--header-height);
+            background: #FFFFFF;
+            color: #1E293B;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 24px;
+            border-bottom: 1px solid #DFE6EF;
+            box-shadow: 0 2px 10px rgba(15, 23, 42, 0.06);
+            z-index: 100;
+            position: relative;
+        }
+
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+        }
+
+        .brand-logo {
+            width: 42px;
+            height: 42px;
+            background: white;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+            overflow: hidden;
+        }
+
+        .brand-logo img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        .brand-title {
+            font-size: 18px;
+            font-weight: 700;
+            letter-spacing: 0.5px;
+            color: #1D4F91;
+        }
+
+        .brand-subtitle {
+            font-size: 12px;
+            opacity: 0.85;
+            margin-top: 2px;
+        }
+
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+            font-size: 13px;
+        }
+
+        .update-time {
+            opacity: 0.9;
+        }
+
+        .header-group-label {
+            background: #EFF6FF;
+            border: 1px solid #BFDBFE;
+            color: #1D4F91;
+            padding: 6px 16px;
+            border-radius: 16px;
+            font-size: 13px;
+            font-weight: 500;
+            letter-spacing: 0.5px;
+        }
+
+        /* 顶栏操作按钮 */
+        .header-upload-btn {
+            background: #F8FAFC;
+            border: 1px solid #CBD5E1;
+            color: #475569;
+            padding: 4px 12px;
+            border-radius: 14px;
+            font-size: 12px;
+            cursor: pointer;
+            user-select: none;
+            transition: all 0.2s;
+        }
+        .header-upload-btn:hover {
+            background: #EFF6FF;
+            color: #1D4F91;
+        }
+
+        /* Layout */
+        .main-layout {
+            display: flex;
+            height: calc(100vh - var(--header-height) - 44px);
+        }
+
+        /* Left Sidebar */
+        .sidebar {
+            width: var(--sidebar-width);
+            background: var(--card-bg);
+            border-right: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .sidebar-search {
+            padding: 16px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .sidebar-search input {
+            width: 100%;
+            padding: 10px 14px;
+            border: 1px solid var(--border);
+            border-radius: 20px;
+            font-size: 13px;
+            outline: none;
+            transition: all 0.2s;
+            background: var(--bg);
+        }
+
+        .sidebar-search input:focus {
+            border-color: var(--brand-blue);
+            box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+        }
+
+        /* 侧栏顶部：异动预警醒目横幅 */
+        .sidebar-alert-banner {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin: 12px 12px 0 12px;
+            padding: 12px 14px;
+            background: linear-gradient(135deg, #B91C1C 0%, #DC2626 60%, #F87171 100%);
+            border-radius: 12px;
+            color: #fff;
+            text-decoration: none;
+            box-shadow: 0 4px 14px rgba(220, 38, 38, 0.35);
+            transition: all 0.2s;
+        }
+        .sidebar-alert-banner:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 6px 18px rgba(220, 38, 38, 0.45);
+        }
+        .sidebar-alert-banner.calm {
+            background: linear-gradient(135deg, var(--deep-blue) 0%, var(--brand-blue) 100%);
+            box-shadow: 0 4px 14px rgba(37, 99, 235, 0.3);
+        }
+        .alert-banner-left { display: flex; align-items: center; gap: 10px; }
+        .alert-pulse-dot {
+            width: 10px; height: 10px; border-radius: 50%; background: #fff;
+            animation: alertPulse 1.6s infinite;
+            flex-shrink: 0;
+        }
+        @keyframes alertPulse {
+            0% { box-shadow: 0 0 0 0 rgba(255, 255, 255, 0.6); }
+            70% { box-shadow: 0 0 0 9px rgba(255, 255, 255, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(255, 255, 255, 0); }
+        }
+        .alert-banner-title { font-size: 14px; font-weight: 700; letter-spacing: 0.5px; }
+        .alert-banner-sub { font-size: 11px; opacity: 0.92; margin-top: 2px; }
+        .alert-banner-count { font-size: 26px; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; }
+
+        /* ── 异动预警视图（嵌入主面板内容区的覆盖层，侧栏/右栏保持不动）── */
+        .alerts-view {
+            display: none;
+            position: absolute;
+            inset: 0;
+            overflow-y: auto;
+            background: var(--bg);
+            z-index: 60;
+            padding: 24px;
+        }
+        .alerts-view .card {
+            background: var(--card-bg);
+            border-radius: 14px;
+            box-shadow: 0 1px 6px rgba(12, 68, 124, 0.08);
+        }
+        .alerts-view-head {
+            display: flex; justify-content: space-between; align-items: center;
+            margin-bottom: 14px;
+        }
+        .alerts-view-head .av-title { font-size: 18px; font-weight: 700; color: var(--deep-blue); }
+        .alerts-view-head .av-sub { font-size: 12px; color: var(--text-secondary); margin-top: 2px; }
+        .alerts-view-close {
+            border: 1px solid var(--border); background: #fff; color: var(--text);
+            border-radius: 20px; padding: 6px 18px; font-size: 13px; cursor: pointer;
+            transition: all .15s;
+        }
+        .alerts-view-close:hover { border-color: var(--brand-blue); color: var(--brand-blue); }
+
+        .alerts-view .rules-card { padding: 16px 22px; margin-bottom: 16px; border-left: 4px solid var(--deep-blue); }
+        .alerts-view .rules-title { font-size: 14px; font-weight: 700; margin-bottom: 10px; color: var(--deep-blue); }
+        .alerts-view .rule-line { font-size: 13px; color: var(--text); line-height: 1.9; }
+        .alerts-view .rule-line b { color: var(--deep-blue); }
+        .alerts-view .rule-tag { display: inline-block; min-width: 108px; font-weight: 700; color: var(--brand-blue); }
+        .alerts-view .rule-score { margin-top: 8px; font-size: 12px; color: var(--text-secondary); }
+        .alerts-view .rule-score b { color: var(--deep-blue); }
+
+        .alerts-view .summary { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 16px; }
+        .alerts-view .stat-card { padding: 14px 22px; min-width: 150px; border-left: 4px solid var(--border); }
+        .alerts-view .stat-card.red { border-left-color: var(--up-red); }
+        .alerts-view .stat-card.yellow { border-left-color: #D97706; }
+        .alerts-view .stat-card.blue { border-left-color: var(--brand-blue); }
+        .alerts-view .stat-num { font-size: 28px; font-weight: 700; line-height: 1.1; }
+        .alerts-view .stat-card.red .stat-num { color: var(--up-red); }
+        .alerts-view .stat-card.yellow .stat-num { color: #D97706; }
+        .alerts-view .stat-card.blue .stat-num { color: var(--brand-blue); }
+        .alerts-view .stat-label { font-size: 12px; color: var(--text-secondary); margin-top: 4px; }
+
+        .alerts-view .industry-strip { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
+        .alerts-view .ind-card {
+            padding: 12px 18px; flex: 1; min-width: 150px;
+            cursor: pointer; border: 2px solid transparent; transition: all .15s;
+        }
+        .alerts-view .ind-card:hover { transform: translateY(-1px); box-shadow: 0 4px 14px rgba(12, 68, 124, 0.14); }
+        .alerts-view .ind-card.active { border-color: var(--brand-blue); background: #F4F8FF; }
+        .alerts-view .ind-card.all-card { background: linear-gradient(135deg, #0C447C 0%, #2563EB 100%); color: #fff; }
+        .alerts-view .ind-card.all-card .ind-name { color: #fff; }
+        .alerts-view .ind-card.all-card .ind-alerts,
+        .alerts-view .ind-card.all-card .ind-trend,
+        .alerts-view .ind-card.all-card .ind-fresh { color: rgba(255,255,255,0.85); }
+        .alerts-view .ind-card.all-card.active { border-color: #fff; box-shadow: 0 4px 14px rgba(12, 68, 124, 0.35); }
+        .alerts-view .ind-name { font-size: 14px; font-weight: 700; }
+        .alerts-view .ind-alerts { margin: 6px 0 4px; font-size: 12px; min-height: 16px; }
+        .alerts-view .ind-alerts .r { color: var(--up-red); font-weight: 700; }
+        .alerts-view .ind-alerts .y { color: #D97706; font-weight: 700; }
+        .alerts-view .ind-alerts .none { color: #94A3B8; }
+        .alerts-view .ind-trend { font-size: 12px; color: var(--text-secondary); }
+        .alerts-view .ind-trend .up { color: var(--up-red); } .alerts-view .ind-trend .down { color: var(--down-green); }
+        .alerts-view .ind-fresh { font-size: 11px; color: #94A3B8; margin-top: 2px; }
+
+        .alerts-view .toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+        .alerts-view .filter-btn {
+            border: 1px solid var(--border); background: #fff; color: var(--text);
+            border-radius: 20px; padding: 5px 16px; font-size: 13px; cursor: pointer;
+            transition: all .15s;
+        }
+        .alerts-view .filter-btn:hover { border-color: var(--brand-blue); color: var(--brand-blue); }
+        .alerts-view .filter-btn.active { background: var(--brand-blue); border-color: var(--brand-blue); color: #fff; }
+        .alerts-view .filter-btn.active.red { background: var(--up-red); border-color: var(--up-red); }
+        .alerts-view .filter-btn.active.yellow { background: #D97706; border-color: #D97706; }
+        .alerts-view .filter-btn.active.batch { background: #0F766E; border-color: #0F766E; }
+        .alerts-view select {
+            border: 1px solid var(--border); border-radius: 8px; padding: 5px 10px;
+            font-size: 13px; background: #fff; color: var(--text);
+        }
+        .alerts-view .toolbar .spacer { flex: 1; }
+
+        .alerts-view .group-header {
+            display: flex; align-items: baseline; gap: 12px;
+            margin: 20px 0 10px; padding-bottom: 6px;
+            border-bottom: 2px solid var(--belly-blue);
+        }
+        .alerts-view .group-header h2 { font-size: 16px; margin: 0; color: var(--deep-blue); }
+        .alerts-view .group-header .counts { font-size: 12px; color: var(--text-secondary); }
+        .alerts-view .group-header .counts .r { color: var(--up-red); font-weight: 700; }
+        .alerts-view .group-header .counts .y { color: #D97706; font-weight: 700; }
+
+        .alerts-view .alert-card {
+            margin-bottom: 10px; overflow: hidden;
+            border-left: 4px solid var(--border); cursor: pointer;
+            transition: box-shadow .15s;
+        }
+        .alerts-view .alert-card:hover { box-shadow: 0 4px 14px rgba(12, 68, 124, 0.14); }
+        .alerts-view .alert-card.red { border-left-color: var(--up-red); }
+        .alerts-view .alert-card.yellow { border-left-color: #D97706; }
+        .alerts-view .alert-main {
+            display: grid; grid-template-columns: 44px 1.6fr 1fr 1fr 1.4fr 150px 24px;
+            align-items: center; gap: 12px; padding: 13px 18px;
+        }
+        .alerts-view .level-dot { width: 12px; height: 12px; border-radius: 50%; margin: 0 auto; }
+        .alerts-view .level-dot.red { background: var(--up-red); box-shadow: 0 0 0 4px rgba(220,38,38,.15); }
+        .alerts-view .level-dot.yellow { background: #D97706; box-shadow: 0 0 0 4px rgba(217,119,6,.15); }
+        .alerts-view .ind-name { font-size: 14px; font-weight: 600; }
+        .alerts-view .ind-name .batch-badge {
+            display: inline-block; background: #0F766E; color: #fff; font-size: 10px;
+            border-radius: 8px; padding: 1px 7px; margin-left: 6px; vertical-align: 1px; font-weight: 500;
+        }
+        .alerts-view .ind-cat { font-size: 11px; color: #94A3B8; margin-top: 2px; }
+        .alerts-view .metric { font-size: 13px; }
+        .alerts-view .metric .m-label { font-size: 11px; color: #94A3B8; }
+        .alerts-view .metric .m-value { font-weight: 600; font-variant-numeric: tabular-nums; }
+        .alerts-view .badges { display: flex; flex-wrap: wrap; gap: 4px; }
+        .alerts-view .badge {
+            font-size: 11px; border-radius: 10px; padding: 2px 8px; white-space: nowrap;
+            background: #FEF2F2; color: #B91C1C;
+        }
+        .alerts-view .badge.soft { background: #FFFBEB; color: #B45309; }
+        .alerts-view .spark { width: 150px; height: 36px; }
+        .alerts-view .expand-icon { color: #94A3B8; font-size: 14px; text-align: center; transition: transform .2s; }
+        .alerts-view .alert-card.open .expand-icon { transform: rotate(90deg); }
+        .alerts-view .alert-detail { display: none; padding: 0 18px 16px 62px; font-size: 12px; color: var(--text-secondary); }
+        .alerts-view .alert-card.open .alert-detail { display: block; }
+        .alerts-view .alert-detail .kv { display: inline-block; margin-right: 22px; }
+        .alerts-view .alert-detail b { color: var(--text); }
+        .alerts-view .detail-link { color: var(--brand-blue); text-decoration: none; cursor: pointer; }
+        .alerts-view .detail-link:hover { text-decoration: underline; }
+        .alerts-view .sig-rules { margin-top: 10px; border-top: 1px dashed var(--belly-blue); padding-top: 8px; }
+        .alerts-view .sig-rule { line-height: 1.8; }
+        .alerts-view .sig-rule .sig-name { color: #B91C1C; font-weight: 600; }
+        .alerts-view .sig-rule .rule-desc { color: #94A3B8; }
+
+        .alerts-view .notes-card { padding: 18px 24px; margin-top: 26px; border-left: 4px solid #94A3B8; }
+        .alerts-view .notes-title { font-size: 14px; font-weight: 700; margin-bottom: 10px; color: var(--deep-blue); }
+        .alerts-view .notes-card li { font-size: 12.5px; color: var(--text-secondary); line-height: 2; }
+        .alerts-view .notes-card b { color: var(--text); }
+
+        .alerts-view .empty { text-align: center; color: #94A3B8; padding: 60px 0; font-size: 14px; }
+        .alerts-view .loading { text-align: center; color: var(--text-secondary); padding: 60px 0; font-size: 14px; }
+        .alerts-view .err { color: var(--up-red); text-align: center; padding: 40px; }
+        .alerts-view .up { color: var(--up-red); } .alerts-view .down { color: var(--down-green); } .alerts-view .flat { color: var(--text-secondary); }
+
+        @media (max-width: 900px) {
+            .alerts-view .alert-main { grid-template-columns: 20px 1.5fr 1fr 1fr; }
+            .alerts-view .badges, .alerts-view .spark { display: none; }
+            .alerts-view .alert-detail { padding-left: 18px; }
+        }
+
+        .tree-toolbar {
+            display: flex;
+            gap: 6px;
+            padding: 0 10px 10px 10px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .tree-tool-btn {
+            flex: 1;
+            padding: 6px 8px;
+            font-size: 11px;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            background: #F8FAFC;
+            color: var(--text-secondary);
+            cursor: pointer;
+            transition: all 0.15s;
+            white-space: nowrap;
+        }
+
+        .tree-tool-btn:hover {
+            background: var(--belly-blue);
+            color: var(--brand-blue);
+            border-color: var(--light-brand-blue);
+        }
+
+        .tree-container {
+            flex: 1;
+            overflow-y: auto;
+            padding: 12px 0;
+        }
+
+        .tree-container::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        .tree-container::-webkit-scrollbar-thumb {
+            background: #CBD5E1;
+            border-radius: 3px;
+        }
+
+        .tree-node {
+            user-select: none;
+        }
+
+        /* ===== Level 1: Industry Tab Buttons ===== */
+        .tree-row.level-1 {
+            display: flex;
+            align-items: center;
+            padding: 11px 16px;
+            margin: 2px 8px;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.2s;
+            font-size: 14px;
+            font-weight: 700;
+            color: var(--text);
+            background: #fff;
+            border: 1px solid var(--border);
+            position: relative;
+        }
+
+        .tree-row.level-1:hover {
+            background: #FFF5F5;
+            border-color: #FCA5A5;
+            color: #C93D41;
+        }
+
+        .tree-row.level-1.expanded {
+            background: #FFF0F0;
+            border-color: #F87171;
+            color: #C93D41;
+            box-shadow: 0 0 0 1px rgba(201, 61, 65, 0.15);
+        }
+
+        /* ===== Level 2: Subcategory (indented) ===== */
+        .tree-row.level-2 {
+            display: flex;
+            align-items: center;
+            padding: 7px 16px 7px 36px;
+            cursor: pointer;
+            transition: all 0.15s;
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--text);
+            margin: 1px 0;
+        }
+
+        .tree-row.level-2:hover {
+            background: var(--belly-blue);
+            color: var(--deep-blue);
+        }
+
+        .tree-row.level-2.expanded {
+            color: var(--deep-blue);
+            font-weight: 600;
+        }
+
+        /* ===== Level 3: Indicator (further indented) ===== */
+        .tree-row.level-3 {
+            display: flex;
+            align-items: center;
+            padding: 6px 16px 6px 56px;
+            cursor: pointer;
+            transition: all 0.15s;
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+
+        .tree-row.level-3:hover {
+            background: var(--belly-blue);
+            color: var(--brand-blue);
+        }
+
+        .tree-row.level-3.active {
+            color: #C93D41;
+            font-weight: 600;
+            background: linear-gradient(90deg, #FFF0F0 0%, var(--belly-blue) 100%);
+        }
+
+        .tree-icon {
+            width: 18px;
+            height: 18px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-right: 8px;
+            color: var(--text-secondary);
+            font-size: 10px;
+            transition: transform 0.2s;
+            flex-shrink: 0;
+        }
+
+        .tree-row.level-1 > .tree-icon.chevron {
+            color: #C93D41;
+        }
+
+        .tree-row.expanded > .tree-icon.chevron {
+            transform: rotate(90deg);
+        }
+
+        .tree-label {
+            flex: 1;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .tree-badge {
+            background: var(--belly-blue);
+            color: var(--brand-blue);
+            font-size: 10px;
+            padding: 2px 7px;
+            border-radius: 10px;
+            font-weight: 600;
+            flex-shrink: 0;
+        }
+
+        .tree-row.level-1.expanded .tree-badge {
+            background: #FEE2E2;
+            color: #C93D41;
+        }
+
+        .tree-children {
+            display: none;
+        }
+
+        .tree-children.expanded {
+            display: block;
+        }
+
+        /* Subtle separator between subcategories */
+        .level-2-children {
+            padding: 2px 0 6px 0;
+        }
+
+        /* Center Content */
+        .content {
+            flex: 1;
+            overflow-y: auto;
+            padding: 24px;
+            position: relative;   /* 供异动预警覆盖层定位 */
+        }
+
+        .content::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        .content::-webkit-scrollbar-thumb {
+            background: #CBD5E1;
+            border-radius: 4px;
+        }
+
+        .breadcrumb {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
+            color: var(--text-secondary);
+            margin-bottom: 16px;
+        }
+
+        .breadcrumb span:last-child {
+            color: var(--deep-blue);
+            font-weight: 600;
+        }
+
+        .indicator-header {
+            background: var(--card-bg);
+            border-radius: 16px;
+            padding: 16px 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 12px rgba(12, 68, 124, 0.06);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .indicator-title h1 {
+            font-size: 20px;
+            color: var(--deep-blue);
+            margin-bottom: 4px;
+        }
+
+        .indicator-meta {
+            display: flex;
+            gap: 16px;
+            font-size: 13px;
+            color: var(--text-secondary);
+        }
+
+        .indicator-meta span {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        /* Section cards */
+        .section-card {
+            background: var(--card-bg);
+            border-radius: 16px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 12px rgba(12, 68, 124, 0.06);
+        }
+
+        .section-header {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 16px;
+        }
+
+        .section-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--brand-blue);
+        }
+
+        .section-title {
+            font-size: 16px;
+            font-weight: 700;
+            color: var(--deep-blue);
+        }
+
+        .section-subtitle {
+            font-size: 11px;
+            color: #94A3B8;
+            margin-left: 10px;
+        }
+
+        /* Static data grid */
+        .data-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 16px;
+        }
+
+        .data-item {
+            background: linear-gradient(135deg, #F8FAFC 0%, var(--belly-blue) 100%);
+            border-radius: 12px;
+            padding: 16px;
+            border: 1px solid rgba(37, 99, 235, 0.08);
+        }
+
+        .data-item-label {
+            font-size: 12px;
+            color: var(--text-secondary);
+            margin-bottom: 8px;
+        }
+
+        .data-item-value {
+            font-size: 22px;
+            font-weight: 700;
+            color: var(--deep-blue);
+        }
+
+        .data-item-change {
+            font-size: 12px;
+            margin-top: 6px;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            font-weight: 600;
+        }
+
+        .up { color: var(--up-red); }
+        .down { color: var(--down-green); }
+        .neutral { color: var(--text-secondary); }
+
+        /* Chart */
+        .chart-container {
+            position: relative;
+            height: 320px;
+            width: 100%;
+        }
+
+        .chart-toolbar {
+            display: flex;
+            gap: 6px;
+            margin-bottom: 12px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        .chart-period-btn {
+            padding: 5px 12px;
+            border: 1px solid var(--border);
+            background: white;
+            border-radius: 14px;
+            font-size: 12px;
+            cursor: pointer;
+            color: var(--text-secondary);
+            transition: all 0.2s;
+        }
+
+        .chart-period-btn.active,
+        .chart-period-btn:hover {
+            background: var(--brand-blue);
+            color: white;
+            border-color: var(--brand-blue);
+        }
+
+        .chart-period-sep {
+            color: var(--border);
+            margin: 0 2px;
+            font-size: 14px;
+        }
+
+        .chart-date-input {
+            width: 115px;
+            padding: 4px 8px;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            font-size: 11px;
+            color: var(--text);
+            background: white;
+        }
+
+        .chart-date-input:focus {
+            outline: none;
+            border-color: var(--brand-blue);
+            box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.1);
+        }
+
+        .chart-date-label {
+            font-size: 11px;
+            color: var(--text-secondary);
+        }
+
+        #chartDateApply {
+            border-radius: 4px;
+            padding: 4px 10px;
+            font-size: 11px;
+        }
+
+        /* AI Section */
+        .ai-section {
+            display: flex;
+            gap: 20px;
+            align-items: flex-start;
+        }
+
+        .ai-mascot {
+            width: 120px;
+            flex-shrink: 0;
+            text-align: center;
+        }
+
+        .ai-mascot img {
+            width: 100px;
+            height: 100px;
+            object-fit: contain;
+            border-radius: 50%;
+            background: var(--belly-blue);
+            padding: 8px;
+            box-shadow: 0 4px 16px rgba(37, 99, 235, 0.15);
+        }
+
+        .ai-mascot-label {
+            font-size: 12px;
+            color: var(--brand-blue);
+            font-weight: 600;
+            margin-top: 8px;
+        }
+
+        .ai-content {
+            flex: 1;
+        }
+
+        .ai-quote {
+            background: var(--belly-blue);
+            border-radius: 16px 16px 16px 4px;
+            padding: 16px 18px;
+            font-size: 14px;
+            line-height: 1.7;
+            color: var(--text);
+            margin-bottom: 14px;
+            position: relative;
+        }
+
+        .ai-pills {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .ai-pill {
+            background: white;
+            border: 1px solid var(--border);
+            padding: 6px 12px;
+            border-radius: 16px;
+            font-size: 12px;
+            color: var(--text);
+        }
+
+        .ai-pill strong {
+            color: var(--brand-blue);
+        }
+
+        /* Right Sidebar */
+        .rightbar {
+            width: var(--rightbar-width);
+            background: var(--card-bg);
+            border-left: 1px solid var(--border);
+            overflow-y: auto;
+            padding: 20px;
+        }
+
+        .rightbar::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        .rightbar-section {
+            margin-bottom: 24px;
+        }
+
+        .rightbar-title {
+            font-size: 14px;
+            font-weight: 700;
+            color: var(--deep-blue);
+            margin-bottom: 12px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        /* Right sidebar percentile analysis */
+        .rightbar-placeholder {
+            padding: 20px 12px;
+            color: var(--text-secondary);
+            font-size: 12px;
+            text-align: center;
+            line-height: 1.8;
+        }
+
+        .pct-summary {
+            padding: 12px;
+            background: var(--belly-blue);
+            border-radius: 12px;
+            margin-bottom: 14px;
+            font-size: 13px;
+            color: var(--deep-blue);
+        }
+
+        .pct-bars {
+            margin-bottom: 14px;
+        }
+
+        .pct-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 8px;
+        }
+
+        .pct-label {
+            font-size: 11px;
+            color: var(--text-secondary);
+            width: 62px;
+            flex-shrink: 0;
+        }
+
+        .pct-track {
+            flex: 1;
+            height: 8px;
+            background: #E2E8F0;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        .pct-fill {
+            height: 100%;
+            border-radius: 4px;
+            transition: width 0.4s ease;
+        }
+
+        .pct-val {
+            font-size: 11px;
+            font-weight: 700;
+            width: 32px;
+            text-align: right;
+            color: var(--text);
+        }
+
+        .pct-detail {
+            background: #F8FAFC;
+            border-radius: 10px;
+            padding: 10px 12px;
+            margin-bottom: 12px;
+        }
+
+        .pct-detail-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 11px;
+            padding: 3px 0;
+            color: var(--text-secondary);
+        }
+
+        .pct-interpretation {
+            padding: 10px 12px;
+            background: linear-gradient(135deg, var(--belly-blue), #F0F9FF);
+            border-radius: 10px;
+            border-left: 3px solid var(--brand-blue);
+        }
+
+        .pct-interpretation div {
+            font-size: 11px;
+            color: var(--text);
+            line-height: 1.6;
+        }
+
+        .empty-state {
+            font-size: 12px;
+        }
+
+        .warn-banner {
+            background: #FFF7ED;
+            border: 1px solid #FDBA74;
+            border-left: 4px solid #F97316;
+            border-radius: 10px;
+            padding: 10px 14px;
+            margin-bottom: 20px;
+            font-size: 12px;
+            color: #9A3412;
+            line-height: 1.7;
+        }
+
+        /* Empty state */
+        .empty-state {
+            text-align: center;
+            padding: 80px 20px;
+            color: var(--text-secondary);
+        }
+
+        .empty-state img {
+            width: 120px;
+            opacity: 0.7;
+            margin-bottom: 16px;
+        }
+
+        .empty-state h2 {
+            color: var(--deep-blue);
+            margin-bottom: 8px;
+        }
+
+        /* Responsive */
+        @media (max-width: 1200px) {
+            .rightbar {
+                display: none;
+            }
+        }
+
+        @media (max-width: 900px) {
+            .sidebar {
+                position: absolute;
+                left: -270px;
+                z-index: 90;
+                height: 100%;
+                transition: left 0.3s;
+            }
+            .sidebar.open {
+                left: 0;
+            }
+        }
+
+    </style>
+</head>
+<body>
+    <header class="header">
+        <div class="brand">
+            <div>
+                <div class="brand-title">行业景气高频跟踪</div>
+                <div class="brand-subtitle">高频洞察 · 景气先行</div>
+            </div>
+        </div>
+        <div class="header-right">
+            <span class="update-time" title="数据由内部研究工作台后台统一更新">数据更新：加载中...</span>
+            <a href="/ipm-tracker/alerts" class="header-upload-btn" style="text-decoration:none;" title="高频异动预警：红灯列表、行业趋势一览" onclick="showAlertsView(); return false;">🔔 异动预警</a>
+            <span class="header-group-label">固收信用组</span>
+        </div>
+    </header>
+
+    <div class="main-layout">
+        <aside class="sidebar" id="sidebar">
+            <a href="/ipm-tracker/alerts" class="sidebar-alert-banner" id="sidebarAlertBanner" title="查看今日异动红灯列表" onclick="showAlertsView(); return false;">
+                <div class="alert-banner-left">
+                    <span class="alert-pulse-dot"></span>
+                    <div>
+                        <div class="alert-banner-title">🔔 异动预警</div>
+                        <div class="alert-banner-sub" id="alertBannerSub">加载中...</div>
+                    </div>
+                </div>
+                <div class="alert-banner-count" id="alertBannerCount">—</div>
+            </a>
+            <div class="sidebar-search">
+                <input type="text" id="searchInput" placeholder="搜索指标、行业..." oninput="filterTree()">
+            </div>
+            <div class="tree-toolbar">
+                <button class="tree-tool-btn" onclick="expandAll()" title="全部展开">⤢ 全部展开</button>
+                <button class="tree-tool-btn" onclick="collapseAll()" title="全部折叠">⤡ 全部折叠</button>
+            </div>
+            <div class="tree-container" id="treeContainer">
+                <!-- Tree will be rendered here -->
+            </div>
+        </aside>
+
+        <main class="content" id="mainContent">
+            <!-- Dynamic content -->
+        </main>
+
+        <aside class="rightbar" id="rightSidebar">
+            <div class="rightbar-section" id="rightPercentileSection">
+                <div class="rightbar-title">
+                    历史分位数
+                </div>
+                <div class="rightbar-placeholder" id="rightPercentileContent">
+                    点击左侧指标，查看分位数分析
+                </div>
+            </div>
+        </aside>
+    </div>
+
+    <script>
+        // =========================================================
+        // Data: Indicator tree (will be loaded from JSON in production)
+        // =========================================================
+        let indicatorTree = [];
+        let currentIndicator = null;
+        let currentTimeSeries = [];  // Full time series data
+        let currentChartPeriod = 365; // Days
+        let currentUnit = '';         // Unit of currently selected indicator
+        let realDataCache = {};      // Cache for /api/data/<id>
+
+        // Fallback sample tree if JSON not loaded
+        const sampleTree = [
+            {
+                name: "消费",
+                type: "category",
+                children: [
+                    {
+                        name: "农林牧渔",
+                        type: "subcategory",
+                        children: [
+                            { name: "中国:市场价:生猪(外三元)", id: "S5914495", type: "indicator" },
+                            { name: "期货结算价(连续):生猪", id: "S0273733", type: "indicator" },
+                            { name: "中国:养殖利润:自繁自养生猪", id: "S5021738", type: "indicator" },
+                            { name: "中国:养殖利润:外购仔猪", id: "S5021739", type: "indicator" }
+                        ]
+                    },
+                    {
+                        name: "食品饮料",
+                        type: "subcategory",
+                        children: [
+                            { name: "中国:市场价:大豆(黄豆)", id: "S5914496", type: "indicator" },
+                            { name: "中国:产量:成品糖:当月值", id: "S0028099", type: "indicator" },
+                            { name: "中国:产量:乳制品:当月值", id: "S0028083", type: "indicator" }
+                        ]
+                    }
+                ]
+            },
+            {
+                name: "金融地产",
+                type: "category",
+                children: [
+                    {
+                        name: "银行",
+                        type: "subcategory",
+                        children: [
+                            { name: "贷款余额:同比", id: "M0000272", type: "indicator" },
+                            { name: "社会融资规模:当月值", id: "M5526363", type: "indicator" }
+                        ]
+                    }
+                ]
+            }
+        ];
+
+        // =========================================================
+        // Real data fetching (replaces random sample generators)
+        // =========================================================
+        async function fetchIndicatorData(indicatorId) {
+            // Check cache
+            if (realDataCache[indicatorId]) {
+                return realDataCache[indicatorId];
+            }
+            try {
+                const resp = await fetch(`/ipm-tracker/api/data/${indicatorId}`);
+                const json = await resp.json();
+                if (json.status !== 'ok') {
+                    throw new Error(json.message || 'Failed');
+                }
+                // Build time series array {date, value} from API response
+                const d = json.data;
+                const series = d.times.map((t, i) => ({
+                    date: t,
+                    value: d.values[i]
+                }));
+                const result = {
+                    name: d.name,
+                    category: d['一级'] || '',
+                    subcategory: d['二级'] || '',
+                    unit: d['单位'] || '',
+                    series: series,
+                };
+                realDataCache[indicatorId] = result;
+                return result;
+            } catch (e) {
+                console.error('Fetch real data failed:', e);
+                return null;
+            }
+        }
+
+        function calcStatsFromSeries(series, name, unitFromApi) {
+            if (!series || series.length < 2) return null;
+            const pts = series.filter(s => s.value != null && !isNaN(s.value));
+            if (pts.length < 2) return null;
+            const values = pts.map(s => s.value);
+            const latest = values[values.length - 1];
+            const prev = values[values.length - 2];
+            const mom = prev !== 0 ? ((latest - prev) / Math.abs(prev)) * 100 : 0;
+
+            // 数据频率（按平均间隔天数）
+            const { avgGap, freqLabel } = detectFrequency(series);
+
+            // 同比：回看约 1 年的数据点（按频率换算）
+            const yoyLookback = Math.max(1, Math.round(365 / Math.max(avgGap, 1)));
+            let yoy = null;
+            if (pts.length > yoyLookback) {
+                const yoyBase = values[values.length - 1 - yoyLookback];
+                if (yoyBase !== undefined && yoyBase !== 0) {
+                    yoy = ((latest - yoyBase) / Math.abs(yoyBase)) * 100;
+                }
+            }
+
+            return {
+                latest: latest.toFixed(2),
+                prev: prev.toFixed(2),
+                mom: mom.toFixed(2),
+                yoy: yoy !== null ? yoy.toFixed(2) : '—',
+                unit: unitFromApi,
+                freq: freqLabel,
+                price: latest,
+            };
+        }
+
+        // =========================================================
+        // Frequency detection & data-quality helpers
+        // =========================================================
+        function detectFrequency(series) {
+            let totalGapDays = 0, gapCount = 0;
+            const upto = Math.min(series.length, 20);
+            for (let i = 1; i < upto; i++) {
+                const d1 = new Date(series[i - 1].date + 'T00:00:00');
+                const d2 = new Date(series[i].date + 'T00:00:00');
+                totalGapDays += (d2 - d1) / 86400000;
+                gapCount++;
+            }
+            const avgGap = gapCount > 0 ? totalGapDays / gapCount : 1;
+            let freqLabel;
+            if (avgGap <= 3) freqLabel = '日度';
+            else if (avgGap <= 8) freqLabel = '周度';
+            else if (avgGap <= 20) freqLabel = '约每' + Math.round(avgGap) + '天';
+            else if (avgGap <= 50) freqLabel = '月度';
+            else freqLabel = '低频(约每' + Math.round(avgGap) + '天)';
+            return { avgGap, freqLabel };
+        }
+
+        function detectQualityIssues(series, avgGap) {
+            const issues = [];
+            const pts = (series || []).filter(d => d.value != null && !isNaN(d.value));
+            if (pts.length < 6) {
+                issues.push(`数据点过少（仅 ${pts.length} 个），图表与分位数参考意义有限`);
+                return issues;
+            }
+            const lastDate = new Date(pts[pts.length - 1].date + 'T00:00:00');
+            const now = new Date();
+            const staleDays = Math.floor((now - lastDate) / 86400000);
+            if (staleDays > 90) {
+                issues.push(`数据已约 ${staleDays} 天未更新（最新 ${pts[pts.length - 1].date}），图表可能滞后`);
+            }
+            const thresh = avgGap <= 3 ? 30 : avgGap <= 8 ? 8 : 4;
+            const lastVal = pts[pts.length - 1].value;
+            let run = 0;
+            for (let i = pts.length - 1; i >= 0; i--) {
+                if (pts[i].value === lastVal) run++; else break;
+            }
+            if (run >= thresh && pts.length > thresh + 3) {
+                issues.push(`最新 ${run} 个数据点数值完全相同（${lastVal}），疑似数据停滞，请核对指标口径`);
+            }
+            return issues;
+        }
+
+        function generatePercentile(name, category, subcategory, timeSeries) {
+            // 只使用有效数值点（剔除 null / NaN）
+            const pts = timeSeries.filter(d => d.value != null && !isNaN(d.value));
+            const values = pts.map(d => d.value);
+            const n = values.length;
+            const current = values[n - 1];
+
+            const { avgGap, freqLabel } = detectFrequency(timeSeries);
+
+            // 窗口按自然时长换算成数据点数：近1月 / 近1季(3月) / 近1年
+            // 近1季用 ceil：确保月频数据能取到完整的最近 3 个月（round 可能只取到 2 个点）
+            const w1m = Math.max(1, Math.round(30 / Math.max(avgGap, 1)));
+            const w1q = Math.max(1, Math.ceil(90 / Math.max(avgGap, 1)));
+            const w1y = Math.max(1, Math.round(365 / Math.max(avgGap, 1)));
+
+            // 分位数 = 窗口内小于当前值的点占比；窗口少于 3 个点时无意义，返回 null（前端显示 —）
+            // 注意：严格按目标窗口取点，不因窗口点数少就悄悄换成更大的窗口，避免标签与口径不符
+            function calcPercentile(window) {
+                if (n < 3) return null;
+                const w = Math.min(n, window);
+                if (w < 3) return null;
+                const subset = values.slice(-w);
+                const below = subset.filter(v => v < current).length;
+                return Math.round((below / subset.length) * 100);
+            }
+
+            const pct1m = calcPercentile(w1m);
+            const pct1q = calcPercentile(w1q);
+            const pct1y = calcPercentile(w1y);
+
+            // 近1年窗口内的统计量（与"近1年分位"同窗口，避免口径不一致）
+            const win1y = values.slice(-Math.min(n, w1y));
+            const max1y = win1y.length ? Math.max(...win1y) : null;
+            const min1y = win1y.length ? Math.min(...win1y) : null;
+            const avg1y = win1y.length ? win1y.reduce((a, b) => a + b, 0) / win1y.length : null;
+
+            // Trend: compare recent half vs older half
+            const mid = Math.floor(n / 2);
+            const recentAvg = values.slice(mid).reduce((a, b) => a + b, 0) / Math.max(n - mid, 1);
+            const olderAvg = values.slice(0, mid).reduce((a, b) => a + b, 0) / Math.max(mid, 1);
+            const trendDirection = recentAvg > olderAvg * 1.03 ? '上升' : recentAvg < olderAvg * 0.97 ? '下降' : '震荡';
+
+            function pctLabel(pct) {
+                if (pct >= 90) return '处于历史高位区间';
+                if (pct >= 70) return '处于偏高水平';
+                if (pct >= 30) return '处于历史中位';
+                if (pct >= 10) return '处于偏低水平';
+                return '处于历史低位区间';
+            }
+            const isNull = v => v === null || v === undefined || isNaN(v);
+            const fmt = v => isNull(v) ? '—' : v + '%';
+            const desc = v => isNull(v) ? '数据不足' : pctLabel(v);
+            const fmtN = v => isNull(v) ? '—' : Number(v).toFixed(2);
+            const devPct = (isNull(avg1y) || avg1y === 0)
+                ? ''
+                : `，当前波动幅度 ${(Math.abs(current - parseFloat(avg1y)) / Math.abs(parseFloat(avg1y)) * 100).toFixed(1)}%`;
+
+            return {
+                pct1m, pct1q, pct1y,
+                max1y: fmtN(max1y),
+                min1y: fmtN(min1y),
+                avg1y: fmtN(avg1y),
+                trendDirection,
+                freqLabel,
+                current: current.toFixed(2),
+                summary: `「${name}」当前值 ${current.toFixed(2)}：近1月分位 ${fmt(pct1m)}（${desc(pct1m)}）、近1季分位 ${fmt(pct1q)}（${desc(pct1q)}）、近1年分位 ${fmt(pct1y)}（${desc(pct1y)}），整体趋势呈${trendDirection}态势。`,
+                interpretations: [
+                    `【分位数分析】近1月分位数 ${fmt(pct1m)}，近1季分位数 ${fmt(pct1q)}，近1年分位数 ${fmt(pct1y)}；数据频率：${freqLabel}。`,
+                    `【波动区间】近1年最高 ${fmtN(max1y)}，最低 ${fmtN(min1y)}，均值 ${fmtN(avg1y)}${devPct}。`,
+                    `【趋势研判】近期走势呈${trendDirection}趋势，${category}行业${subcategory}细分方向值得持续跟踪。`
+                ]
+            };
+        }
+
+        // =========================================================
+        // Tree rendering
+        // =========================================================
+        function renderTree(nodes, level = 1, parentPath = [], isRoot = false) {
+            const container = document.createElement('div');
+            // Root container is always visible; non-root starts collapsed
+            container.className = isRoot ? 'tree-children expanded' : 'tree-children';
+
+            nodes.forEach((node, index) => {
+                const hasChildren = node.children && node.children.length > 0;
+                const row = document.createElement('div');
+                row.className = `tree-row level-${level}`;
+                row.dataset.name = node.name;
+                row.dataset.id = node.id || '';
+                row.dataset.type = node.type;
+
+                const path = [...parentPath, node.name];
+                row.dataset.path = JSON.stringify(path);
+
+                let iconHtml = '';
+                if (hasChildren) {
+                    iconHtml = '<span class="tree-icon chevron">▶</span>';
+                } else {
+                    iconHtml = '<span class="tree-icon">•</span>';
+                }
+
+                const badge = hasChildren ? `<span class="tree-badge">${node.children.length}</span>` : '';
+
+                row.innerHTML = `${iconHtml}<span class="tree-label">${node.name}</span>${badge}`;
+
+                if (hasChildren) {
+                    // Parent rows start collapsed (no 'expanded' class)
+                    row.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        toggleNode(row, container.children[index * 2 + 1]);
+                    });
+                } else if (node.type === 'indicator') {
+                    row.addEventListener('click', () => selectIndicator(node, path));
+                }
+
+                container.appendChild(row);
+
+                if (hasChildren) {
+                    const childContainer = renderTree(node.children, level + 1, path, false);
+                    container.appendChild(childContainer);
+                }
+            });
+
+            return container;
+        }
+
+        function toggleNode(row, childContainer) {
+            const isLevel1 = row.classList.contains('level-1');
+            const isExpanded = row.classList.contains('expanded');
+
+            if (isExpanded) {
+                // Collapse this node
+                row.classList.remove('expanded');
+                if (childContainer) childContainer.classList.remove('expanded');
+            } else {
+                // Accordion: if level-1, collapse all other level-1 siblings first
+                if (isLevel1) {
+                    const allLevel1Rows = document.querySelectorAll('.tree-row.level-1.expanded');
+                    allLevel1Rows.forEach(r => {
+                        r.classList.remove('expanded');
+                        const sibling = r.nextElementSibling;
+                        if (sibling && sibling.classList.contains('tree-children')) {
+                            sibling.classList.remove('expanded');
+                        }
+                    });
+                }
+
+                // Expand this node
+                row.classList.add('expanded');
+                if (childContainer) childContainer.classList.add('expanded');
+            }
+        }
+
+        function selectIndicator(node, path) {
+            currentIndicator = { ...node, path };
+            // 预警视图开着时直接点指标：关闭预警覆盖层并恢复右栏
+            hideAlertsView();
+
+            // Update active state
+            document.querySelectorAll('.tree-row.active').forEach(r => r.classList.remove('active'));
+            const rows = document.querySelectorAll('.tree-row');
+            rows.forEach(r => {
+                if (r.dataset.id === node.id) {
+                    r.classList.add('active');
+                }
+            });
+
+            renderIndicatorDetail(node, path);
+        }
+
+        function filterTree() {
+            const keyword = document.getElementById('searchInput').value.trim().toLowerCase();
+            const allRows = document.querySelectorAll('.tree-row');
+            const allChildren = document.querySelectorAll('.tree-children');
+
+            if (!keyword) {
+                // Reset: collapse all, only root visible
+                allRows.forEach(r => {
+                    r.style.display = '';
+                    r.classList.remove('expanded');
+                });
+                allChildren.forEach(c => c.classList.remove('expanded'));
+                // Ensure root children are visible
+                const rootChildren = document.querySelectorAll('#treeContainer > .tree-children');
+                rootChildren.forEach(c => c.classList.add('expanded'));
+                return;
+            }
+
+            // Search mode: expand matching paths
+            allRows.forEach(row => {
+                const text = (row.dataset.name || '').toLowerCase();
+                const match = text.includes(keyword);
+                row.style.display = match ? '' : 'none';
+
+                // Expand parent path if indicator matches
+                if (match && row.dataset.type === 'indicator') {
+                    row.classList.add('active');
+                    let parent = row.parentElement;
+                    while (parent && parent.classList.contains('tree-children')) {
+                        parent.classList.add('expanded');
+                        const parentRow = parent.previousElementSibling;
+                        if (parentRow && parentRow.classList.contains('tree-row')) {
+                            parentRow.style.display = '';
+                            parentRow.classList.add('expanded');
+                        }
+                        parent = parent.parentElement;
+                    }
+                }
+            });
+
+            // Show root
+            const rootChildren = document.querySelectorAll('#treeContainer > .tree-children');
+            rootChildren.forEach(c => c.classList.add('expanded'));
+        }
+
+        function expandAll() {
+            const allRows = document.querySelectorAll('.tree-row[data-type]');
+            const allChildren = document.querySelectorAll('#treeContainer .tree-children');
+            allRows.forEach(r => r.classList.add('expanded'));
+            allChildren.forEach(c => c.classList.add('expanded'));
+        }
+
+        function collapseAll() {
+            const allRows = document.querySelectorAll('.tree-row.expanded');
+            const allChildren = document.querySelectorAll('#treeContainer .tree-children');
+            allRows.forEach(r => r.classList.remove('expanded'));
+            allChildren.forEach(c => c.classList.remove('expanded'));
+            // Keep root container visible (empty state still shows)
+            const rootChildren = document.querySelectorAll('#treeContainer > .tree-children');
+            rootChildren.forEach(c => c.classList.add('expanded'));
+        }
+
+        // =========================================================
+        // Main content rendering (async, fetches real Wind data)
+        // =========================================================
+        async function renderIndicatorDetail(node, path) {
+            const category = path[0] || '';
+            const subcategory = path[1] || '';
+
+            // Show loading state
+            document.getElementById('mainContent').innerHTML = `
+                <div class="empty-state">
+                    <p style="font-size:16px;color:var(--brand-blue);">⏳ 正在加载数据...</p>
+                    <p style="color:var(--text-secondary);">指标：${node.name}</p>
+                </div>
+            `;
+
+            // Fetch real data from Wind API
+            const rawData = await fetchIndicatorData(node.id);
+            const nPts = rawData && rawData.series ? rawData.series.filter(p => p.value !== null && p.value !== undefined).length : 0;
+            if (!rawData || !rawData.series || nPts < 2) {
+                const hint = nPts === 1
+                    ? '该指标当前仅有 1 个缓存数据点（低频 / 新指标 / 上游停更），暂无法绘制走势图。'
+                    : '该指标暂无缓存数据，请联系管理员在门户后台执行一键更新。';
+                document.getElementById('mainContent').innerHTML = `
+                    <div class="empty-state">
+                        <p style="font-size:16px;color:#DC2626;">⚠️ 数据点不足</p>
+                        <p style="color:var(--text-secondary);">「${node.name}」：${hint}</p>
+                    </div>
+                `;
+                return;
+            }
+
+            const timeSeries = rawData.series;
+            const stats = calcStatsFromSeries(timeSeries, node.name, rawData.unit);
+            if (!stats) {
+                document.getElementById('mainContent').innerHTML = `
+                    <div class="empty-state">
+                        <p style="font-size:16px;color:#DC2626;">⚠️ 数据点不足</p>
+                        <p style="color:var(--text-secondary);">「${node.name}」的数据点数量不足以进行分析。</p>
+                    </div>
+                `;
+                return;
+            }
+
+            // Store globally for chart period switching
+            currentTimeSeries = timeSeries;
+            currentChartPeriod = 365;
+            currentUnit = rawData.unit || '';
+
+            const pct = generatePercentile(node.name, category, subcategory, timeSeries);
+            const { avgGap } = detectFrequency(timeSeries);
+            const issues = detectQualityIssues(timeSeries, avgGap);
+
+            const momVal = parseFloat(stats.mom);
+            const yoyVal = parseFloat(stats.yoy);
+            const momClass = momVal > 0 ? 'up' : momVal < 0 ? 'down' : 'neutral';
+            const yoyClass = yoyVal > 0 ? 'up' : yoyVal < 0 ? 'down' : 'neutral';
+            const momArrow = momVal > 0 ? '▲' : momVal < 0 ? '▼' : '—';
+            const yoyArrow = yoyVal > 0 ? '▲' : yoyVal < 0 ? '▼' : '—';
+            const yoyDisplay = isNaN(yoyVal) ? '—' : `${yoyArrow} ${Math.abs(yoyVal).toFixed(2)}%`;
+
+            document.getElementById('mainContent').innerHTML = `
+                <div class="breadcrumb">
+                    <span>🏠 首页</span>
+                    <span>/</span>
+                    <span>${category}</span>
+                    <span>/</span>
+                    <span>${subcategory}</span>
+                    <span>/</span>
+                    <span>${node.name}</span>
+                </div>
+
+                <div class="indicator-header">
+                    <div class="indicator-title">
+                        <h1>${node.name}</h1>
+                        <div class="indicator-meta">
+                            <span>📁 分类：${category} / ${subcategory}</span>
+                            <span>🕒 频率：${stats.freq || '—'}</span>
+                            <span>📊 数据来源：本地缓存（由门户后台统一维护）</span>
+                        </div>
+                    </div>
+                </div>
+
+                ${issues.length ? `<div class="warn-banner">${issues.map(i => `<div>⚠️ ${i}</div>`).join('')}</div>` : ''}
+
+                <div class="section-card">
+                    <div class="section-header">
+                        <div class="section-dot"></div>
+                        <div class="section-title">静态数据快照</div>
+                        <span class="section-subtitle">数据更新时间：${timeSeries.length > 0 ? timeSeries[timeSeries.length - 1].date : '—'}</span>
+                    </div>
+                    <div class="data-grid">
+                        <div class="data-item">
+                            <div class="data-item-label">最新值</div>
+                            <div class="data-item-value">${stats.latest}<span style="font-size:12px;color:#64748B;margin-left:4px;">${stats.unit}</span></div>
+                        </div>
+                        <div class="data-item">
+                            <div class="data-item-label">前值</div>
+                            <div class="data-item-value">${stats.prev}<span style="font-size:12px;color:#64748B;margin-left:4px;">${stats.unit}</span></div>
+                        </div>
+                        <div class="data-item">
+                            <div class="data-item-label">环比变动</div>
+                            <div class="data-item-value ${momClass}">${momArrow} ${Math.abs(stats.mom)}%</div>
+                        </div>
+                        <div class="data-item">
+                            <div class="data-item-label">同比变动</div>
+                            <div class="data-item-value ${isNaN(yoyVal) ? '' : yoyClass}">${yoyDisplay}</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="section-card">
+                    <div class="section-header">
+                        <div class="section-dot"></div>
+                        <div class="section-title">时间序列走势</div>
+                    </div>
+                    <div class="chart-toolbar">
+                        <button class="chart-period-btn active" data-period="365">近1年</button>
+                        <button class="chart-period-btn" data-period="180">近6个月</button>
+                        <button class="chart-period-btn" data-period="90">近3个月</button>
+                        <button class="chart-period-btn" data-period="30">近1个月</button>
+                        <span class="chart-period-sep">|</span>
+                        <input type="date" class="chart-date-input" id="chartDateStart" title="起始日期">
+                        <span class="chart-date-label">至</span>
+                        <input type="date" class="chart-date-input" id="chartDateEnd" title="结束日期">
+                        <button class="chart-period-btn" id="chartDateApply">应用</button>
+                    </div>
+                    <div class="chart-container">
+                        <canvas id="trendChart"></canvas>
+                    </div>
+                </div>
+
+                <div class="section-card">
+                    <div class="section-header">
+                        <div class="section-dot"></div>
+                        <div class="section-title">季节性分析（跨年度对比）</div>
+                    </div>
+                    <div class="chart-container">
+                        <canvas id="seasonalChart"></canvas>
+                    </div>
+                </div>
+            `;
+
+            // Render percentile analysis in right sidebar
+            renderRightPercentile(pct, stats, node);
+
+            drawChart(timeSeries);
+
+            // Render seasonal chart below the time series
+            renderSeasonalChart(node.id);
+
+            // Bind chart period buttons (after innerHTML)
+            bindChartPeriodButtons();
+        }
+
+        function bindChartPeriodButtons() {
+            // Period buttons
+            const periodBtns = document.querySelectorAll('.chart-period-btn[data-period]');
+            periodBtns.forEach(btn => {
+                btn.addEventListener('click', function() {
+                    periodBtns.forEach(b => b.classList.remove('active'));
+                    this.classList.add('active');
+                    const days = parseInt(this.dataset.period);
+                    currentChartPeriod = days;
+                    applyChartPeriod();
+                });
+            });
+
+            // Custom date apply
+            const dateApplyBtn = document.getElementById('chartDateApply');
+            if (dateApplyBtn) {
+                dateApplyBtn.addEventListener('click', function() {
+                    applyCustomDateRange();
+                });
+            }
+
+            // Set default dates in date inputs
+            if (currentTimeSeries.length > 0) {
+                const lastDate = currentTimeSeries[currentTimeSeries.length - 1].date;
+                const startInput = document.getElementById('chartDateStart');
+                const endInput = document.getElementById('chartDateEnd');
+                if (startInput) startInput.value = lastDate;
+                if (endInput) endInput.value = lastDate;
+            }
+        }
+
+        function applyChartPeriod() {
+            if (!currentTimeSeries.length) return;
+            const days = currentChartPeriod;
+            const now = new Date(currentTimeSeries[currentTimeSeries.length - 1].date);
+            const cutoff = new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
+            const cutoffStr = cutoff.toISOString().slice(0, 10);
+            const filtered = currentTimeSeries.filter(d => d.date >= cutoffStr);
+            if (filtered.length < 2) {
+                // At least show last 2 data points
+                filtered.unshift(currentTimeSeries[currentTimeSeries.length - 2]);
+            }
+            drawChart(filtered);
+        }
+
+        function applyCustomDateRange() {
+            if (!currentTimeSeries.length) return;
+            const startInput = document.getElementById('chartDateStart');
+            const endInput = document.getElementById('chartDateEnd');
+            if (!startInput || !endInput) return;
+            const startDate = startInput.value;
+            const endDate = endInput.value;
+            if (!startDate || !endDate) return;
+
+            const filtered = currentTimeSeries.filter(d => d.date >= startDate && d.date <= endDate);
+            if (filtered.length < 2) {
+                alert('所选日期范围内数据点不足，请扩大范围');
+                return;
+            }
+            // Deselect period buttons
+            document.querySelectorAll('.chart-period-btn[data-period]').forEach(b => b.classList.remove('active'));
+            drawChart(filtered);
+        }
+
+        function drawChart(data) {
+            const canvas = document.getElementById('trendChart');
+            if (!canvas) return;
+
+            const ctx = canvas.getContext('2d');
+            const container = canvas.parentElement;
+            const dpr = window.devicePixelRatio || 1;
+            canvas.width = container.clientWidth * dpr;
+            canvas.height = container.clientHeight * dpr;
+            canvas.style.width = container.clientWidth + 'px';
+            canvas.style.height = container.clientHeight + 'px';
+            ctx.scale(dpr, dpr);
+
+            const width = container.clientWidth;
+            const height = container.clientHeight;
+            const padding = { top: 30, right: 30, bottom: 40, left: 50 };
+            const chartWidth = width - padding.left - padding.right;
+            const chartHeight = height - padding.top - padding.bottom;
+
+            ctx.clearRect(0, 0, width, height);
+
+            // 剔除无效值（null / NaN），避免个别缺失点导致整图失效
+            const valid = (data || []).filter(d => d.value != null && !isNaN(d.value));
+            if (valid.length < 2) {
+                ctx.fillStyle = '#94A3B8';
+                ctx.font = '13px sans-serif';
+                ctx.textAlign = 'center';
+                ctx.fillText('有效数据点不足，暂无法绘制图表', width / 2, height / 2);
+                return;
+            }
+
+            const values = valid.map(d => d.value);
+            const min = Math.min(...values);
+            const max = Math.max(...values);
+            const range = max - min;
+            const flat = range === 0;
+
+            // Grid lines
+            ctx.strokeStyle = '#E2E8F0';
+            ctx.lineWidth = 1;
+            for (let i = 0; i <= 4; i++) {
+                const y = padding.top + chartHeight * i / 4;
+                ctx.beginPath();
+                ctx.moveTo(padding.left, y);
+                ctx.lineTo(width - padding.right, y);
+                ctx.stroke();
+
+                const label = flat ? min.toFixed(1) : (max - range * i / 4).toFixed(1);
+                ctx.fillStyle = '#64748B';
+                ctx.font = '11px sans-serif';
+                ctx.textAlign = 'right';
+                ctx.fillText(label, padding.left - 8, y + 4);
+            }
+
+            // X axis labels
+            const xStep = Math.ceil(valid.length / 6);
+            ctx.textAlign = 'center';
+            ctx.fillStyle = '#64748B';
+            for (let i = 0; i < valid.length; i += xStep) {
+                const x = padding.left + chartWidth * (i / (valid.length - 1));
+                const date = valid[i].date.slice(5);
+                ctx.fillText(date, x, height - padding.bottom + 18);
+            }
+
+            // 数值完全平坦时把线画在中间，避免贴底
+            const yPos = (v) => flat
+                ? padding.top + chartHeight / 2
+                : padding.top + chartHeight * (1 - (v - min) / range);
+
+            // Line
+            const pts = [];
+            ctx.beginPath();
+            valid.forEach((d, i) => {
+                const x = padding.left + chartWidth * (i / (valid.length - 1));
+                const y = yPos(d.value);
+                pts.push({ x, y, label: d.date, value: d.value, unit: currentUnit });
+                if (i === 0) ctx.moveTo(x, y);
+                else ctx.lineTo(x, y);
+            });
+            ctx.strokeStyle = '#2563EB';
+            ctx.lineWidth = 2.5;
+            ctx.stroke();
+
+            // Gradient fill
+            ctx.lineTo(padding.left + chartWidth, padding.top + chartHeight);
+            ctx.lineTo(padding.left, padding.top + chartHeight);
+            ctx.closePath();
+            const gradient = ctx.createLinearGradient(0, padding.top, 0, padding.top + chartHeight);
+            gradient.addColorStop(0, 'rgba(37, 99, 235, 0.18)');
+            gradient.addColorStop(1, 'rgba(37, 99, 235, 0)');
+            ctx.fillStyle = gradient;
+            ctx.fill();
+
+            // Points
+            valid.forEach((d, i) => {
+                if (i % 4 !== 0) return;
+                const x = padding.left + chartWidth * (i / (valid.length - 1));
+                const y = yPos(d.value);
+                ctx.beginPath();
+                ctx.arc(x, y, 3, 0, Math.PI * 2);
+                ctx.fillStyle = '#FFFFFF';
+                ctx.fill();
+                ctx.strokeStyle = '#2563EB';
+                ctx.lineWidth = 1.5;
+                ctx.stroke();
+            });
+
+            // Hover tooltip
+            bindChartTooltip(canvas, pts);
+        }
+
+        // =========================================================
+        // Chart tooltip: hover over chart to show exact values
+        // =========================================================
+        let _chartTooltipEl = null;
+
+        function getChartTooltip() {
+            if (!_chartTooltipEl) {
+                _chartTooltipEl = document.createElement('div');
+                _chartTooltipEl.style.cssText = [
+                    'position:fixed',
+                    'display:none',
+                    'pointer-events:none',
+                    'z-index:9999',
+                    'background:rgba(15,23,42,0.94)',
+                    'color:#fff',
+                    'padding:8px 12px',
+                    'border-radius:8px',
+                    'font:12px/1.7 "Microsoft YaHei", sans-serif',
+                    'box-shadow:0 6px 20px rgba(0,0,0,0.28)',
+                    'white-space:nowrap'
+                ].join(';') + ';';
+                document.body.appendChild(_chartTooltipEl);
+            }
+            return _chartTooltipEl;
+        }
+
+        function bindChartTooltip(canvas, points) {
+            const tip = getChartTooltip();
+            // Assign directly (not addEventListener) so re-drawing rebinds cleanly
+            canvas.onmousemove = function(e) {
+                if (!points || !points.length) { tip.style.display = 'none'; return; }
+                const rect = canvas.getBoundingClientRect();
+                const mx = e.clientX - rect.left;
+                const my = e.clientY - rect.top;
+
+                // Find nearest data point (linear scan; point count is small)
+                let best = null, bestD = Infinity;
+                for (let i = 0; i < points.length; i++) {
+                    const p = points[i];
+                    const dx = p.x - mx, dy = p.y - my;
+                    const d = dx * dx + dy * dy;
+                    if (d < bestD) { bestD = d; best = p; }
+                }
+                // Only show when the cursor is reasonably close (within ~45px)
+                if (!best || bestD > 45 * 45) { tip.style.display = 'none'; return; }
+
+                const num = (best.value == null || isNaN(best.value))
+                    ? '—'
+                    : Number(best.value).toLocaleString('zh-CN', { maximumFractionDigits: 4 });
+                const unitText = best.unit ? ' ' + best.unit : '';
+                let html = '<div style="font-weight:600;">' + best.label + '</div>';
+                if (best.yearLabel) {
+                    html += '<div style="color:#93C5FD;font-size:11px;margin-top:1px;">' + best.yearLabel + '</div>';
+                }
+                html += '<div style="margin-top:2px;">' + num + unitText + '</div>';
+                tip.innerHTML = html;
+
+                // Position near cursor, flip if it would overflow the viewport
+                const tw = tip.offsetWidth, th = tip.offsetHeight;
+                let tx = e.clientX + 16, ty = e.clientY + 16;
+                if (tx + tw > window.innerWidth - 8) tx = e.clientX - tw - 16;
+                if (ty + th > window.innerHeight - 8) ty = e.clientY - th - 16;
+                tip.style.left = tx + 'px';
+                tip.style.top = ty + 'px';
+                tip.style.display = 'block';
+            };
+            canvas.onmouseleave = function() {
+                tip.style.display = 'none';
+            };
+        }
+
+        // =========================================================
+        // Seasonal chart (multi-year overlay)
+        // =========================================================
+        async function fetchSeasonalData(indicatorId) {
+            try {
+                const resp = await fetch(`/ipm-tracker/api/data/seasonal/${indicatorId}`);
+                const json = await resp.json();
+                if (json.status !== 'ok') {
+                    throw new Error(json.message || 'Failed');
+                }
+                const d = json.data;
+                return d.times.map((t, i) => ({
+                    date: t,
+                    value: d.values[i],
+                    unit: d['单位'] || ''
+                }));
+            } catch (e) {
+                console.error('Fetch seasonal data failed:', e);
+                return null;
+            }
+        }
+
+        function getYearColor(year, maxYear) {
+            // Most recent year highlighted in deep red; earlier years use blue gradient
+            if (year === maxYear) {
+                return '#C41E3A';
+            }
+            const palette = {
+                2021: '#DBEAFE',
+                2022: '#BFDBFE',
+                2023: '#93C5FD',
+                2024: '#60A5FA',
+                2025: '#3B82F6'
+            };
+            return palette[year] || '#94A3B8';
+        }
+
+        function daysInMonth(year, month) {
+            return new Date(year, month, 0).getDate();
+        }
+
+        async function renderSeasonalChart(indicatorId) {
+            const series = await fetchSeasonalData(indicatorId);
+            if (!series || series.length < 10) {
+                // Not enough historical data for a seasonal chart
+                const canvas = document.getElementById('seasonalChart');
+                if (!canvas) return;
+                const ctx = canvas.getContext('2d');
+                const container = canvas.parentElement;
+                const dpr = window.devicePixelRatio || 1;
+                canvas.width = container.clientWidth * dpr;
+                canvas.height = container.clientHeight * dpr;
+                canvas.style.width = container.clientWidth + 'px';
+                canvas.style.height = container.clientHeight + 'px';
+                ctx.scale(dpr, dpr);
+                ctx.clearRect(0, 0, container.clientWidth, container.clientHeight);
+                ctx.fillStyle = '#94A3B8';
+                ctx.font = '13px sans-serif';
+                ctx.textAlign = 'center';
+                ctx.fillText('历史数据不足，暂无法生成季节性图表', container.clientWidth / 2, container.clientHeight / 2);
+                return;
+            }
+            drawSeasonalChart(series);
+        }
+
+        function drawSeasonalChart(data) {
+            const canvas = document.getElementById('seasonalChart');
+            if (!canvas) return;
+
+            const ctx = canvas.getContext('2d');
+            const container = canvas.parentElement;
+            const dpr = window.devicePixelRatio || 1;
+            canvas.width = container.clientWidth * dpr;
+            canvas.height = container.clientHeight * dpr;
+            canvas.style.width = container.clientWidth + 'px';
+            canvas.style.height = container.clientHeight + 'px';
+            ctx.scale(dpr, dpr);
+
+            const width = container.clientWidth;
+            const height = container.clientHeight;
+            const padding = { top: 34, right: 30, bottom: 40, left: 50 };
+            const chartWidth = width - padding.left - padding.right;
+            const chartHeight = height - padding.top - padding.bottom;
+
+            ctx.clearRect(0, 0, width, height);
+
+            // 剔除无效值（null / NaN）
+            const valid = data.filter(d => d.value != null && !isNaN(d.value));
+            if (valid.length < 2) {
+                ctx.fillStyle = '#94A3B8';
+                ctx.font = '13px sans-serif';
+                ctx.textAlign = 'center';
+                ctx.fillText('有效数据点不足，暂无法绘制季节性图表', width / 2, height / 2);
+                return;
+            }
+
+            // Group by year
+            const byYear = {};
+            valid.forEach(d => {
+                const year = parseInt(d.date.slice(0, 4));
+                if (!byYear[year]) byYear[year] = [];
+                byYear[year].push(d);
+            });
+            const years = Object.keys(byYear).map(Number).sort();
+            const maxYear = Math.max(...years);
+
+            // Convert each point to fractional month position (0 = Jan 1, 12 = Dec 31)
+            years.forEach(year => {
+                byYear[year].forEach(d => {
+                    const month = parseInt(d.date.slice(5, 7));
+                    const day = parseInt(d.date.slice(8, 10));
+                    d.monthPos = (month - 1) + (day - 1) / daysInMonth(year, month);
+                });
+            });
+
+            // Compute value range across all years
+            const allValues = valid.map(d => d.value);
+            let min = Math.min(...allValues);
+            let max = Math.max(...allValues);
+            const range = max - min;
+            if (range === 0) { min = min - 1; max = max + 1; }
+            // Add 8% padding above and below
+            min = min - range * 0.08;
+            max = max + range * 0.08;
+            const paddedRange = max - min || 1;
+
+            // Grid lines (horizontal)
+            ctx.strokeStyle = '#E2E8F0';
+            ctx.lineWidth = 1;
+            for (let i = 0; i <= 4; i++) {
+                const y = padding.top + chartHeight * i / 4;
+                ctx.beginPath();
+                ctx.moveTo(padding.left, y);
+                ctx.lineTo(width - padding.right, y);
+                ctx.stroke();
+
+                const label = (max - paddedRange * i / 4).toFixed(1);
+                ctx.fillStyle = '#64748B';
+                ctx.font = '11px sans-serif';
+                ctx.textAlign = 'right';
+                ctx.fillText(label, padding.left - 8, y + 4);
+            }
+
+            // X axis: month labels
+            const monthLabels = ['1月', '2月', '3月', '4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月'];
+            ctx.textAlign = 'center';
+            ctx.fillStyle = '#64748B';
+            ctx.font = '11px sans-serif';
+            monthLabels.forEach((label, idx) => {
+                const x = padding.left + chartWidth * (idx / 12);
+                ctx.fillText(label, x, height - padding.bottom + 18);
+                // subtle vertical grid
+                ctx.strokeStyle = '#F1F5F9';
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                ctx.moveTo(x, padding.top);
+                ctx.lineTo(x, height - padding.bottom);
+                ctx.stroke();
+            });
+
+            // Draw each year line
+            const pts = [];
+            years.forEach(year => {
+                const points = byYear[year].sort((a, b) => a.monthPos - b.monthPos);
+                if (points.length < 2) return;
+
+                ctx.beginPath();
+                points.forEach((d, i) => {
+                    const x = padding.left + chartWidth * (d.monthPos / 12);
+                    const y = padding.top + chartHeight * (1 - (d.value - min) / paddedRange);
+                    const month = parseInt(d.date.slice(5, 7));
+                    const day = parseInt(d.date.slice(8, 10));
+                    pts.push({ x, y, label: month + '月' + day + '日', yearLabel: year + '年', value: d.value, unit: d.unit || currentUnit });
+                    if (i === 0) ctx.moveTo(x, y);
+                    else ctx.lineTo(x, y);
+                });
+                const isLatest = year === maxYear;
+                ctx.strokeStyle = getYearColor(year, maxYear);
+                ctx.lineWidth = isLatest ? 3.5 : 1.8;
+                ctx.stroke();
+
+                // Highlight last point for the most recent year
+                if (isLatest && points.length > 0) {
+                    const last = points[points.length - 1];
+                    const x = padding.left + chartWidth * (last.monthPos / 12);
+                    const y = padding.top + chartHeight * (1 - (last.value - min) / paddedRange);
+                    ctx.beginPath();
+                    ctx.arc(x, y, 5, 0, Math.PI * 2);
+                    ctx.fillStyle = '#C41E3A';
+                    ctx.fill();
+                    ctx.strokeStyle = '#FFFFFF';
+                    ctx.lineWidth = 2;
+                    ctx.stroke();
+                }
+            });
+
+            // Legend
+            const legendX = width - padding.right - 10;
+            const legendY = padding.top - 20;
+            ctx.textAlign = 'right';
+            ctx.font = '11px sans-serif';
+            let offset = 0;
+            years.slice().reverse().forEach(year => {
+                const text = String(year);
+                const textWidth = ctx.measureText(text).width;
+                const boxWidth = textWidth + 18;
+                ctx.fillStyle = getYearColor(year, maxYear);
+                ctx.fillRect(legendX - offset - boxWidth + 6, legendY - 6, 10, 3);
+                ctx.fillStyle = year === maxYear ? '#C41E3A' : '#475569';
+                ctx.font = year === maxYear ? 'bold 11px sans-serif' : '11px sans-serif';
+                ctx.fillText(text, legendX - offset - 4, legendY);
+                offset += boxWidth + 10;
+            });
+
+            // Hover tooltip
+            bindChartTooltip(canvas, pts);
+        }
+
+        function renderRightPercentile(pct, stats, node) {
+            const container = document.getElementById('rightPercentileContent');
+            if (!container) return;
+
+            const isNull = (val) => val === null || val === undefined || isNaN(val);
+            const pctColor = (val) => isNull(val) ? '#94A3B8' : val > 60 ? '#DC2626' : val < 30 ? '#16A34A' : '#F59E0B';
+            const pctDisplay = (val) => isNull(val) ? '—' : val + '%';
+            const pctWidth = (val) => isNull(val) ? 0 : val;
+            const trendColor = pct.trendDirection === '上升' ? '#DC2626' : pct.trendDirection === '下降' ? '#16A34A' : '#64748B';
+
+            container.innerHTML = `
+                <div class="pct-summary">
+                    <strong>${node.name}</strong><br>
+                    <span style="font-size:12px;color:var(--text-secondary);">${stats.latest} ${stats.unit} · ${pct.freqLabel || stats.freq || ''}</span>
+                </div>
+                <div class="pct-bars">
+                    <div class="pct-row">
+                        <span class="pct-label">近1月分位</span>
+                        <div class="pct-track"><div class="pct-fill" style="width:${pctWidth(pct.pct1m)}%;background:${pctColor(pct.pct1m)}"></div></div>
+                        <span class="pct-val">${pctDisplay(pct.pct1m)}</span>
+                    </div>
+                    <div class="pct-row">
+                        <span class="pct-label">近1季分位</span>
+                        <div class="pct-track"><div class="pct-fill" style="width:${pctWidth(pct.pct1q)}%;background:${pctColor(pct.pct1q)}"></div></div>
+                        <span class="pct-val">${pctDisplay(pct.pct1q)}</span>
+                    </div>
+                    <div class="pct-row">
+                        <span class="pct-label">近1年分位</span>
+                        <div class="pct-track"><div class="pct-fill" style="width:${pctWidth(pct.pct1y)}%;background:${pctColor(pct.pct1y)}"></div></div>
+                        <span class="pct-val">${pctDisplay(pct.pct1y)}</span>
+                    </div>
+                </div>
+                <div class="pct-detail">
+                    <div class="pct-detail-row"><span>趋势方向</span><span style="color:${trendColor};font-weight:600;">${pct.trendDirection}</span></div>
+                    <div class="pct-detail-row"><span>1年最高</span><span>${pct.max1y}</span></div>
+                    <div class="pct-detail-row"><span>1年最低</span><span>${pct.min1y}</span></div>
+                    <div class="pct-detail-row"><span>1年均值</span><span>${pct.avg1y}</span></div>
+                    <div class="pct-detail-row"><span>环比变动</span><span style="color:${parseFloat(stats.mom) > 0 ? '#DC2626' : parseFloat(stats.mom) < 0 ? '#16A34A' : '#64748B'};font-weight:600;">${stats.mom}%</span></div>
+                    <div class="pct-detail-row"><span>同比变动</span><span>${stats.yoy === '—' ? '—' : stats.yoy + '%'}</span></div>
+                </div>
+                <div class="pct-interpretation">
+                    ${pct.interpretations.map(p => `<div style="margin-bottom:6px;font-size:11px;line-height:1.5;">${p}</div>`).join('')}
+                </div>
+            `;
+        }
+
+        function renderEmptyState() {
+            document.getElementById('mainContent').innerHTML = `
+                <div class="empty-state">
+                    <h2>欢迎使用 行业景气高频跟踪</h2>
+                    <p>请在左侧目录中选择指标，查看静态数据、时间序列与历史分位数分析。</p>
+                </div>
+            `;
+            // Reset right sidebar
+            const pctContent = document.getElementById('rightPercentileContent');
+            if (pctContent) {
+                pctContent.innerHTML = '点击左侧指标，查看分位数分析';
+            }
+        }
+
+        // =========================================================
+        // Initialization
+        // =========================================================
+        function convertApiTree(apiData) {
+            return apiData.map(cat => ({
+                name: cat.name,
+                type: 'category',
+                children: (cat.children || []).map(sub => ({
+                    name: sub.name,
+                    type: 'subcategory',
+                    children: (sub.indicators || []).map(ind => ({
+                        name: ind.name,
+                        id: ind.id,
+                        type: 'indicator'
+                    }))
+                }))
+            }));
+        }
+
+        async function init() {
+            try {
+                // 读取数据新鲜度，更新头部"数据更新"时间：
+                // 主显示 = 最近后台更新日期；括号内 = 数据真实最新日期
+                // （周末/节假日无新数据时，两者会不同，属正常现象）
+                try {
+                    const statusResp = await fetch('/ipm-tracker/api/data/status');
+                    if (statusResp.ok) {
+                        const st = await statusResp.json();
+                        const el = document.querySelector('.update-time');
+                        if (el) {
+                            const fmt8 = (s) => {
+                                s = String(s || '');
+                                return s.length === 8 ? s.slice(0, 4) + '-' + s.slice(4, 6) + '-' + s.slice(6, 8) : s;
+                            };
+                            const inc = st.last_increment ? fmt8(st.last_increment) : '';
+                            const dataDate = st.data_latest_date ? String(st.data_latest_date).slice(0, 10) : '';
+                            if (inc) {
+                                el.textContent = '数据更新：' + inc + (dataDate && dataDate !== inc ? '（数据至 ' + dataDate + '）' : '');
+                            } else if (dataDate) {
+                                el.textContent = '数据更新：' + dataDate;
+                            } else {
+                                el.textContent = '数据更新：未知';
+                            }
+                            el.title = '最近后台更新 ' + (st.last_increment || '未知') +
+                                       ' · 数据实际最新日期 ' + (dataDate || '未知') +
+                                       ' · 主缓存更新于 ' + (st.cache_updated || '未知') +
+                                       ' · 数据来源：门户后台统一更新';
+                        }
+                    }
+                } catch (e) { /* ignore status errors */ }
+
+                // Prefer Flask API (consistent with backend), fallback to static JSON or sample
+                const apiResponse = await fetch('/ipm-tracker/api/indicators');
+                if (apiResponse.ok) {
+                    const apiData = await apiResponse.json();
+                    indicatorTree = convertApiTree(apiData.data || []);
+                } else {
+                    const response = await fetch('/ipm-tracker/static/data/indicator_tree.json');
+                    indicatorTree = response.ok ? await response.json() : sampleTree;
+                }
+            } catch (e) {
+                indicatorTree = sampleTree;
+            }
+
+            const treeContainer = document.getElementById('treeContainer');
+            const rootContainer = renderTree(indicatorTree, 1, [], true);
+            treeContainer.appendChild(rootContainer);
+
+            renderEmptyState();
+        }
+
+        window.addEventListener('resize', () => {
+            if (currentTimeSeries.length > 0) {
+                drawChart(currentTimeSeries);
+                renderSeasonalChart(currentIndicator ? currentIndicator.id : null);
+            }
+        });
+
+        // ── 侧栏顶部：异动预警醒目横幅（实时读取红灯数）──
+        (function loadAlertBanner() {
+            const banner = document.getElementById('sidebarAlertBanner');
+            const sub = document.getElementById('alertBannerSub');
+            const count = document.getElementById('alertBannerCount');
+            if (!banner || !sub || !count) return;
+            fetch('/ipm-tracker/api/alerts')
+                .then(r => r.json())
+                .then(res => {
+                    if (res.status !== 'ok') throw new Error(res.message || 'API error');
+                    const red = res.red_count, yellow = res.yellow_count;
+                    count.textContent = red;
+                    sub.textContent = red > 0 ? `今日红灯 ${red} · 黄牌 ${yellow}` : '全部指标正常';
+                    if (red === 0) banner.classList.add('calm');
+                })
+                .catch(() => {
+                    count.textContent = '!';
+                    sub.textContent = '预警数据加载失败';
+                });
+        })();
+
+        // ── 异动预警视图（嵌入主面板内容区，不跳转页面）──
+        let AL_DATA = null;
+        let AL_LEVEL = 'red';
+        let AL_ONLY_BATCH = false;
+        let AL_INDUSTRY = '';   // '' = 所有行业
+
+        const AL_RULE_MAP = [
+            { key: 'σ',      desc: '变动 Z-score：最新一期变动偏离历史逐期变动 ≥2σ 触发，≥2.5σ 直接红牌' },
+            { key: '分位',   desc: '历史分位：最新值处于 2021 年以来 ≥90%/≤10% 区间（≥95%/≤5% 加权）' },
+            { key: '新高',   desc: '久违新高：创 2021 年以来新高，且前一极值在 ≥12 期之前（天天新高已降噪）' },
+            { key: '新低',   desc: '久违新低：创 2021 年以来新低，且前一极值在 ≥12 期之前（天天新低已降噪）' },
+            { key: '连续',   desc: '连续同向：连续 3~8 期同方向变动（超过 8 期视为结构性趋势，不再作为信号）' },
+        ];
+        function alRuleDescOf(sig) {
+            for (const r of AL_RULE_MAP) if (sig.includes(r.key)) return r.desc;
+            return '';
+        }
+
+        function alSkeleton() {
+            return `
+            <div class="alerts-view-head">
+                <div>
+                    <div class="av-title">🔔 异动预警 · 今日红灯</div>
+                    <div class="av-sub" id="alUpdateTime"></div>
+                </div>
+                <button class="alerts-view-close" onclick="hideAlertsView()">✕ 返回面板</button>
+            </div>
+            <div class="card rules-card">
+                <div class="rules-title">📏 异动判定规则（2021 年以来全量数据统计）</div>
+                <div class="rule-line"><span class="rule-tag">变动 Z-score</span>最新一期变动偏离历史逐期变动 <b>≥2σ</b> 触发，<b>≥2.5σ</b> 直接红牌</div>
+                <div class="rule-line"><span class="rule-tag">历史分位</span>最新值处于 2021 年以来 <b>≥90% / ≤10%</b> 区间（≥95%/≤5% 为极端，加权）</div>
+                <div class="rule-line"><span class="rule-tag">久违新高/新低</span>创 2021 年以来极值，且前一极值在 <b>≥12 期</b>之前（天天新高的趋势不算新闻，已降噪）</div>
+                <div class="rule-line"><span class="rule-tag">连续同向</span>连续 <b>3~8 期</b>同方向变动（超过 8 期视为结构性趋势，不再作为信号）</div>
+                <div class="rule-score">记分制判级：z≥2.5σ <b>+3</b> ｜ 久违新高/低 <b>+2</b> ｜ 2σ~2.5σ <b>+1.5</b> ｜ 分位极端 <b>+1</b> ｜ 连续同向 <b>+1</b> ｜ 分位 90/10 <b>+0.5</b> —— 总分 <b>≥3 判红</b>，否则黄牌</div>
+            </div>
+            <div class="summary" id="alSummary"></div>
+            <div class="industry-strip" id="alIndustryStrip"></div>
+            <div class="toolbar">
+                <button class="filter-btn active red" data-level="red" onclick="alSetLevel(this)">🔴 今日红灯</button>
+                <button class="filter-btn yellow" data-level="yellow" onclick="alSetLevel(this)">🟡 黄色关注</button>
+                <button class="filter-btn" data-level="all" onclick="alSetLevel(this)">全部异动</button>
+                <button class="filter-btn batch" id="alBatchBtn" onclick="alToggleBatch()">只看本期更新</button>
+                <select id="alSigFilter" onchange="alRender()">
+                    <option value="">全部信号类型</option>
+                    <option value="σ">变动异常（Z-score）</option>
+                    <option value="分位">历史分位极端</option>
+                    <option value="新高">久违新高</option>
+                    <option value="新低">久违新低</option>
+                    <option value="连续">连续同向</option>
+                </select>
+                <div class="spacer"></div>
+            </div>
+            <div id="alList" class="loading">正在扫描指标异动…</div>
+            <div class="card notes-card">
+                <div class="notes-title">📝 备注 · 降噪处理方法</div>
+                <ul>
+                    <li><b>久违新高/新低必须时隔 ≥12 期</b>：若前一历史极值距今不足 12 期（趋势中"天天新高/新低"），视为趋势延续，不产生信号。</li>
+                    <li><b>连续同向超过 8 期视为结构性趋势</b>：单边走势超过 8 期不再作为异动信号，仅 3~8 期计入（避免把长期趋势误报为异动）。</li>
+                    <li><b>Z-score 基于"逐期变动"而非水平值</b>：以 2021 年以来逐期变动的均值与标准差为基准，避免趋势性序列因水平值长期偏离造成假阳性。</li>
+                    <li><b>历史分位基于 2021 年以来全部观测</b>（含最新一期）：≥90%/≤10% 触发，≥95%/≤5% 加权，分位信号只作加权、不单独判红。</li>
+                    <li><b>各指标按自身频率取最新一期</b>：日频看最近交易日、月频看最新发布月，不跨频率强行对齐；最新数据距今超过 45 天的指标会标注"数据陈旧"，其信号仅供参考。</li>
+                    <li><b>记分制二次降噪</b>：单一弱信号仅黄牌，需多信号叠加（总分 ≥3）才判红，红色列表更短更聚焦。</li>
+                    <li><b>数据来源</b>：门户后台统一维护的本地缓存（2021 年起全量序列），后台更新后自动重新计算。</li>
+                </ul>
+            </div>`;
+        }
+
+        function showAlertsView() {
+            const main = document.getElementById('mainContent');
+            if (!main) return;
+            // 打开预警视图时隐藏右侧"历史分位数"栏
+            const rb = document.getElementById('rightSidebar');
+            if (rb) rb.style.display = 'none';
+            let v = document.getElementById('alertsView');
+            if (!v) {
+                v = document.createElement('div');
+                v.id = 'alertsView';
+                v.className = 'alerts-view';
+                main.appendChild(v);
+            }
+            v.innerHTML = alSkeleton();
+            v.style.display = 'block';
+            main.scrollTop = 0;
+            // 骨架重建后，按钮态与当前筛选变量保持一致
+            document.querySelectorAll('#alertsView .filter-btn[data-level]').forEach(b =>
+                b.classList.toggle('active', b.dataset.level === AL_LEVEL));
+            const bb = document.getElementById('alBatchBtn');
+            if (bb) bb.classList.toggle('active', AL_ONLY_BATCH);
+            alFetch();
+        }
+
+        function hideAlertsView() {
+            const v = document.getElementById('alertsView');
+            if (v) v.style.display = 'none';
+            // 关闭预警视图时恢复右侧"历史分位数"栏
+            const rb = document.getElementById('rightSidebar');
+            if (rb) rb.style.display = '';
+        }
+
+        function alFetch() {
+            fetch('/ipm-tracker/api/alerts')
+                .then(r => r.json())
+                .then(res => {
+                    if (res.status !== 'ok') throw new Error(res.message || 'API error');
+                    AL_DATA = res;
+                    const inc = alFmtInc(res.last_increment);
+                    const dataDate = res.data_latest_date || '';
+                    const ut = document.getElementById('alUpdateTime');
+                    if (ut) ut.textContent =
+                        (inc ? `数据更新：${inc}` : '') + (dataDate && dataDate !== inc ? `（数据至 ${dataDate}）` : '') +
+                        ` · 扫描 ${res.updated.slice(11, 16)}`;
+                    const freshTotal = res.industries.reduce((s, x) => s + x.fresh, 0);
+                    const sumEl = document.getElementById('alSummary');
+                    if (sumEl) sumEl.innerHTML = `
+                        <div class="card stat-card blue"><div class="stat-num">${res.total_indicators}</div><div class="stat-label">监测指标</div></div>
+                        <div class="card stat-card red"><div class="stat-num">${res.red_count}</div><div class="stat-label">🔴 红色异动</div></div>
+                        <div class="card stat-card yellow"><div class="stat-num">${res.yellow_count}</div><div class="stat-label">🟡 黄色关注</div></div>
+                        <div class="card stat-card"><div class="stat-num">${res.total_indicators - res.alerted}</div><div class="stat-label">正常区间</div></div>
+                        <div class="card stat-card"><div class="stat-num">${freshTotal}</div><div class="stat-label">本期更新指标（${inc || '—'}）</div></div>`;
+                    const totalUp = res.industries.reduce((s, x) => s + x.up, 0);
+                    const totalDown = res.industries.reduce((s, x) => s + x.down, 0);
+                    const totalFlat = res.industries.reduce((s, x) => s + x.flat, 0);
+                    const strip = document.getElementById('alIndustryStrip');
+                    if (strip) {
+                        const allCard = `
+                            <div class="ind-card all-card card ${AL_INDUSTRY === '' ? 'active' : ''}" data-name="" onclick="alSetIndustry('')">
+                                <div class="ind-name">所有行业</div>
+                                <div class="ind-alerts">${res.red_count ? `<span style="color:#FFD1D1;font-weight:700">🔴 ${res.red_count}</span> ` : ''}${res.yellow_count ? `<span style="color:#FFE4B3;font-weight:700">🟡 ${res.yellow_count}</span>` : ''}</div>
+                                <div class="ind-trend"><span>↑${totalUp}</span> / <span>↓${totalDown}</span> / →${totalFlat}</div>
+                                <div class="ind-fresh">本期更新 ${freshTotal} / ${res.total_indicators} 个指标</div>
+                            </div>`;
+                        strip.innerHTML = allCard + res.industries.map(x => `
+                            <div class="ind-card card ${AL_INDUSTRY === x.name ? 'active' : ''}" data-name="${x.name}" onclick="alSetIndustry('${x.name}')">
+                                <div class="ind-name">${x.name}</div>
+                                <div class="ind-alerts">${x.red ? `<span class="r">🔴 ${x.red}</span> ` : ''}${x.yellow ? `<span class="y">🟡 ${x.yellow}</span>` : ''}${!x.red && !x.yellow ? '<span class="none">无异动</span>' : ''}</div>
+                                <div class="ind-trend"><span class="up">↑${x.up}</span> / <span class="down">↓${x.down}</span> / →${x.flat}</div>
+                                <div class="ind-fresh">本期更新 ${x.fresh} / ${x.total} 个指标</div>
+                            </div>`).join('');
+                    }
+                    alRender();
+                })
+                .catch(e => {
+                    const list = document.getElementById('alList');
+                    if (list) { list.className = 'err'; list.textContent = '加载失败：' + e.message; }
+                });
+        }
+
+        function alSetLevel(btn) {
+            document.querySelectorAll('#alertsView .filter-btn[data-level]').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            AL_LEVEL = btn.dataset.level;
+            alRender();
+        }
+        function alToggleBatch() {
+            AL_ONLY_BATCH = !AL_ONLY_BATCH;
+            document.getElementById('alBatchBtn').classList.toggle('active', AL_ONLY_BATCH);
+            alRender();
+        }
+        function alSetIndustry(name) {
+            AL_INDUSTRY = name;   // '所有行业' 传 ''
+            document.querySelectorAll('#alertsView .ind-card').forEach(c =>
+                c.classList.toggle('active', c.dataset.name === AL_INDUSTRY));
+            alRender();
+        }
+
+        function alSparkline(trend, dir) {
+            if (!trend || trend.length < 2) return '';
+            const w = 150, h = 36, pad = 2;
+            const min = Math.min(...trend), max = Math.max(...trend);
+            const span = (max - min) || 1;
+            const pts = trend.map((v, i) => {
+                const x = pad + i * (w - 2 * pad) / (trend.length - 1);
+                const y = h - pad - (v - min) / span * (h - 2 * pad);
+                return x.toFixed(1) + ',' + y.toFixed(1);
+            }).join(' ');
+            const color = dir === 'up' ? '#DC2626' : (dir === 'down' ? '#16A34A' : '#64748B');
+            const last = pts.split(' ').pop().split(',');
+            return `<svg class="spark" viewBox="0 0 ${w} ${h}">` +
+                `<polyline points="${pts}" fill="none" stroke="${color}" stroke-width="1.5"/>` +
+                `<circle cx="${last[0]}" cy="${last[1]}" r="2.5" fill="${color}"/></svg>`;
+        }
+
+        function alFmt(v, digits) {
+            if (v === null || v === undefined) return '—';
+            return Number(v).toLocaleString('zh-CN', { maximumFractionDigits: digits === undefined ? 2 : digits });
+        }
+        function alFmtInc(inc) {
+            inc = String(inc || '');
+            return inc.length === 8 ? inc.slice(0, 4) + '-' + inc.slice(4, 6) + '-' + inc.slice(6, 8) : inc;
+        }
+
+        function alAlertCard(a, i) {
+            const dirCls = a.direction, dirArrow = a.direction === 'up' ? '↑' : (a.direction === 'down' ? '↓' : '→');
+            const pctTxt = a.change_pct !== null ? ` (${a.change_pct > 0 ? '+' : ''}${alFmt(a.change_pct)}%)` : '';
+            const stale = a.age_days !== null && a.age_days > 45 ? ` <span style="color:#D97706">（数据${a.age_days}天未更新）</span>` : '';
+            const batchBadge = a.in_last_batch ? '<span class="batch-badge">本期</span>' : '';
+            const sigRules = a.signals.map(s => {
+                const d = alRuleDescOf(s);
+                return d ? `<div class="sig-rule"><span class="sig-name">▸ ${s}</span><br><span class="rule-desc">规则：${d}</span></div>` : '';
+            }).join('');
+            return `<div class="card alert-card ${a.level}" id="alCard${i}" onclick="alToggle(${i})">
+                <div class="alert-main">
+                    <div class="level-dot ${a.level}"></div>
+                    <div>
+                        <div class="ind-name">${a.name}${batchBadge}</div>
+                        <div class="ind-cat">${a['一级']} / ${a['二级']} · ${a.id}</div>
+                    </div>
+                    <div class="metric">
+                        <div class="m-label">最新值（${a.latest_date}）</div>
+                        <div class="m-value">${alFmt(a.latest)} ${a['单位'] || ''}${stale}</div>
+                    </div>
+                    <div class="metric">
+                        <div class="m-label">较上期</div>
+                        <div class="m-value ${dirCls}">${dirArrow} ${a.change > 0 ? '+' : ''}${alFmt(a.change)}${pctTxt}</div>
+                    </div>
+                    <div class="badges">${a.signals.map(s =>
+                        `<span class="badge ${a.level === 'red' ? '' : 'soft'}">${s}</span>`).join('')}</div>
+                    ${alSparkline(a.trend, a.direction)}
+                    <div class="expand-icon">▶</div>
+                </div>
+                <div class="alert-detail">
+                    <span class="kv">历史分位：<b>${alFmt(a.percentile, 1)}%</b></span>
+                    <span class="kv">变动 Z-score：<b>${a.zscore > 0 ? '+' : ''}${alFmt(a.zscore)}</b></span>
+                    <span class="kv">连续同向：<b>${a.streak} 期</b></span>
+                    <span class="kv">得分：<b>${a.score}</b>（≥3 判红）</span>
+                    <a class="detail-link" onclick="event.stopPropagation(); alGotoIndicator('${a.id}')">在景气面板中查看 →</a>
+                    ${sigRules ? `<div class="sig-rules">${sigRules}</div>` : ''}
+                </div>
+            </div>`;
+        }
+
+        function alRender() {
+            const sigSel = document.getElementById('alSigFilter');
+            const list = document.getElementById('alList');
+            if (!AL_DATA || !list) return;
+            const sig = sigSel ? sigSel.value : '';
+
+            const rows = AL_DATA.alerts.filter(a =>
+                (AL_LEVEL === 'all' || a.level === AL_LEVEL) &&
+                (!AL_INDUSTRY || a['一级'] === AL_INDUSTRY) &&
+                (!AL_ONLY_BATCH || a.in_last_batch) &&
+                (!sig || a.signals.some(s => s.includes(sig)))
+            );
+
+            if (!rows.length) {
+                list.className = 'empty';
+                list.innerHTML = AL_DATA.alerts.length ? '当前筛选条件下无异动指标' : '🎉 全部指标均在正常区间内，无异动';
+                return;
+            }
+            list.className = '';
+
+            const order = AL_DATA.industries.map(x => x.name);
+            const groups = {};
+            rows.forEach(a => {
+                const k = a['一级'] || '未分类';
+                (groups[k] = groups[k] || []).push(a);
+            });
+            const groupNames = Object.keys(groups).sort((x, y) =>
+                (order.indexOf(x) === -1 ? 99 : order.indexOf(x)) - (order.indexOf(y) === -1 ? 99 : order.indexOf(y)));
+
+            let idx = 0;
+            list.innerHTML = groupNames.map(g => {
+                const items = groups[g];
+                const r = items.filter(a => a.level === 'red').length;
+                const y = items.length - r;
+                const header = `<div class="group-header"><h2>${g}</h2>
+                    <span class="counts">${r ? `<span class="r">🔴 红 ${r}</span> · ` : ''}<span class="y">🟡 黄 ${y}</span> · 共 ${items.length} 个异动</span></div>`;
+                const cards = items.map(a => alAlertCard(a, idx++)).join('');
+                return header + cards;
+            }).join('');
+        }
+
+        function alToggle(i) {
+            document.getElementById('alCard' + i).classList.toggle('open');
+        }
+
+        // 从预警卡片跳回景气面板并定位到该指标
+        function alGotoIndicator(id) {
+            hideAlertsView();
+            const row = document.querySelector(`.tree-row[data-id="${id}"]`);
+            if (!row) return;
+            let parent = row.parentElement;
+            while (parent && parent.id !== 'treeContainer') {
+                if (parent.classList.contains('tree-children')) {
+                    parent.classList.add('expanded');
+                    const parentRow = parent.previousElementSibling;
+                    if (parentRow && parentRow.classList.contains('tree-row')) parentRow.classList.add('expanded');
+                }
+                parent = parent.parentElement;
+            }
+            row.click();
+            // 只滚动左侧指标树容器，把行滚到树内居中（绝不滚动整个页面，避免页头移出视口）
+            const tc = document.getElementById('treeContainer');
+            if (tc) {
+                const tcRect = tc.getBoundingClientRect();
+                const rowRect = row.getBoundingClientRect();
+                tc.scrollTop += (rowRect.top - tcRect.top) - tc.clientHeight / 2 + rowRect.height / 2;
+            }
+        }
+
+        init();
+    </script>
+
+</body>
+</html>

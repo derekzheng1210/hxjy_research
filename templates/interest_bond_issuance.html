@@ -1,0 +1,128 @@
+{% extends "interest_bond_base.html" %}
+{% block title %}国债·地方债发行跟踪 · 内部研究工作台{% endblock %}
+{% block nav %}issuance{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='interest_bond/css/issuance.css') }}">
+<script src="{{ url_for('static', filename='vendor/echarts.min.js') }}"></script>
+{% endblock %}
+
+{% block content %}
+<header class="page-head">
+  <div>
+    <h1>国债·地方债发行跟踪</h1>
+    <div class="subline">
+      <span id="asOfText">数据截止 —</span>
+    </div>
+  </div>
+  <div class="page-actions">
+    <label class="year-control"><span>观察年度</span>
+      <select id="yearSelect" aria-label="观察年度">
+        {% for year in years %}<option value="{{ year }}" {% if year == current_year %}selected{% endif %}>{{ year }}年</option>{% endfor %}
+      </select>
+    </label>
+    <button class="btn btn-ghost" id="manageBtn">限额管理</button>
+  </div>
+</header>
+
+<section class="section-block">
+  <div class="sec-head">
+    <div class="sec-title"><span class="sec-index">01</span><h2>年度发行进度</h2></div>
+    <p>国债按净增加口径,地方债按发行增量口径｜单位:亿元</p>
+  </div>
+  <div class="progress-grid" id="progressGrid" aria-live="polite"></div>
+
+  <div class="card progress-timeline">
+    <div class="timeline-heading">
+      <div><strong>历年发行节奏比较</strong><span id="progressCategoryLabel" class="tag-soft">全部品种</span></div>
+      <span class="basis-tag" id="progressBasis">历史=实际发行100%｜当年=限额100%</span>
+    </div>
+    <div class="compare-controls">
+      <div class="compare-row">
+        <span class="compare-label">比较品种</span>
+        <div class="chips" id="progressCategoryTabs" aria-label="比较品种">
+          {% for category in categories %}<button data-category="{{ category }}" class="chip active" aria-pressed="true">{{ category }}</button>{% endfor %}
+        </div>
+      </div>
+      <div class="compare-row years-row">
+        <span class="compare-label">比较年份</span>
+        <div class="chips" id="progressYearChips" aria-label="比较年份">
+          {% for year in years %}<button data-year="{{ year }}" class="chip active" aria-pressed="true">{{ year }}</button>{% endfor %}
+        </div>
+      </div>
+    </div>
+    <div id="issuanceProgressChart" class="progress-chart" role="img" aria-label="所选政府债品种历年累计发行进度比较曲线"></div>
+    <div class="empty-state hidden" id="progressChartEmpty">所选品种和年份暂无日度发行数据。</div>
+  </div>
+</section>
+
+<section class="section-block">
+  <div class="sec-head">
+    <div class="sec-title"><span class="sec-index">02</span><h2>20年及以上债券发行节奏</h2></div>
+    <div class="page-actions">
+      <div class="seg" id="scopeTabs" role="tablist">
+        <button data-scope="treasury">国债</button><button data-scope="local">地方债</button><button data-scope="total" class="active">总计</button>
+      </div>
+      <button class="text-btn" id="allYearsBtn">显示全部年份</button>
+    </div>
+  </div>
+  <div class="card">
+    <div class="timeline-heading">
+      <div><strong id="chartScopeLabel">国债＋地方债</strong></div>
+      <span class="basis-tag">年内累计发行额,不与限额比较</span>
+    </div>
+    <div id="longTermChart" class="big-chart" role="img" aria-label="20年及以上债券年内累计发行曲线"></div>
+    <div class="empty-state hidden" id="chartEmpty">尚无20年及以上债券数据。</div>
+  </div>
+</section>
+
+<section class="section-block">
+  <div class="sec-head">
+    <div class="sec-title"><span class="sec-index">03</span><h2>政金债发行节奏</h2></div>
+    <div class="page-actions">
+      <button class="text-btn" id="policyAllYearsBtn">显示全部年份</button>
+    </div>
+  </div>
+  <div class="card">
+    <div class="timeline-heading">
+      <div><strong>政策性银行金融债</strong></div>
+      <span class="basis-tag">年内累计发行额,不与限额比较</span>
+    </div>
+    <div id="policyFinancialChart" class="big-chart" role="img" aria-label="政金债年内累计发行曲线"></div>
+    <div class="empty-state hidden" id="policyFinancialEmpty">尚无政金债数据。</div>
+  </div>
+</section>
+
+<div class="modal-backdrop hidden" id="adminModal" role="dialog" aria-modal="true" aria-labelledby="adminTitle">
+  <div class="modal">
+    <button class="modal-close" id="modalClose" aria-label="关闭">×</button>
+    <h2 id="adminTitle">限额管理</h2>
+    <div id="adminLoginView">
+      <p>修改限额需要管理员验证。</p>
+      <label class="field"><span>管理员密码</span><input type="password" id="adminPassword" autocomplete="current-password"></label>
+      <div class="error-text" id="adminError"></div>
+      <button class="btn btn-primary wide" id="adminLoginBtn">验证并继续</button>
+    </div>
+    <div id="adminPanel" class="hidden">
+      <div class="modal-toolbar">
+        <p>限额保存后立即重算进度,不会反向修改债券分类。</p>
+        <button class="btn btn-ghost small" id="addYearBtn">新增年份</button>
+      </div>
+      <div class="table-wrap limit-table-wrap">
+        <table class="data limit-table">
+          <thead><tr><th>年份</th>{% for category in categories %}<th>{{ category }}</th>{% endfor %}</tr></thead>
+          <tbody id="limitBody"></tbody>
+        </table>
+      </div>
+      <div class="modal-actions">
+        <span class="modal-spacer"></span>
+        <button class="btn btn-ghost" id="cancelBtn">取消</button>
+        <button class="btn btn-primary" id="saveLimitsBtn">保存限额</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>window.TRACKER_BOOT={years:{{ years|tojson }},categories:{{ categories|tojson }}};</script>
+<script src="{{ url_for('static', filename='interest_bond/js/issuance.js') }}"></script>
+{% endblock %}

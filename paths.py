@@ -28,6 +28,7 @@ PRIMARY_PRICING_CACHE = DATA_DIR / "primary_market_pricing" / "cache.db"
 # 用户上传与日志
 UPLOADS_DIR = DATA_ROOT / "uploads"
 LOGS_DIR = DATA_ROOT / "logs"
+PAGE_VISIBILITY_FILE = DATA_ROOT / "page_visibility.json"
 
 # 内部知识库运行态数据（代码位于门户仓库，业务数据全部外置）
 INTERNAL_KNOWLEDGE_BASE_DIR = DATA_ROOT / "internal_knowledge_base"

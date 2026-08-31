@@ -1,0 +1,81 @@
+{% extends "interest_bond_base.html" %}
+{% block title %}新老券利差跟踪 · 内部研究工作台{% endblock %}
+{% block nav %}bond_switch{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='interest_bond/css/bond_switch.css') }}">
+<script src="{{ url_for('static', filename='vendor/echarts.min.js') }}"></script>
+{% endblock %}
+
+{% block content %}
+<header class="page-head">
+  <div>
+    <h1>新老券利差跟踪</h1>
+    <div class="subline"><span id="headMeta">数据加载中…</span></div>
+  </div>
+</header>
+
+<div class="switch-tabs" id="marketTabs">
+  <button class="switch-tab active" data-panel="treasuryPanel">30年国债</button>
+  <button class="switch-tab" data-panel="localPanel">地方债</button>
+</div>
+
+<section id="treasuryPanel" class="switch-panel">
+  <section class="role-section">
+    <div class="section-title-row">
+      <div><h2>活跃券信息</h2></div>
+      <div class="rule-note" id="ruleNote"></div>
+    </div>
+    <div class="role-grid" id="roleGrid"><div class="skeleton"></div></div>
+  </section>
+
+  <section class="card chart-card">
+    <div class="section-title-row compact">
+      <div><h2>新老券估值与利差</h2><p>上图为“左券估值 − 右券估值”利差，下图为中债估值收益率</p></div>
+      <div class="range-bar" id="rangeBar">
+        <button class="range-btn" data-r="issue">自发行时</button>
+        <button class="range-btn" data-r="3m">3M</button>
+        <button class="range-btn" data-r="6m">6M</button>
+        <button class="range-btn active" data-r="1y">1年</button>
+        <button class="range-btn" data-r="custom">自定义</button>
+        <span class="custom-dates" id="customDates">
+          <input type="date" id="customStart"><span>至</span><input type="date" id="customEnd">
+        </span>
+      </div>
+    </div>
+
+    <div class="pair-builder">
+      <div class="pair-rows" id="pairRows"></div>
+      <button class="btn btn-outline" id="addPair" type="button">新建利差</button>
+      <div class="ma-toggles">
+        <span>手动开启均值</span>
+        <label><input type="checkbox" value="5">5D</label>
+        <label><input type="checkbox" value="10">10D</label>
+        <label><input type="checkbox" value="30">30D</label>
+      </div>
+    </div>
+    <div id="bondSpreadChart"></div>
+  </section>
+
+  <section class="card tax-card">
+    <div class="section-title-row compact">
+      <div><h2>免税—非免税利差</h2><p>次次活跃券按当日成交量判定，取其中债估值 − 固定免税债券 中债估值</p></div>
+      <div class="tax-current" id="taxCurrent">--</div>
+    </div>
+    <div id="taxSpreadChart"></div>
+  </section>
+
+</section>
+
+<section id="localPanel" class="switch-panel hidden">
+  <div class="coming-card">
+    <div class="coming-icon">地</div>
+    <h2>地方债新老券利差</h2>
+    <p>敬请期待</p>
+  </div>
+</section>
+
+<script>
+</script>
+<script src="{{ url_for('static', filename='interest_bond/js/bond_switch.js') }}"></script>
+{% endblock %}

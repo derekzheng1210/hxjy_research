@@ -10,7 +10,11 @@ import traceback
 from .generators import run_all
 from paths import DATA_DIR
 
-DEFAULT_MODULES = ["bond_picker", "spread_monitor", "strategy_dashboard", "credit_std_dev", "institution_flow_rates", "primary_market_pricing"]
+DEFAULT_MODULES = [
+    "bond_picker", "spread_monitor", "strategy_dashboard", "credit_std_dev",
+    "institution_flow_rates", "primary_market_pricing", "rate_spread",
+    "rate_bond_switch", "rate_issuance", "ipm_tracker",
+]
 VALID_MODULES = set(DEFAULT_MODULES)
 
 # 状态持久化：gunicorn 多 worker 下，启动更新的 worker 与轮询进度的 worker
@@ -104,7 +108,7 @@ def start_update(modules: list[str] | None = None) -> tuple[bool, str]:
 def _worker(modules: list[str]) -> None:
     try:
         _append("开始数据库更新", 1)
-        standard_modules = [module for module in modules if module != "primary_market_pricing"]
+        standard_modules = [module for module in modules if module not in {"primary_market_pricing", "rate_spread", "rate_bond_switch", "rate_issuance", "ipm_tracker"}]
         if standard_modules:
             run_all(progress=_append, modules=standard_modules)
         if "primary_market_pricing" in modules:
@@ -116,6 +120,28 @@ def _worker(modules: list[str]) -> None:
                     90 if percent is None else 90 + int(max(0, min(100, percent)) * 0.08),
                 )
             )
+        if "ipm_tracker" in modules:
+            from ipm_tracker.updater import run_update as run_ipm_update
+
+            _append("开始更新行业景气高频数据")
+            result = run_ipm_update(progress=_append)
+            if isinstance(result, dict) and result.get("ok") is False:
+                raise RuntimeError(result.get("error") or "行业景气高频数据更新失败")
+            _append("行业景气高频数据更新完成")
+        rate_tasks = (
+            ("rate_spread", "超长端利率利差", "interest_bond.spread.updater", "run_update"),
+            ("rate_bond_switch", "新老券利差", "interest_bond.bond_switch.updater", "run_update"),
+            ("rate_issuance", "国债、地方债发行", "interest_bond.issuance.updater", "run_update"),
+        )
+        for module, label, module_path, function_name in rate_tasks:
+            if module not in modules:
+                continue
+            _append(f"开始更新{label}")
+            imported = __import__(module_path, fromlist=[function_name])
+            result = getattr(imported, function_name)("incremental")
+            if isinstance(result, dict) and result.get("ok") is False:
+                raise RuntimeError(result.get("error") or f"{label}更新失败")
+            _append(f"{label}更新完成")
         with _lock:
             status = _load_status()
             status["ok"] = True

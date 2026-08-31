@@ -622,14 +622,14 @@ def _strategy_html(payload: dict) -> str:
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>信用债策略仪表盘</title>
+<title>信用骑乘策略</title>
 <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
 <style>
 *{{box-sizing:border-box}}body{{margin:0;background:#f6f7fb;color:#172033;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif}}.main{{max-width:1180px;margin:0 auto;padding:22px}}h1{{font-size:22px;margin:0 0 6px}}.meta{{color:#64748b;font-size:13px;margin-bottom:18px}}.grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));gap:14px}}.panel{{background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:14px}}.chart{{height:320px}}table{{width:100%;border-collapse:collapse;background:#fff;border:1px solid #e5e7eb}}th,td{{padding:9px;border-bottom:1px solid #eef2f7;text-align:right;font-size:13px}}th:first-child,td:first-child{{text-align:left}}
 </style>
 </head>
 <body><main class="main">
-<h1>信用债策略仪表盘</h1>
+<h1>信用骑乘策略</h1>
 <div class="meta">数据日期: <span id="dt"></span> / 生成时间: <span id="gen"></span></div>
 <div class="grid"><div class="panel"><div id="curveChart" class="chart"></div></div><div class="panel"><div id="benchChart" class="chart"></div></div></div>
 <h2 style="font-size:16px;margin:18px 0 10px">最新曲线点</h2><div id="table"></div>

@@ -1,0 +1,120 @@
+/* 新老券利差跟踪 */
+.switch-tabs {
+  display: inline-flex;
+  background: #e9eef5;
+  border-radius: 9px;
+  padding: 3px;
+  margin-bottom: 14px;
+}
+.switch-tab {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  padding: 8px 24px;
+  border-radius: 7px;
+  font: 600 13px var(--font);
+  cursor: pointer;
+}
+.switch-tab.active { background: #fff; color: var(--primary); box-shadow: var(--shadow); }
+.switch-panel { min-height: 500px; }
+
+.role-section { margin-bottom: 14px; }
+.section-title-row { display: flex; justify-content: space-between; gap: 18px; align-items: flex-end; margin-bottom: 10px; }
+.section-title-row.compact { align-items: center; }
+.section-title-row h2 { font-size: 16px; margin: 0 0 3px; }
+.section-title-row p { font-size: 11px; color: var(--muted); margin: 0; }
+.rule-note { font-size: 11px; color: var(--faint); text-align: right; }
+.role-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px;
+}
+.role-card {
+  --role: #2f6fad;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-top: 3px solid var(--role);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  box-shadow: var(--shadow);
+}
+.role-card .role-tag { color: var(--role); font-size: 11px; font-weight: 700; letter-spacing: .08em; }
+.role-card h3 { margin: 5px 0 3px; font-size: 17px; }
+.role-card .bond-code { color: var(--faint); font-size: 11px; }
+.role-card .yield-row { display: flex; align-items: baseline; gap: 8px; margin: 10px 0; }
+.role-card .yield-row b { font-size: 24px; font-variant-numeric: tabular-nums; }
+.role-card .yield-row span { color: var(--muted); font-size: 11px; }
+.role-metrics { display: grid; grid-template-columns: repeat(2, 1fr); gap: 7px 12px; }
+.role-metrics span { color: var(--muted); font-size: 11px; }
+.role-metrics b { display: block; color: var(--ink-2); font-size: 13px; margin-top: 2px; font-variant-numeric: tabular-nums; }
+
+.chart-card, .tax-card { margin-bottom: 14px; }
+.pair-builder {
+  display: flex;
+  align-items: flex-end;
+  gap: 9px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  background: #fbfcfe;
+}
+.pair-builder label > span { display: block; color: var(--muted); font-size: 10px; margin-bottom: 4px; }
+.pair-builder select { min-width: 190px; padding: 6px 30px 6px 9px; }
+.minus-mark { color: var(--faint); font-size: 20px; padding-bottom: 5px; }
+.pair-rows { display: flex; flex-direction: column; gap: 7px; flex-wrap: wrap; flex: 1; min-width: 260px; }
+.pair-row { display: flex; align-items: flex-end; gap: 9px; }
+.pair-row .pair-dot { width: 9px; height: 9px; border-radius: 50%; margin-bottom: 11px; flex: none; }
+.pair-row .remove-pair {
+  border: 0;
+  background: none;
+  color: var(--faint);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 6px 4px;
+}
+.pair-row .remove-pair:hover { color: #e63946; }
+.custom-dates { display: none; align-items: center; gap: 5px; font-size: 11px; color: var(--muted); }
+.custom-dates.show { display: inline-flex; }
+.range-bar input[type="date"] {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 6px;
+  font: 12px var(--font);
+  color: var(--ink-2);
+}
+.ma-toggles { margin-left: auto; display: flex; align-items: center; gap: 9px; padding-bottom: 6px; font-size: 11px; color: var(--muted); }
+.ma-toggles label { cursor: pointer; color: var(--ink-2); }
+.ma-toggles input { accent-color: var(--primary); vertical-align: -1px; }
+.pair-list { display: flex; gap: 7px; flex-wrap: wrap; min-height: 30px; padding: 8px 0 2px; }
+.pair-chip { display: inline-flex; align-items: center; gap: 7px; border: 1px solid var(--border); border-radius: 14px; padding: 4px 9px; font-size: 11px; color: var(--ink-2); }
+.pair-chip i { width: 8px; height: 8px; border-radius: 50%; }
+.pair-chip button { border: 0; background: none; color: var(--faint); cursor: pointer; padding: 0; }
+#bondSpreadChart { height: 580px; width: 100%; }
+#taxSpreadChart { height: 300px; width: 100%; }
+.tax-current { font-size: 22px; font-weight: 700; color: var(--primary); font-variant-numeric: tabular-nums; }
+.tax-current small { font-size: 11px; color: var(--muted); margin-left: 3px; }
+
+.coming-card {
+  min-height: 460px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(145deg, #fff, #f5f8fc);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: var(--shadow);
+  text-align: center;
+}
+.coming-icon { width: 62px; height: 62px; border-radius: 18px; display: grid; place-items: center; background: #e6f5ef; color: #16845b; font-size: 24px; font-weight: 700; margin-bottom: 16px; }
+.coming-card h2 { font-size: 21px; margin: 6px 0; }
+.coming-card p { color: var(--muted); font-size: 14px; letter-spacing: .2em; }
+
+@media (max-width: 760px) {
+  .section-title-row { align-items: flex-start; flex-direction: column; }
+  .rule-note { text-align: left; }
+  .ma-toggles { margin-left: 0; width: 100%; }
+  #bondSpreadChart { height: 500px; }
+}

@@ -1,0 +1,70 @@
+{% extends "interest_bond_base.html" %}
+{% block title %}超长端利率利差跟踪 · 内部研究工作台{% endblock %}
+{% block nav %}spread{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='interest_bond/css/spread.css') }}">
+<script src="{{ url_for('static', filename='vendor/echarts.min.js') }}"></script>
+{% endblock %}
+
+{% block content %}
+<header class="page-head">
+  <div>
+    <h1>超长端利率利差跟踪</h1>
+    <div class="subline"><span id="headMeta">数据加载中…</span></div>
+  </div>
+</header>
+
+<div class="toolbar-card">
+  <div class="range-bar" id="rangeBar">
+    <span class="range-label">统计区间</span>
+    <button class="range-btn" data-r="3m">3月</button>
+    <button class="range-btn" data-r="6m">6月</button>
+    <button class="range-btn active" data-r="1y">1年</button>
+    <button class="range-btn" data-r="2y">2年</button>
+    <button class="range-btn" data-r="3y">3年</button>
+    <button class="range-btn" data-r="5y">5年</button>
+    <button class="range-btn" data-r="all">全部</button>
+  </div>
+  <div style="flex:1"></div>
+  <span class="range-hint">均值 / 标准差 / 中位数 / 分位按所选区间计算</span>
+  <div class="sel-bar" id="spreadSelect">
+    <span class="range-label">利差选择</span>
+    <button class="sel-all" id="selAll" type="button">全选</button>
+  </div>
+</div>
+
+<div class="stat-grid" id="statGrid"></div>
+
+<div class="card">
+  <h2>利差走势<span class="sub">单位:bp;辅助线按所选区间计算</span></h2>
+  <div class="aux-bar" id="auxBar">
+    <span class="range-label">辅助线</span>
+    <label class="aux-item"><input type="checkbox" id="auxMean" checked>均值</label>
+    <label class="aux-item"><input type="checkbox" id="auxMedian">中位数</label>
+    <label class="aux-item"><input type="checkbox" id="auxQuant">分位数</label>
+    <input class="quant-input" id="quantInput" type="text" value="25,75" placeholder="如 25,75">
+  <span class="range-hint">分位数可自行设置，使用半角逗号分隔（0-100）</span>
+  </div>
+  <div id="spreadChart"></div>
+</div>
+
+<div class="tabs">
+  <div class="tab active" data-tab="table">近期数据</div>
+  <div class="tab" data-tab="yields">基础收益率曲线</div>
+</div>
+<div class="card tab-body">
+  <div id="tab-table"><div style="max-height:420px;overflow:auto"><table class="data" id="dataTable"></table></div></div>
+  <div id="tab-yields" style="display:none">
+    <h2 style="margin-bottom:10px">基础收益率(%)<span class="sub">中债国债收益率曲线 / 财政部-中国地方政府债券收益率曲线</span></h2>
+    <div id="yieldChart"></div>
+  </div>
+</div>
+
+<script>
+window.SPREAD_BOOT = {
+  spreads: {{ spreads|tojson }}
+};
+</script>
+<script src="{{ url_for('static', filename='interest_bond/js/spread.js') }}"></script>
+{% endblock %}

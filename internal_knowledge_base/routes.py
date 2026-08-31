@@ -347,7 +347,7 @@ def csrf_token():
 def protect_internal_knowledge_base():
     if not session.get("authenticated"):
         if "/api/" in request.path:
-            return jsonify({"error": "请先登录内部研究平台", "portalAuthRequired": True}), 401
+            return jsonify({"error": "请先登录内部研究工作台", "portalAuthRequired": True}), 401
         return redirect(url_for("login", next=request.full_path.rstrip("?")))
     if request.content_length and request.content_length > MAX_UPLOAD_SIZE + 1024 * 1024:
         return jsonify({"error": "上传文件超过100MB限制"}), 413

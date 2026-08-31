@@ -605,7 +605,8 @@
 
         function renderIssuerCharts(bonds) {
             const valid = bonds.filter(b => !b.is_no_judgement && b.deviation_bp != null);
-            chartFor('issuerDeviationChart').setOption({
+            const deviationChart = chartFor('issuerDeviationChart');
+            deviationChart.setOption({
                 tooltip: {
                     trigger: 'item',
                     formatter: p => {
@@ -617,6 +618,8 @@
                 dataZoom: valid.length > 40 ? [{ type: 'inside' }, { type: 'slider', height: 16, bottom: 3 }] : [],
                 series: [{ type: 'bar', barMaxWidth: 14, data: valid.map(b => ({ value: b.deviation_bp, itemStyle: { color: b.is_non_market ? '#c93434' : b.is_overpriced ? '#c76a16' : '#4387b4' } })), markLine: { silent: true, symbol: 'none', data: [{ yAxis: -3, lineStyle: { color: '#c93434', type: 'dashed' } }, { yAxis: 3, lineStyle: { color: '#c76a16', type: 'dashed' } }, { yAxis: 0, lineStyle: { color: '#a6afb7' } }] } }]
             });
+            deviationChart.off('click');
+            deviationChart.on('click', p => { const bond=valid[p.dataIndex]; if(bond?.bond_symbol) location.href=`/bond-detail?code=${encodeURIComponent(bond.bond_symbol)}`; });
             const buckets = [0,0,0,0,0]; valid.forEach(b => { const v=b.deviation_bp; buckets[v < -10 ? 0 : v < -3 ? 1 : v <= 3 ? 2 : v <= 10 ? 3 : 4]++; });
             chartFor('issuerDistributionChart').setOption({
                 tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } }, grid: { top: 25, left: 75, right: 28, bottom: 32 },
@@ -629,15 +632,20 @@
             return `<tr><th>债券名称</th>${showIssuer ? '<th>发行人</th>' : ''}<th>参考内评</th><th>发行日期</th><th class="num">发行规模(亿元)</th><th>发行方式</th><th class="num">期限</th><th class="num">票面利率(%)</th><th class="num">合理价格(%)</th><th class="num">偏离(BP)</th><th>参考债券</th><th>判定</th></tr>`;
         }
 
+        function bondDetailLink(symbol, label) {
+            const text=esc(label || '-');
+            return symbol ? `<a href="/bond-detail?code=${encodeURIComponent(symbol)}" title="查看债券详查" style="color:inherit;text-decoration:none">${text}</a>` : text;
+        }
+
         function renderBondTable(headId, bodyId, bonds, showIssuer) {
             $(headId).innerHTML = bondHead(showIssuer);
             $(bodyId).innerHTML = [...bonds].sort((a,b) => String(b.issue_date).localeCompare(String(a.issue_date))).map(b => `<tr>
-                <td>${esc(b.bond_name)} ${isPerpetual(b) ? '<span class="tag blue">永续</span>' : ''}</td>
+                <td>${bondDetailLink(b.bond_symbol,b.bond_name)} ${isPerpetual(b) ? '<span class="tag blue">永续</span>' : ''}</td>
                 ${showIssuer ? `<td><button class="link-btn" data-issuer="${encodeURIComponent(b.issuer || '')}">${esc(b.issuer || '-')}</button></td>` : ''}
                 <td>${esc(b.internal_rating || '-')}</td>
                 <td class="mono">${displayDate(b.issue_date)}</td><td class="num mono">${amountYi(b.issue_amount_wan == null ? null : b.issue_amount_wan / 10000)}</td><td>${raiseMode(b.raise_mode)}</td><td class="num mono">${esc(termDisplay(b))}</td>
                 <td class="num mono">${num(b.coupon_rate,4)}</td><td class="num mono">${num(b.fair_price,4)}</td><td class="num mono" style="color:${b.is_non_market?'var(--red)':b.is_overpriced?'var(--orange)':'inherit'};font-weight:600">${num(b.deviation_bp)}</td>
-                <td>${esc(b.ref_bond_name || '-')}</td><td>${statusTag(b)}</td></tr>`).join('') || emptyRow(showIssuer ? 12 : 11, '没有符合筛选条件的债券');
+                <td>${bondDetailLink(b.ref_bond_symbol,b.ref_bond_name)}</td><td>${statusTag(b)}</td></tr>`).join('') || emptyRow(showIssuer ? 12 : 11, '没有符合筛选条件的债券');
         }
 
         function showBackgroundState(data) {
@@ -666,6 +674,7 @@
                 issuer: String(result.issuer || '').trim(),
                 label: String(result.label || '').trim(),
                 match_type: result.match_type === 'bond' ? 'bond' : 'issuer',
+                bond_symbol: String(result.bond_symbol || '').trim(),
             };
         }
 
@@ -685,7 +694,7 @@
         function renderSuggestions(results) {
             $('suggestions').innerHTML = results.map(result => {
                 const isBond = result.match_type === 'bond';
-                return `<button class="suggestion" data-suggestion="${encodeURIComponent(result.issuer)}">
+                return `<button class="suggestion" data-suggestion="${encodeURIComponent(result.issuer)}" data-bond-code="${isBond ? encodeURIComponent(result.bond_symbol) : ''}">
                     <span class="suggestion-label">${esc(result.label)}</span>
                     ${isBond ? `<span class="suggestion-meta">${esc(result.issuer)}</span>` : ''}
                     <span class="suggestion-type">${isBond ? '债券' : '发行人'}</span>
@@ -709,12 +718,12 @@
             const query=e.target.value.trim();
             const results=await searchIssuers(query);
             const matchedResult=selectSearchResult(results,query);
-            if(matchedResult){ $('suggestions').classList.remove('show'); openIssuer(matchedResult.issuer); return; }
+            if(matchedResult){ $('suggestions').classList.remove('show'); if(matchedResult.match_type==='bond'&&matchedResult.bond_symbol){location.href=`/bond-detail?code=${encodeURIComponent(matchedResult.bond_symbol)}`;}else{openIssuer(matchedResult.issuer);} return; }
             if(results.length){ renderSuggestions(results); return; }
             $('suggestions').classList.remove('show'); setStatus('未找到匹配的发行人或债券简称', true);
         });
         document.addEventListener('click', e => {
-            const suggestion=e.target.closest('[data-suggestion]'); if(suggestion){$('suggestions').classList.remove('show');openIssuer(decodeURIComponent(suggestion.dataset.suggestion));return;}
+            const suggestion=e.target.closest('[data-suggestion]'); if(suggestion){$('suggestions').classList.remove('show');if(suggestion.dataset.bondCode){location.href=`/bond-detail?code=${suggestion.dataset.bondCode}`;}else{openIssuer(decodeURIComponent(suggestion.dataset.suggestion));}return;}
             if(!e.target.closest('.global-search')) $('suggestions').classList.remove('show');
             const date=e.target.closest('[data-date]'); if(date){$('issueDate').value=inputDate(date.dataset.date);setView('date',true);return;}
             const issuer=e.target.closest('[data-issuer]'); if(issuer){openIssuer(decodeURIComponent(issuer.dataset.issuer),appState.view==='date'?compact($('issueDate').value):appState.sourceDate);return;}

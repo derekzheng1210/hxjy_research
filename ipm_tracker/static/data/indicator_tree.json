@@ -1,0 +1,616 @@
+[
+  {
+    "name": "消费",
+    "type": "category",
+    "children": [
+      {
+        "name": "农林牧渔",
+        "type": "subcategory",
+        "children": [
+          {
+            "name": "中国:市场价:生猪(外三元)",
+            "id": "S5914495",
+            "type": "indicator"
+          },
+          {
+            "name": "期货结算价(连续):生猪",
+            "id": "S0273733",
+            "type": "indicator"
+          },
+          {
+            "name": "中国:养殖利润:自繁自养生猪",
+            "id": "S5021738",
+            "type": "indicator"
+          },
+          {
+            "name": "中国:养殖利润:外购仔猪",
+            "id": "S5021739",
+            "type": "indicator"
+          },
+          {
+            "name": "中国:平均价:生猪饲料",
+            "id": "S5063761",
+            "type": "indicator"
+          }
+        ]
+      },
+      {
+        "name": "食品饮料",
+        "type": "subcategory",
+        "children": [
+          {
+            "name": "中国:市场价:大豆(黄豆)",
+            "id": "S5914496",
+            "type": "indicator"
+          },
+          {
+            "name": "中国:产量:成品糖:当月值",
+            "id": "S0028099",
+            "type": "indicator"
+          },
+          {
+            "name": "中国:产量:乳制品:当月值",
+            "id": "S0028083",
+            "type": "indicator"
+          },
+          {
+            "name": "中国:零售价:婴幼儿奶粉(国外品牌）",
+            "id": "S5010222",
+            "type": "indicator"
+          },
+          {
+            "name": "中国:零售价:婴幼儿奶粉(国产品牌）",
+            "id": "S5010223",
+            "type": "indicator"
+          }
+        ]
+      },
+      {
+        "name": "家用电器",
+        "type": "subcategory",
+        "children": [
+          {
+            "name": "中国:产量:空调:当月同比",
+            "id": "S0028203",
+            "type": "indicator"
+          },
+          {
+            "name": "中国:出口数量:空调:当月同比",
+            "id": "M7071735",
+            "type": "indicator"
+          },
+          {
+            "name": "中国:出口数量:空调:当月值",
+            "id": "S0072018",
+            "type": "indicator"
+          },
+          {
+            "name": "中国:出口数量:冰箱:当月值",
+            "id": "S0072043",
+            "type": "indicator"
+          },
+          {
+            "name": "中国:产量:家用洗衣机:当月同比",
+            "id": "S0028211",
+            "type": "indicator"
+          }
+        ]
+      },
+      {
+        "name": "休闲服务",
+        "type": "subcategory",
+        "children": [
+          {
+            "name": "中国:进口金额:免税品:当月值",
+            "id": "M5529689",
+            "type": "indicator"
+          },
+          {
+            "name": "中国:执行航班数量:国内航班(不含港澳台）",
+            "id": "Z0164070",
+            "type": "indicator"
+          },
+          {
+            "name": "中国:电影观影人次",
+            "id": "S6623763",
+            "type": "indicator"
+          },
+          {
+            "name": "中国:电影票房收入",
+            "id": "S6623764",
+            "type": "indicator"
+          },
+          {
+            "name": "中国:社会消费品零售总额:餐饮收入:当月同比(1-2月合并)",
+            "id": "M0061660",
+            "type": "indicator"
+          }
+        ]
+      },
+      {
+        "name": "美妆",
+        "type": "subcategory",
+        "children": [
+          {
+            "name": "中国:零售额:化妆品类:当月值",
+            "id": "M0045719",
+            "type": "indicator"
+          }
+        ]
+      },
+      {
+        "name": "医药",
+        "type": "subcategory",
+        "children": [
+          {
+            "name": "中国:海南:接待游客人数",
+            "id": "S6710167",
+            "type": "indicator"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "金融地产",
+    "type": "category",
+    "children": [
+      {
+        "name": "土地",
+        "type": "subcategory",
+        "children": [
+          {
+            "name": "中国:100大中国城市:成交土地溢价率",
+            "id": "S2707133",
+            "type": "indicator"
+          }
+        ]
+      },
+      {
+        "name": "价格",
+        "type": "subcategory",
+        "children": [
+          {
+            "name": "中国:房屋销售价格指数:新建商品住宅:70个大中城市:当月同比",
+            "id": "S2707411",
+            "type": "indicator"
+          },
+          {
+            "name": "中国:房屋销售价格指数:二手住宅:70个大中城市:当月同比",
+            "id": "S2707425",
+            "type": "indicator"
+          }
+        ]
+      },
+      {
+        "name": "成交量",
+        "type": "subcategory",
+        "children": [
+          {
+            "name": "中国:商品房销售面积:累计同比",
+            "id": "S0073300",
+            "type": "indicator"
+          },
+          {
+            "name": "中国:房地产开发投资完成额:累计同比",
+            "id": "S0029657",
+            "type": "indicator"
+          },
+          {
+            "name": "中国:房屋施工面积:累计同比",
+            "id": "S0073290",
+            "type": "indicator"
+          },
+          {
+            "name": "中国:房屋新开工面积:累计同比",
+            "id": "S0073293",
+            "type": "indicator"
+          },
+          {
+            "name": "中国:房屋竣工面积:累计同比",
+            "id": "S0073297",
+            "type": "indicator"
+          }
+        ]
+      },
+      {
+        "name": "房地产资金",
+        "type": "subcategory",
+        "children": [
+          {
+            "name": "中国:金融机构人民币贷款加权平均利率:个人住房贷款",
+            "id": "M0058005",
+            "type": "indicator"
+          },
+          {
+            "name": "中国:个人住房贷款余额:同比增长",
+            "id": "S0000021",
+            "type": "indicator"
+          },
+          {
+            "name": "中国:房地产开发资金来源:累计同比",
+            "id": "S0073244",
+            "type": "indicator"
+          },
+          {
+            "name": "中国:房地产开发资金来源:国内贷款:累计同比",
+            "id": "S0073245",
+            "type": "indicator"
+          },
+          {
+            "name": "中国:房地产开发资金来源:其他资金:个人按揭贷款:累计同比",
+            "id": "S0073254",
+            "type": "indicator"
+          }
+        ]
+      },
+      {
+        "name": "流动性",
+        "type": "subcategory",
+        "children": [
+          {
+            "name": "R007",
+            "id": "M1001795",
+            "type": "indicator"
+          },
+          {
+            "name": "DR007",
+            "id": "M1006337",
+            "type": "indicator"
+          },
+          {
+            "name": "SHIBOR1w",
+            "id": "M1001855",
+            "type": "indicator"
+          },
+          {
+            "name": "中国:固定利率国债:发行利率:1年",
+            "id": "M1001940",
+            "type": "indicator"
+          }
+        ]
+      },
+      {
+        "name": "股市情绪",
+        "type": "subcategory",
+        "children": [
+          {
+            "name": "上证所:股票换手率",
+            "id": "M0331263",
+            "type": "indicator"
+          },
+          {
+            "name": "万得全A指数:收盘价",
+            "id": "M0330255",
+            "type": "indicator"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "科技",
+    "type": "category",
+    "children": [
+      {
+        "name": "半导体",
+        "type": "subcategory",
+        "children": [
+          {
+            "name": "日本半导体设备出货同比",
+            "id": "S5600228",
+            "type": "indicator"
+          },
+          {
+            "name": "北美PCB出货量同比",
+            "id": "S5616792",
+            "type": "indicator"
+          },
+          {
+            "name": "费城半导体指数",
+            "id": "S0179733",
+            "type": "indicator"
+          },
+          {
+            "name": "全球半导体销售额同比",
+            "id": "S5616803",
+            "type": "indicator"
+          }
+        ]
+      },
+      {
+        "name": "通信",
+        "type": "subcategory",
+        "children": [
+          {
+            "name": "运营商：基站设备当月产量同比",
+            "id": "S0028238",
+            "type": "indicator"
+          },
+          {
+            "name": "产量:集成电路:当月同比",
+            "id": "S0028183",
+            "type": "indicator"
+          },
+          {
+            "name": "出口金额:二极管及类似半导体器件:当月值",
+            "id": "S0072678",
+            "type": "indicator"
+          }
+        ]
+      },
+      {
+        "name": "传媒",
+        "type": "subcategory",
+        "children": [
+          {
+            "name": "中国:实际销售收入:游戏市场",
+            "id": "Y6942301",
+            "type": "indicator"
+          },
+          {
+            "name": "中国:产量:光电子器件:当月值",
+            "id": "S0070287",
+            "type": "indicator"
+          }
+        ]
+      },
+      {
+        "name": "计算机",
+        "type": "subcategory",
+        "children": [
+          {
+            "name": "信骅:营业收入:当月值",
+            "id": "A8879508",
+            "type": "indicator"
+          },
+          {
+            "name": "中国:软件业务收入:软件产业:累计同比",
+            "id": "S6500002",
+            "type": "indicator"
+          },
+          {
+            "name": "销售额:电玩/配件/游戏/攻略",
+            "id": "S9901348",
+            "type": "indicator"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "制造",
+    "type": "category",
+    "children": [
+      {
+        "name": "机械设备",
+        "type": "subcategory",
+        "children": [
+          {
+            "name": "产量:工业机器人:当月值",
+            "id": "S0243297",
+            "type": "indicator"
+          },
+          {
+            "name": "中国:销量:挖掘机:工程机械行业",
+            "id": "S6018761",
+            "type": "indicator"
+          },
+          {
+            "name": "中国新造船价格指数",
+            "id": "S6006711",
+            "type": "indicator"
+          },
+          {
+            "name": "中国:手持订单量(修正总吨):船舶",
+            "id": "S6018631",
+            "type": "indicator"
+          }
+        ]
+      },
+      {
+        "name": "轻工制造",
+        "type": "subcategory",
+        "children": [
+          {
+            "name": "全国建材家居景气指数(BHI)",
+            "id": "S5914286",
+            "type": "indicator"
+          },
+          {
+            "name": "义乌中国小商品指数:景气指数",
+            "id": "S0000298",
+            "type": "indicator"
+          }
+        ]
+      },
+      {
+        "name": "汽车",
+        "type": "subcategory",
+        "children": [
+          {
+            "name": "中国:产量:动力电池",
+            "id": "Z8963351",
+            "type": "indicator"
+          },
+          {
+            "name": "中国:产量:乘用车",
+            "id": "S0105526",
+            "type": "indicator"
+          },
+          {
+            "name": "中国:销量:乘用车",
+            "id": "S0105711",
+            "type": "indicator"
+          }
+        ]
+      },
+      {
+        "name": "电力设备",
+        "type": "subcategory",
+        "children": [
+          {
+            "name": "光伏行业综合价格指数(SPI)",
+            "id": "S5125927",
+            "type": "indicator"
+          },
+          {
+            "name": "中国:发电装机容量:风电:累计值",
+            "id": "S5151661",
+            "type": "indicator"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "周期",
+    "type": "category",
+    "children": [
+      {
+        "name": "煤炭",
+        "type": "subcategory",
+        "children": [
+          {
+            "name": "秦皇岛港动力煤平仓价(Q5500)",
+            "id": "O2147044",
+            "type": "indicator"
+          },
+          {
+            "name": "环渤海动力煤",
+            "id": "S5104570",
+            "type": "indicator"
+          },
+          {
+            "name": "原煤产量当月同比",
+            "id": "S0026992",
+            "type": "indicator"
+          }
+        ]
+      },
+      {
+        "name": "钢铁",
+        "type": "subcategory",
+        "children": [
+          {
+            "name": "螺纹钢期货",
+            "id": "M0330377",
+            "type": "indicator"
+          },
+          {
+            "name": "中国大宗商品价格指数(BPI)",
+            "id": "J5336989",
+            "type": "indicator"
+          }
+        ]
+      },
+      {
+        "name": "铜铝",
+        "type": "subcategory",
+        "children": [
+          {
+            "name": "现货结算价:LME铜",
+            "id": "S0029751",
+            "type": "indicator"
+          },
+          {
+            "name": "期货结算价(活跃合约):铝",
+            "id": "S0181382",
+            "type": "indicator"
+          }
+        ]
+      },
+      {
+        "name": "建材",
+        "type": "subcategory",
+        "children": [
+          {
+            "name": "水泥价格指数",
+            "id": "S5914515",
+            "type": "indicator"
+          },
+          {
+            "name": "中国:产量:水泥:当月值",
+            "id": "S0027702",
+            "type": "indicator"
+          }
+        ]
+      },
+      {
+        "name": "化工",
+        "type": "subcategory",
+        "children": [
+          {
+            "name": "期货结算价(连续):布伦特原油",
+            "id": "S0031525",
+            "type": "indicator"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "公用",
+    "type": "category",
+    "children": [
+      {
+        "name": "海运",
+        "type": "subcategory",
+        "children": [
+          {
+            "name": "波罗的海干散货指数BDI",
+            "id": "S0031550",
+            "type": "indicator"
+          },
+          {
+            "name": "沿海集装箱运价指数TDI",
+            "id": "S6404620",
+            "type": "indicator"
+          },
+          {
+            "name": "中国:上海出口集装箱运价指数:综合指数",
+            "id": "S0114089",
+            "type": "indicator"
+          }
+        ]
+      },
+      {
+        "name": "快递",
+        "type": "subcategory",
+        "children": [
+          {
+            "name": "中国:申通快递单价",
+            "id": "S0265138",
+            "type": "indicator"
+          },
+          {
+            "name": "中国:快递业务量",
+            "id": "S0000149",
+            "type": "indicator"
+          }
+        ]
+      },
+      {
+        "name": "客运",
+        "type": "subcategory",
+        "children": [
+          {
+            "name": "中国:铁路客运量",
+            "id": "S0044633",
+            "type": "indicator"
+          },
+          {
+            "name": "中国:民航客运量",
+            "id": "S0036005",
+            "type": "indicator"
+          },
+          {
+            "name": "中国:公路客运量:当月同比",
+            "id": "S0036025",
+            "type": "indicator"
+          }
+        ]
+      }
+    ]
+  }
+]

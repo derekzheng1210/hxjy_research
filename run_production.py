@@ -33,6 +33,14 @@ if os.environ.get("BROKER_SCHEDULER_ENABLED", "1") == "1":
     else:
         print("[production] 经纪商行情调度器锁被占用（已有实例在运行），本进程跳过启动", flush=True)
 
+if os.environ.get("BOND_MONITOR_SCHEDULERS_ENABLED", "1") == "1":
+    from interest_bond import init_bond_switch, init_issuance, init_spread
+
+    init_spread()
+    init_bond_switch()
+    init_issuance()
+    print("[production] 利率债研究模块调度器已启动", flush=True)
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "5000"))
     threads = int(os.environ.get("WAITRESS_THREADS", "4"))

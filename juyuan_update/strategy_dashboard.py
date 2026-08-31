@@ -1269,13 +1269,13 @@ def generate_html(latest_date, latest_curves, tenors_all,
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>骑乘效应与配置策略仪表盘</title>
+<title>信用骑乘策略</title>
 <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
 <style>
 * {{ margin:0; padding:0; box-sizing:border-box; }}
 body {{ font-family: -apple-system,"PingFang SC","Microsoft YaHei",sans-serif; background:#fff; color:#333; }}
-.header {{ background:linear-gradient(135deg,#f8fafc,#fff); padding:24px 40px; border-bottom:1px solid #e2e8f0; display:flex; justify-content:space-between; align-items:center; }}
-.header h1 {{ font-size:22px; font-weight:600; background:linear-gradient(90deg,#2563eb,#7c3aed); -webkit-background-clip:text; -webkit-text-fill-color:transparent; }}
+.header {{ background:#fff; padding:24px 40px; border-bottom:1px solid #dfe6ef; box-shadow:0 2px 10px rgba(15,23,42,.06); display:flex; justify-content:space-between; align-items:center; }}
+.header h1 {{ font-size:22px; font-weight:600; color:#1d4f91; }}
 .header .meta {{ font-size:12px; color:#718096; }}
 .container {{ max-width:1700px; margin:0 auto; padding:20px; }}
 .nav-tabs {{ display:flex; gap:4px; margin-bottom:20px; background:#f1f5f9; border-radius:8px; padding:4px; }}
@@ -1333,7 +1333,7 @@ tbody tr:hover {{ background:rgba(37,99,235,.06); }}
 </head>
 <body>
 <div class="header">
-  <h1>骑乘效应与配置策略仪表盘 </h1>
+  <h1>信用骑乘策略</h1>
   <div class="meta">数据日期: {latest_date} | 生成: {gen_time} | 回测: {BACKTEST_START} ~ {BACKTEST_END}</div>
 </div>
 <div class="container">

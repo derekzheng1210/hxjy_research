@@ -377,8 +377,9 @@ function render() {
     const holdMark = d.is_holding ? '<span class="hold-marker"></span>' : '';
     html += `<tr${holdCls}>`;
     html += `<td>${holdMark}</td>`;
-    html += `<td class="code">${esc(d.raw_code || d.code)}</td>`;
-    html += `<td class="name" title="${esc(d.name)}">${esc(d.name)}</td>`;
+    const detailUrl = `/bond-detail?code=${encodeURIComponent(d.code || d.raw_code)}`;
+    html += `<td class="code"><a href="${detailUrl}" title="查看债券详查" style="color:inherit;text-decoration:none">${esc(d.raw_code || d.code)}</a></td>`;
+    html += `<td class="name" title="${esc(d.name)}"><a href="${detailUrl}" title="查看债券详查" style="color:inherit;text-decoration:none">${esc(d.name)}</a></td>`;
     html += `<td>${esc(d.implied_rating)}</td>`;
     html += `<td>${fmtNum(d.term, 2)}</td>`;
     html += `<td>${fmtNum(d.current_yield, 4)}</td>`;

@@ -1,0 +1,479 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>异动预警 · 行业景气高频跟踪</title>
+<style>
+  :root {
+    --deep-blue: #0C447C;
+    --brand-blue: #2563EB;
+    --light-brand-blue: #60A5FA;
+    --belly-blue: #DBEAFE;
+    --up-red: #DC2626;
+    --down-green: #16A34A;
+    --bg: #F0F6FF;
+    --card-bg: #FFFFFF;
+    --text: #1E293B;
+    --text-secondary: #64748B;
+    --border: #CBD5E1;
+    --header-height: 64px;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+  }
+
+  /* Header（与主面板完全一致） */
+  .header {
+    height: var(--header-height);
+    background: #FFFFFF;
+    color: #1E293B;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 24px;
+    border-bottom: 1px solid #DFE6EF;
+    box-shadow: 0 2px 10px rgba(15, 23, 42, 0.06);
+  }
+  .brand-title { font-size: 18px; font-weight: 700; letter-spacing: 0.5px; color:#1D4F91; }
+  .brand-subtitle { font-size: 12px; opacity: 0.85; margin-top: 2px; }
+  .header-right { display: flex; align-items: center; gap: 20px; font-size: 13px; }
+  .update-time { opacity: 0.9; font-size: 12px; }
+  .header-btn {
+    background: #F8FAFC;
+    border: 1px solid #CBD5E1;
+    color: #475569;
+    padding: 4px 12px;
+    border-radius: 14px;
+    font-size: 12px;
+    cursor: pointer;
+    text-decoration: none;
+    user-select: none;
+    transition: all 0.2s;
+  }
+  .header-btn:hover { background: #EFF6FF; color: #1D4F91; }
+
+  .container { max-width: 1280px; margin: 0 auto; padding: 20px 24px 36px; }
+
+  /* 卡片通用（贴合主面板圆角与浅蓝阴影） */
+  .card {
+    background: var(--card-bg);
+    border-radius: 14px;
+    box-shadow: 0 1px 6px rgba(12, 68, 124, 0.08);
+  }
+
+  /* ① 异动判定规则（页面最上方） */
+  .rules-card { padding: 16px 22px; margin-bottom: 16px; border-left: 4px solid var(--deep-blue); }
+  .rules-title { font-size: 14px; font-weight: 700; margin-bottom: 10px; color: var(--deep-blue); }
+  .rule-line { font-size: 13px; color: var(--text); line-height: 1.9; }
+  .rule-line b { color: var(--deep-blue); }
+  .rule-tag { display: inline-block; min-width: 108px; font-weight: 700; color: var(--brand-blue); }
+  .rule-score { margin-top: 8px; font-size: 12px; color: var(--text-secondary); }
+  .rule-score b { color: var(--deep-blue); }
+
+  /* ② 顶部统计 */
+  .summary { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 16px; }
+  .stat-card {
+    padding: 14px 22px; min-width: 150px;
+    border-left: 4px solid var(--border);
+  }
+  .stat-card.red { border-left-color: var(--up-red); }
+  .stat-card.yellow { border-left-color: #D97706; }
+  .stat-card.blue { border-left-color: var(--brand-blue); }
+  .stat-num { font-size: 28px; font-weight: 700; line-height: 1.1; }
+  .stat-card.red .stat-num { color: var(--up-red); }
+  .stat-card.yellow .stat-num { color: #D97706; }
+  .stat-card.blue .stat-num { color: var(--brand-blue); }
+  .stat-label { font-size: 12px; color: var(--text-secondary); margin-top: 4px; }
+
+  /* ③ 行业一览（含"所有行业"按钮） */
+  .industry-strip { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
+  .ind-card {
+    padding: 12px 18px; flex: 1; min-width: 150px;
+    cursor: pointer; border: 2px solid transparent; transition: all .15s;
+  }
+  .ind-card:hover { transform: translateY(-1px); box-shadow: 0 4px 14px rgba(12, 68, 124, 0.14); }
+  .ind-card.active { border-color: var(--brand-blue); background: #F4F8FF; }
+  .ind-card.all-card { background: linear-gradient(135deg, #0C447C 0%, #2563EB 100%); color: #fff; }
+  .ind-card.all-card .ind-name { color: #fff; }
+  .ind-card.all-card .ind-alerts, .ind-card.all-card .ind-trend, .ind-card.all-card .ind-fresh { color: rgba(255,255,255,0.85); }
+  .ind-card.all-card.active { border-color: #fff; box-shadow: 0 4px 14px rgba(12, 68, 124, 0.35); }
+  .ind-name { font-size: 14px; font-weight: 700; }
+  .ind-alerts { margin: 6px 0 4px; font-size: 12px; min-height: 16px; }
+  .ind-alerts .r { color: var(--up-red); font-weight: 700; }
+  .ind-alerts .y { color: #D97706; font-weight: 700; }
+  .ind-alerts .none { color: #94A3B8; }
+  .ind-trend { font-size: 12px; color: var(--text-secondary); }
+  .ind-trend .up { color: var(--up-red); } .ind-trend .down { color: var(--down-green); }
+  .ind-fresh { font-size: 11px; color: #94A3B8; margin-top: 2px; }
+
+  /* ④ 工具栏 */
+  .toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+  .filter-btn {
+    border: 1px solid var(--border); background: #fff; color: var(--text);
+    border-radius: 20px; padding: 5px 16px; font-size: 13px; cursor: pointer;
+    transition: all .15s;
+  }
+  .filter-btn:hover { border-color: var(--brand-blue); color: var(--brand-blue); }
+  .filter-btn.active { background: var(--brand-blue); border-color: var(--brand-blue); color: #fff; }
+  .filter-btn.active.red { background: var(--up-red); border-color: var(--up-red); }
+  .filter-btn.active.yellow { background: #D97706; border-color: #D97706; }
+  .filter-btn.active.batch { background: #0F766E; border-color: #0F766E; }
+  select {
+    border: 1px solid var(--border); border-radius: 8px; padding: 5px 10px;
+    font-size: 13px; background: #fff; color: var(--text);
+  }
+  .toolbar .spacer { flex: 1; }
+
+  /* 行业分组标题 */
+  .group-header {
+    display: flex; align-items: baseline; gap: 12px;
+    margin: 20px 0 10px; padding-bottom: 6px;
+    border-bottom: 2px solid var(--belly-blue);
+  }
+  .group-header h2 { font-size: 16px; margin: 0; color: var(--deep-blue); }
+  .group-header .counts { font-size: 12px; color: var(--text-secondary); }
+  .group-header .counts .r { color: var(--up-red); font-weight: 700; }
+  .group-header .counts .y { color: #D97706; font-weight: 700; }
+
+  /* 异动卡片 */
+  .alert-card {
+    margin-bottom: 10px; overflow: hidden;
+    border-left: 4px solid var(--border); cursor: pointer;
+    transition: box-shadow .15s;
+  }
+  .alert-card:hover { box-shadow: 0 4px 14px rgba(12, 68, 124, 0.14); }
+  .alert-card.red { border-left-color: var(--up-red); }
+  .alert-card.yellow { border-left-color: #D97706; }
+  .alert-main {
+    display: grid; grid-template-columns: 44px 1.6fr 1fr 1fr 1.4fr 150px 24px;
+    align-items: center; gap: 12px; padding: 13px 18px;
+  }
+  .level-dot { width: 12px; height: 12px; border-radius: 50%; margin: 0 auto; }
+  .level-dot.red { background: var(--up-red); box-shadow: 0 0 0 4px rgba(220,38,38,.15); }
+  .level-dot.yellow { background: #D97706; box-shadow: 0 0 0 4px rgba(217,119,6,.15); }
+  .ind-name { font-size: 14px; font-weight: 600; }
+  .ind-name .batch-badge {
+    display: inline-block; background: #0F766E; color: #fff; font-size: 10px;
+    border-radius: 8px; padding: 1px 7px; margin-left: 6px; vertical-align: 1px; font-weight: 500;
+  }
+  .ind-cat { font-size: 11px; color: #94A3B8; margin-top: 2px; }
+  .metric { font-size: 13px; }
+  .metric .m-label { font-size: 11px; color: #94A3B8; }
+  .metric .m-value { font-weight: 600; font-variant-numeric: tabular-nums; }
+  .up { color: var(--up-red); } .down { color: var(--down-green); } .flat { color: var(--text-secondary); }
+  .badges { display: flex; flex-wrap: wrap; gap: 4px; }
+  .badge {
+    font-size: 11px; border-radius: 10px; padding: 2px 8px; white-space: nowrap;
+    background: #FEF2F2; color: #B91C1C;
+  }
+  .badge.soft { background: #FFFBEB; color: #B45309; }
+  .spark { width: 150px; height: 36px; }
+  .expand-icon { color: #94A3B8; font-size: 14px; text-align: center; transition: transform .2s; }
+  .alert-card.open .expand-icon { transform: rotate(90deg); }
+  .alert-detail { display: none; padding: 0 18px 16px 62px; font-size: 12px; color: var(--text-secondary); }
+  .alert-card.open .alert-detail { display: block; }
+  .alert-detail .kv { display: inline-block; margin-right: 22px; }
+  .alert-detail b { color: var(--text); }
+  .detail-link { color: var(--brand-blue); text-decoration: none; }
+  .detail-link:hover { text-decoration: underline; }
+  .sig-rules { margin-top: 10px; border-top: 1px dashed var(--belly-blue); padding-top: 8px; }
+  .sig-rule { line-height: 1.8; }
+  .sig-rule .sig-name { color: #B91C1C; font-weight: 600; }
+  .sig-rule .rule-desc { color: #94A3B8; }
+
+  /* 底部备注 */
+  .notes-card { padding: 18px 24px; margin-top: 26px; border-left: 4px solid #94A3B8; }
+  .notes-title { font-size: 14px; font-weight: 700; margin-bottom: 10px; color: var(--deep-blue); }
+  .notes-card li { font-size: 12.5px; color: var(--text-secondary); line-height: 2; }
+  .notes-card b { color: var(--text); }
+
+  /* 页脚（与主面板一致） */
+  .site-footer {
+    background: var(--deep-blue);
+    color: rgba(255, 255, 255, 0.85);
+    padding: 12px 24px;
+    font-size: 12px;
+    text-align: center;
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+  }
+
+  .empty { text-align: center; color: #94A3B8; padding: 60px 0; font-size: 14px; }
+  .loading { text-align: center; color: var(--text-secondary); padding: 60px 0; font-size: 14px; }
+  .err { color: var(--up-red); text-align: center; padding: 40px; }
+
+  @media (max-width: 900px) {
+    .alert-main { grid-template-columns: 20px 1.5fr 1fr 1fr; }
+    .badges, .spark { display: none; }
+    .alert-detail { padding-left: 18px; }
+  }
+</style>
+</head>
+<body>
+<header class="header">
+  <div>
+    <div class="brand-title">🔔 异动预警</div>
+    <div class="brand-subtitle">行业景气高频跟踪 · 81 指标自动巡检 · 红黄牌分级</div>
+  </div>
+  <div class="header-right">
+    <span class="update-time" id="updateTime"></span>
+    <a class="header-btn" href="/ipm-tracker/whale" title="返回主面板">🐋 返回景气面板</a>
+  </div>
+</header>
+
+<div class="container">
+  <!-- ① 异动判定规则（页面最上方） -->
+  <div class="card rules-card">
+    <div class="rules-title">📏 异动判定规则（2021 年以来全量数据统计）</div>
+    <div class="rule-line"><span class="rule-tag">变动 Z-score</span>最新一期变动偏离历史逐期变动 <b>≥2σ</b> 触发，<b>≥2.5σ</b> 直接红牌</div>
+    <div class="rule-line"><span class="rule-tag">历史分位</span>最新值处于 2021 年以来 <b>≥90% / ≤10%</b> 区间（≥95%/≤5% 为极端，加权）</div>
+    <div class="rule-line"><span class="rule-tag">久违新高/新低</span>创 2021 年以来极值，且前一极值在 <b>≥12 期</b>之前（天天新高的趋势不算新闻，已降噪）</div>
+    <div class="rule-line"><span class="rule-tag">连续同向</span>连续 <b>3~8 期</b>同方向变动（超过 8 期视为结构性趋势，不再作为信号）</div>
+    <div class="rule-score">记分制判级：z≥2.5σ <b>+3</b> ｜ 久违新高/低 <b>+2</b> ｜ 2σ~2.5σ <b>+1.5</b> ｜ 分位极端 <b>+1</b> ｜ 连续同向 <b>+1</b> ｜ 分位 90/10 <b>+0.5</b> —— 总分 <b>≥3 判红</b>，否则黄牌</div>
+  </div>
+
+  <!-- ② 顶部统计 -->
+  <div class="summary" id="summary"></div>
+
+  <!-- ③ 行业一览（第一个为"所有行业"按钮） -->
+  <div class="industry-strip" id="industryStrip"></div>
+
+  <!-- ④ 工具栏 -->
+  <div class="toolbar">
+    <button class="filter-btn active red" data-level="red" onclick="setLevel(this)">🔴 今日红灯</button>
+    <button class="filter-btn yellow" data-level="yellow" onclick="setLevel(this)">🟡 黄色关注</button>
+    <button class="filter-btn" data-level="all" onclick="setLevel(this)">全部异动</button>
+    <button class="filter-btn batch" id="batchBtn" onclick="toggleBatch()">只看本期更新</button>
+    <select id="sigFilter" onchange="render()">
+      <option value="">全部信号类型</option>
+      <option value="σ">变动异常（Z-score）</option>
+      <option value="分位">历史分位极端</option>
+      <option value="新高">久违新高</option>
+      <option value="新低">久违新低</option>
+      <option value="连续">连续同向</option>
+    </select>
+    <div class="spacer"></div>
+  </div>
+
+  <div id="list" class="loading">正在扫描指标异动…</div>
+
+  <!-- ⑤ 备注：降噪处理方法说明 -->
+  <div class="card notes-card">
+    <div class="notes-title">📝 备注 · 降噪处理方法</div>
+    <ul>
+      <li><b>久违新高/新低必须时隔 ≥12 期</b>：若前一历史极值距今不足 12 期（趋势中"天天新高/新低"），视为趋势延续，不产生信号。</li>
+      <li><b>连续同向超过 8 期视为结构性趋势</b>：单边走势超过 8 期不再作为异动信号，仅 3~8 期计入（避免把长期趋势误报为异动）。</li>
+      <li><b>Z-score 基于"逐期变动"而非水平值</b>：以 2021 年以来逐期变动的均值与标准差为基准，避免趋势性序列因水平值长期偏离造成假阳性。</li>
+      <li><b>历史分位基于 2021 年以来全部观测</b>（含最新一期）：≥90%/≤10% 触发，≥95%/≤5% 加权，分位信号只作加权、不单独判红。</li>
+      <li><b>各指标按自身频率取最新一期</b>：日频看最近交易日、月频看最新发布月，不跨频率强行对齐；最新数据距今超过 45 天的指标会标注"数据陈旧"，其信号仅供参考。</li>
+      <li><b>记分制二次降噪</b>：单一弱信号仅黄牌，需多信号叠加（总分 ≥3）才判红，红色列表更短更聚焦。</li>
+      <li><b>数据来源</b>：门户后台统一维护的本地缓存（2021 年起全量序列），后台更新后自动重新计算。</li>
+    </ul>
+  </div>
+</div>
+
+<footer class="site-footer">
+  <span>Copyright 华夏久盈信用小组</span>
+</footer>
+
+<script>
+let DATA = null;
+let LEVEL = 'red';
+let ONLY_BATCH = false;
+let INDUSTRY = '';   // '' = 所有行业
+
+// 信号 → 规则说明映射（展开详情时逐条前置展示）
+const RULE_MAP = [
+  { key: 'σ',      desc: '变动 Z-score：最新一期变动偏离历史逐期变动 ≥2σ 触发，≥2.5σ 直接红牌' },
+  { key: '分位',   desc: '历史分位：最新值处于 2021 年以来 ≥90%/≤10% 区间（≥95%/≤5% 加权）' },
+  { key: '新高',   desc: '久违新高：创 2021 年以来新高，且前一极值在 ≥12 期之前（天天新高已降噪）' },
+  { key: '新低',   desc: '久违新低：创 2021 年以来新低，且前一极值在 ≥12 期之前（天天新低已降噪）' },
+  { key: '连续',   desc: '连续同向：连续 3~8 期同方向变动（超过 8 期视为结构性趋势，不再作为信号）' },
+];
+function ruleDescOf(sig) {
+  for (const r of RULE_MAP) if (sig.includes(r.key)) return r.desc;
+  return '';
+}
+
+function setLevel(btn) {
+  document.querySelectorAll('.filter-btn[data-level]').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  LEVEL = btn.dataset.level;
+  render();
+}
+function toggleBatch() {
+  ONLY_BATCH = !ONLY_BATCH;
+  document.getElementById('batchBtn').classList.toggle('active', ONLY_BATCH);
+  render();
+}
+function setIndustry(name) {
+  INDUSTRY = name;   // '所有行业' 传 '' 进来
+  document.querySelectorAll('.ind-card').forEach(c =>
+    c.classList.toggle('active', c.dataset.name === INDUSTRY));
+  render();
+}
+
+function sparkline(trend, dir) {
+  if (!trend || trend.length < 2) return '';
+  const w = 150, h = 36, pad = 2;
+  const min = Math.min(...trend), max = Math.max(...trend);
+  const span = (max - min) || 1;
+  const pts = trend.map((v, i) => {
+    const x = pad + i * (w - 2 * pad) / (trend.length - 1);
+    const y = h - pad - (v - min) / span * (h - 2 * pad);
+    return x.toFixed(1) + ',' + y.toFixed(1);
+  }).join(' ');
+  const color = dir === 'up' ? '#DC2626' : (dir === 'down' ? '#16A34A' : '#64748B');
+  const last = pts.split(' ').pop().split(',');
+  return `<svg class="spark" viewBox="0 0 ${w} ${h}">` +
+    `<polyline points="${pts}" fill="none" stroke="${color}" stroke-width="1.5"/>` +
+    `<circle cx="${last[0]}" cy="${last[1]}" r="2.5" fill="${color}"/></svg>`;
+}
+
+function fmt(v, digits) {
+  if (v === null || v === undefined) return '—';
+  return Number(v).toLocaleString('zh-CN', { maximumFractionDigits: digits === undefined ? 2 : digits });
+}
+function fmtInc(inc) {
+  inc = String(inc || '');
+  return inc.length === 8 ? inc.slice(0,4) + '-' + inc.slice(4,6) + '-' + inc.slice(6,8) : inc;
+}
+
+function alertCard(a, i) {
+  const dirCls = a.direction, dirArrow = a.direction === 'up' ? '↑' : (a.direction === 'down' ? '↓' : '→');
+  const pctTxt = a.change_pct !== null ? ` (${a.change_pct > 0 ? '+' : ''}${fmt(a.change_pct)}%)` : '';
+  const stale = a.age_days !== null && a.age_days > 45 ? ` <span style="color:#D97706">（数据${a.age_days}天未更新）</span>` : '';
+  const batchBadge = a.in_last_batch ? '<span class="batch-badge">本期</span>' : '';
+  const sigRules = a.signals.map(s => {
+    const d = ruleDescOf(s);
+    return d ? `<div class="sig-rule"><span class="sig-name">▸ ${s}</span><br><span class="rule-desc">规则：${d}</span></div>` : '';
+  }).join('');
+  return `<div class="card alert-card ${a.level}" id="card${i}" onclick="toggle(${i})">
+    <div class="alert-main">
+      <div class="level-dot ${a.level}"></div>
+      <div>
+        <div class="ind-name">${a.name}${batchBadge}</div>
+        <div class="ind-cat">${a['一级']} / ${a['二级']} · ${a.id}</div>
+      </div>
+      <div class="metric">
+        <div class="m-label">最新值（${a.latest_date}）</div>
+        <div class="m-value">${fmt(a.latest)} ${a['单位'] || ''}${stale}</div>
+      </div>
+      <div class="metric">
+        <div class="m-label">较上期</div>
+        <div class="m-value ${dirCls}">${dirArrow} ${a.change > 0 ? '+' : ''}${fmt(a.change)}${pctTxt}</div>
+      </div>
+      <div class="badges">${a.signals.map(s =>
+        `<span class="badge ${a.level === 'red' ? '' : 'soft'}">${s}</span>`).join('')}</div>
+      ${sparkline(a.trend, a.direction)}
+      <div class="expand-icon">▶</div>
+    </div>
+    <div class="alert-detail">
+      <span class="kv">历史分位：<b>${fmt(a.percentile, 1)}%</b></span>
+      <span class="kv">变动 Z-score：<b>${a.zscore > 0 ? '+' : ''}${fmt(a.zscore)}</b></span>
+      <span class="kv">连续同向：<b>${a.streak} 期</b></span>
+      <span class="kv">得分：<b>${a.score}</b>（≥3 判红）</span>
+      <a class="detail-link" href="/ipm-tracker/whale" onclick="event.stopPropagation()">在景气面板中查看 →</a>
+      ${sigRules ? `<div class="sig-rules">${sigRules}</div>` : ''}
+    </div>
+  </div>`;
+}
+
+function render() {
+  const sig = document.getElementById('sigFilter').value;
+  const list = document.getElementById('list');
+  if (!DATA) return;
+
+  const rows = DATA.alerts.filter(a =>
+    (LEVEL === 'all' || a.level === LEVEL) &&
+    (!INDUSTRY || a['一级'] === INDUSTRY) &&
+    (!ONLY_BATCH || a.in_last_batch) &&
+    (!sig || a.signals.some(s => s.includes(sig)))
+  );
+
+  if (!rows.length) {
+    list.className = 'empty';
+    list.innerHTML = DATA.alerts.length ? '当前筛选条件下无异动指标' : '🎉 全部指标均在正常区间内，无异动';
+    return;
+  }
+  list.className = '';
+
+  // 按一级行业分组（行业顺序按服务端 industries 顺序）
+  const order = DATA.industries.map(x => x.name);
+  const groups = {};
+  rows.forEach(a => {
+    const k = a['一级'] || '未分类';
+    (groups[k] = groups[k] || []).push(a);
+  });
+  const groupNames = Object.keys(groups).sort((x, y) =>
+    (order.indexOf(x) === -1 ? 99 : order.indexOf(x)) - (order.indexOf(y) === -1 ? 99 : order.indexOf(y)));
+
+  let idx = 0;
+  list.innerHTML = groupNames.map(g => {
+    const items = groups[g];
+    const r = items.filter(a => a.level === 'red').length;
+    const y = items.length - r;
+    const header = `<div class="group-header"><h2>${g}</h2>
+      <span class="counts">${r ? `<span class="r">🔴 红 ${r}</span> · ` : ''}<span class="y">🟡 黄 ${y}</span> · 共 ${items.length} 个异动</span></div>`;
+    const cards = items.map(a => alertCard(a, idx++)).join('');
+    return header + cards;
+  }).join('');
+}
+
+function toggle(i) {
+  document.getElementById('card' + i).classList.toggle('open');
+}
+
+fetch('/ipm-tracker/api/alerts')
+  .then(r => r.json())
+  .then(res => {
+    if (res.status !== 'ok') throw new Error(res.message || 'API error');
+    DATA = res;
+
+    const inc = fmtInc(res.last_increment);
+    const dataDate = res.data_latest_date || '';
+    document.getElementById('updateTime').textContent =
+      (inc ? `数据更新：${inc}` : '') + (dataDate && dataDate !== inc ? `（数据至 ${dataDate}）` : '') +
+      ` · 扫描 ${res.updated.slice(11, 16)}`;
+
+    const freshTotal = res.industries.reduce((s, x) => s + x.fresh, 0);
+    document.getElementById('summary').innerHTML = `
+      <div class="card stat-card blue"><div class="stat-num">${res.total_indicators}</div><div class="stat-label">监测指标</div></div>
+      <div class="card stat-card red"><div class="stat-num">${res.red_count}</div><div class="stat-label">🔴 红色异动</div></div>
+      <div class="card stat-card yellow"><div class="stat-num">${res.yellow_count}</div><div class="stat-label">🟡 黄色关注</div></div>
+      <div class="card stat-card"><div class="stat-num">${res.total_indicators - res.alerted}</div><div class="stat-label">正常区间</div></div>
+      <div class="card stat-card"><div class="stat-num">${freshTotal}</div><div class="stat-label">本期更新指标（${inc || '—'}）</div></div>`;
+
+    // 行业一览：第一张为"所有行业"按钮（聚合全部行业）
+    const totalUp = res.industries.reduce((s, x) => s + x.up, 0);
+    const totalDown = res.industries.reduce((s, x) => s + x.down, 0);
+    const totalFlat = res.industries.reduce((s, x) => s + x.flat, 0);
+    const allCard = `
+      <div class="ind-card all-card card active" data-name="" onclick="setIndustry('')">
+        <div class="ind-name">所有行业</div>
+        <div class="ind-alerts">${res.red_count ? `<span style="color:#FFD1D1;font-weight:700">🔴 ${res.red_count}</span> ` : ''}${res.yellow_count ? `<span style="color:#FFE4B3;font-weight:700">🟡 ${res.yellow_count}</span>` : ''}</div>
+        <div class="ind-trend"><span>↑${totalUp}</span> / <span>↓${totalDown}</span> / →${totalFlat}</div>
+        <div class="ind-fresh">本期更新 ${freshTotal} / ${res.total_indicators} 个指标</div>
+      </div>`;
+    document.getElementById('industryStrip').innerHTML = allCard + res.industries.map(x => `
+      <div class="ind-card card" data-name="${x.name}" onclick="setIndustry('${x.name}')">
+        <div class="ind-name">${x.name}</div>
+        <div class="ind-alerts">${x.red ? `<span class="r">🔴 ${x.red}</span> ` : ''}${x.yellow ? `<span class="y">🟡 ${x.yellow}</span>` : ''}${!x.red && !x.yellow ? '<span class="none">无异动</span>' : ''}</div>
+        <div class="ind-trend"><span class="up">↑${x.up}</span> / <span class="down">↓${x.down}</span> / →${x.flat}</div>
+        <div class="ind-fresh">本期更新 ${x.fresh} / ${x.total} 个指标</div>
+      </div>`).join('');
+
+    render();
+  })
+  .catch(e => {
+    document.getElementById('list').className = 'err';
+    document.getElementById('list').textContent = '加载失败：' + e.message;
+  });
+</script>
+</body>
+</html>

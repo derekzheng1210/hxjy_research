@@ -136,14 +136,17 @@ class SchedulerLock:
 
     def acquire(self) -> bool:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.handle = open(self.path, "a+b")
-        self.handle.seek(0)
-        if self.handle.read(1) == b"":
-            self.handle.seek(0)
-            self.handle.write(b"0")
-            self.handle.flush()
-        self.handle.seek(0)
         try:
+            # Windows 上已有进程持有文件时，open/read 本身就可能抛出
+            # PermissionError，而不只是 msvcrt.locking 失败。此时说明已有
+            # 调度器或残留进程在占用锁，不能阻断整个门户启动。
+            self.handle = open(self.path, "a+b")
+            self.handle.seek(0)
+            if self.handle.read(1) == b"":
+                self.handle.seek(0)
+                self.handle.write(b"0")
+                self.handle.flush()
+            self.handle.seek(0)
             if os.name == "nt":
                 import msvcrt
                 msvcrt.locking(self.handle.fileno(), msvcrt.LK_NBLCK, 1)
@@ -152,7 +155,8 @@ class SchedulerLock:
                 fcntl.flock(self.handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
             return True
         except (OSError, IOError):
-            self.handle.close()
+            if self.handle is not None:
+                self.handle.close()
             self.handle = None
             return False
 

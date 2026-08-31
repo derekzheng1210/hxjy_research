@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>后台上传 - 内部研究平台</title>
+<title>后台上传与更新 - 内部研究工作台</title>
 <style>
 *{box-sizing:border-box}
 body{margin:0;background:#f3f4f6;color:#111827;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif}
@@ -60,15 +60,37 @@ button.ghost{background:#eef2ff;color:#3730a3;font-weight:700;padding:0 10px;hei
 .toolbar{display:flex;gap:10px;align-items:center;margin-top:12px;flex-wrap:wrap}
 #llmMessage{font-size:12px}
 .actions{display:flex;gap:10px;margin-top:12px;flex-wrap:wrap}
+.visibility-sections{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px;margin-top:14px}
+.visibility-section{background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px}
+.visibility-section h3{font-size:13px;margin:0 0 9px;color:#334155}
+.visibility-section label{display:flex;align-items:flex-start;gap:8px;font-size:12px;color:#475569;padding:5px 0;line-height:1.4}
+.visibility-section input{margin-top:2px}
 </style>
 </head>
 <body>
 
 <main class="main">
-  <div class="admin-actions"><a href="{{ url_for('admin_logout') }}">退出后台管理</a></div>
+  <div class="admin-actions"><a href="{{ url_for('admin_logout') }}">退出后台</a></div>
   {% if message %}<div class="msg ok">{{ message }}</div>{% endif %}
   {% if error %}<div class="msg err">{{ error }}</div>{% endif %}
   <div class="grid">
+
+    <form class="card wide" method="post">
+      <input type="hidden" name="target" value="page_visibility">
+      <h2>页面显隐管理</h2>
+      <p>取消勾选后，该页面会从首页和统一导航隐藏；重新勾选即可恢复，设置保存后即时生效。</p>
+      <div class="visibility-sections">
+        {% for section in page_sections %}
+        <div class="visibility-section">
+          <h3>{{ section.title }}</h3>
+          {% for page in section.pages %}
+          <label><input type="checkbox" name="visible_pages" value="{{ page.key }}" {% if page_visibility.get(page.key, true) %}checked{% endif %}>{{ page.title }}</label>
+          {% endfor %}
+        </div>
+        {% endfor %}
+      </div>
+      <div class="actions"><button type="submit">保存页面显隐设置</button></div>
+    </form>
 
     <section class="card wide">
       <h2>数据状态总览</h2>
@@ -105,7 +127,7 @@ button.ghost{background:#eef2ff;color:#3730a3;font-weight:700;padding:0 10px;hei
           </tr>
           <tr>
             <td>内评 / 限额 / 持仓</td>
-            <td><span class="mode mode-auto">门户自动同步</span></td>
+            <td><span class="mode mode-db">门户自动同步 / 一键更新</span></td>
             <td>{{ status.portal_data.updated }}</td>
             <td>
               {% if status.portal_data.missing %}
@@ -117,7 +139,7 @@ button.ghost{background:#eef2ff;color:#3730a3;font-weight:700;padding:0 10px;hei
           </tr>
           <tr>
             <td>外部经纪商行情（DM）</td>
-            <td><span class="mode mode-auto">盘中定时抓取</span></td>
+            <td><span class="mode mode-db">盘中定时 / 一键更新</span></td>
             <td>最近成功 {{ status.broker_market.broker.last_success or '-' }}<br><span style="color:#6b7280">快照 {{ status.broker_snapshot.updated }}</span></td>
             <td>
               状态 {{ status.broker_market.broker.state or 'idle' }}{% if status.broker_market.broker.stale %}（已过期）{% endif %}；报价 {{ status.broker_snapshot.quotes }} 条；下次运行 {{ status.broker_market.broker.next_run or '-' }}
@@ -131,14 +153,32 @@ button.ghost{background:#eef2ff;color:#3730a3;font-weight:700;padding:0 10px;hei
             <td>{{ status.spread_monitor.size }}</td>
           </tr>
           <tr>
-            <td>策略仪表盘</td>
+            <td>超长端利率利差</td>
+            <td><span class="mode mode-db">每日定时 / 一键更新</span></td>
+            <td>{{ status.rate_spread.updated }}</td>
+            <td>{{ status.rate_spread.size }}（本地 SQLite 缓存）</td>
+          </tr>
+          <tr>
+            <td>新老券利差</td>
+            <td><span class="mode mode-db">每日定时 / 一键更新</span></td>
+            <td>{{ status.rate_bond_switch.updated }}</td>
+            <td>{{ status.rate_bond_switch.size }}（本地 SQLite 缓存）</td>
+          </tr>
+          <tr>
+            <td>国债·地方债发行</td>
+            <td><span class="mode mode-db">每日定时 / 一键更新</span></td>
+            <td>{{ status.rate_issuance.updated }}</td>
+            <td>{{ status.rate_issuance.size }}（本地 SQLite 缓存）</td>
+          </tr>
+          <tr>
+            <td>信用骑乘策略</td>
             <td><span class="mode mode-db">一键更新</span></td>
             <td>{{ status.strategy_dashboard.updated }}</td>
             <td>{{ status.strategy_dashboard.size }}</td>
           </tr>
           <tr>
             <td>中长期纯债基金指数</td>
-            <td><span class="mode mode-auto">量化库自动</span></td>
+            <td><span class="mode mode-db">量化库自动 / 一键更新</span></td>
             <td>{{ status.fund_index.updated }}</td>
             <td>{{ status.fund_index.size }}（万得 885008.WI，随一键更新与每日定时任务同步）</td>
           </tr>
@@ -166,24 +206,34 @@ button.ghost{background:#eef2ff;color:#3730a3;font-weight:700;padding:0 10px;hei
             <td>{{ status.industry_prosperity.updated }}</td>
             <td>{{ status.industry_prosperity.size }}</td>
           </tr>
+          <tr>
+            <td>行业景气高频跟踪</td>
+            <td><span class="mode mode-db">Wind / 一键更新</span></td>
+            <td>{{ status.ipm_tracker.updated }}</td>
+            <td>{{ status.ipm_tracker.size }}（本地缓存，页面不再单独上传）</td>
+          </tr>
         </tbody>
       </table>
     </section>
 
     <section class="card wide">
-      <h2>数据库一键更新</h2>
-      <p>从公司 Oracle 数据库刷新债券池、中债估值、合规630评级事实、两倍标准差最新曲线、策略仪表盘、存量债利差监控和机构行为曲线数据；同步信评门户内评/限额/持仓与量化库基金指数。债券池采用首次行权剩余期限，任务异步运行，异常差异不会覆盖旧数据。</p>
+      <h2>后台一键更新</h2>
+      <p>集中刷新公司 Oracle 数据库、信评门户与量化库中的定期数据，包括信用债工具、利率债研究、机构行为与一级发行研究。任务异步运行，异常差异不会覆盖旧数据。</p>
       <form id="dbUpdateForm" method="post" action="{{ url_for('admin_start_db_update') }}">
         <div class="module-list">
           <label><input type="checkbox" name="modules" value="bond_picker" checked>择券工具估值（含630评级）</label>
           <label><input type="checkbox" name="modules" value="spread_monitor" checked>利差监控</label>
-          <label><input type="checkbox" name="modules" value="strategy_dashboard" checked>策略仪表盘</label>
+          <label><input type="checkbox" name="modules" value="strategy_dashboard" checked>信用骑乘策略</label>
           <label><input type="checkbox" name="modules" value="credit_std_dev" checked>两倍标准差</label>
           <label><input type="checkbox" name="modules" value="institution_flow_rates" checked>机构行为曲线</label>
           <label><input type="checkbox" name="modules" value="primary_market_pricing" checked>一级发行定价缓存</label>
+          <label><input type="checkbox" name="modules" value="rate_spread" checked>超长端利率利差</label>
+          <label><input type="checkbox" name="modules" value="rate_bond_switch" checked>新老券利差</label>
+          <label><input type="checkbox" name="modules" value="rate_issuance" checked>国债、地方债发行</label>
+          <label><input type="checkbox" name="modules" value="ipm_tracker" checked>行业景气高频数据</label>
         </div>
         <div class="actions">
-          <button id="dbUpdateButton" type="submit">开始数据库更新</button>
+          <button id="dbUpdateButton" type="submit">开始一键更新</button>
           <button id="ratingRefreshButton" type="button" class="secondary">单独刷新630评级缓存</button>
         </div>
       </form>
@@ -215,7 +265,7 @@ button.ghost{background:#eef2ff;color:#3730a3;font-weight:700;padding:0 10px;hei
     </section>
 
     <section class="card wide">
-      <h2>经纪商行情手动更新</h2>
+      <h2>经纪商行情一键更新</h2>
       <p>网页运行期间，周一至周五按盘中时点抓取 DM 最优报价；关闭独立项目窗口后自动更新同时停止。失败会保留最近成功快照并自动重试。</p>
       {% set broker = status.broker_market.broker %}
       {% set valuation = status.broker_market.bond_picker %}

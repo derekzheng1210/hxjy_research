@@ -570,15 +570,15 @@ def _search_from_cache(query: str) -> list[dict] | None:
     try:
         rows = cache_conn.execute(
             """
-            SELECT issuer, label, match_type
+            SELECT issuer, label, match_type, bond_symbol
             FROM (
-                SELECT issuer, issuer AS label, 'issuer' AS match_type
+                SELECT issuer, issuer AS label, 'issuer' AS match_type, NULL AS bond_symbol
                 FROM issuer_summary
                 WHERE issuer LIKE ? AND issue_date_rule = ?
 
                 UNION
 
-                SELECT issuer, bond_name AS label, 'bond' AS match_type
+                SELECT issuer, bond_name AS label, 'bond' AS match_type, symbol AS bond_symbol
                 FROM bond_deviations
                 WHERE bond_name LIKE ? AND issue_date_rule = ?
             )
@@ -1302,11 +1302,12 @@ def api_search():
                 for keyword in config.EXCLUDED_ISSUER_KEYWORDS
             )
             cur.execute(f"""
-                SELECT issuer, label, match_type
+                SELECT issuer, label, match_type, bond_symbol
                 FROM (
                     SELECT DISTINCT n.COMPNAME AS issuer,
                            n.COMPNAME AS label,
-                           'issuer' AS match_type
+                           'issuer' AS match_type,
+                           NULL AS bond_symbol
                     FROM TQ_BD_NEWESTBASICINFO n
                     WHERE n.COMPNAME LIKE :q
                       AND n.ISVALID = 1
@@ -1318,7 +1319,8 @@ def api_search():
 
                     SELECT DISTINCT n.COMPNAME AS issuer,
                            b.BONDSNAME AS label,
-                           'bond' AS match_type
+                           'bond' AS match_type,
+                           b.SYMBOL AS bond_symbol
                     FROM TQ_BD_BASICINFO b
                     JOIN TQ_BD_NEWESTBASICINFO n ON n.SECODE = b.SECODE
                     WHERE b.BONDSNAME LIKE :q
@@ -1341,7 +1343,7 @@ def api_search():
                 "prefix_query": f"{query}%",
             })
             results = [
-                {"issuer": row[0], "label": row[1], "match_type": row[2]}
+                {"issuer": row[0], "label": row[1], "match_type": row[2], "bond_symbol": row[3]}
                 for row in cur.fetchall()
                 if row[0] and row[1]
             ]

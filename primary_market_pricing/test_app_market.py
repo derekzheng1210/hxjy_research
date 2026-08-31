@@ -122,11 +122,13 @@ class MarketAggregationTests(unittest.TestCase):
             "issuer": "测试发行人",
             "label": "25测试债",
             "match_type": "bond",
+            "bond_symbol": "TEST001",
         })
         self.assertIn({
             "issuer": "25测试债",
             "label": "25测试债",
             "match_type": "issuer",
+            "bond_symbol": None,
         }, results)
 
     def test_market_cache_miss_returns_empty_without_waiting(self):

@@ -757,8 +757,8 @@ function renderNormalTable(bonds,filters){
     html+=`<tr>
       <td>${globalIdx}</td>
       <td><button class="expand-btn" id="nbtn-${expKey}" onclick="normalToggleBond('${expKey}','${escAttr(b.code)}',${nearbyTh})">${isExpanded?'\u25bc 收':'\u25b6 展'}${nearbyCount>0?' ('+nearbyCount+')':''}</button></td>
-      <td><strong>${esc(b.name)}</strong></td>
-      <td style="font-size:.75rem;color:var(--tx2)">${esc(b.code)}</td>
+      <td><a href="/bond-detail?code=${encodeURIComponent(b.code)}" title="查看债券详查" style="color:inherit;text-decoration:none"><strong>${esc(b.name)}</strong></a></td>
+      <td style="font-size:.75rem;color:var(--tx2)"><a href="/bond-detail?code=${encodeURIComponent(b.code)}" title="查看债券详查" style="color:inherit;text-decoration:none">${esc(b.code)}</a></td>
       <td class="num">${b.term.toFixed(2)}</td>
       <td class="num"><strong>${b.ytm.toFixed(4)}</strong></td>
       <td>${esc(b.rating)}</td>
@@ -787,8 +787,8 @@ function renderNormalTable(bonds,filters){
         const yieldDiff=(n.ytm-b.ytm)*100;
         const diffClass=yieldDiff>0?'color:var(--red)':yieldDiff<0?'color:var(--grn)':'';
         html+=`<tr>
-          <td>${esc(n.name)}</td>
-          <td style="font-size:.75rem;color:var(--tx2)">${esc(n.code)}</td>
+          <td><a href="/bond-detail?code=${encodeURIComponent(n.code)}" title="查看债券详查" style="color:inherit;text-decoration:none">${esc(n.name)}</a></td>
+          <td style="font-size:.75rem;color:var(--tx2)"><a href="/bond-detail?code=${encodeURIComponent(n.code)}" title="查看债券详查" style="color:inherit;text-decoration:none">${esc(n.code)}</a></td>
           <td class="num">${n.term.toFixed(2)}</td>
           <td class="num"><strong>${n.ytm.toFixed(4)}</strong></td>
           <td class="num">${termDiff>0?'+':''}${termDiff.toFixed(2)}</td>
@@ -1009,7 +1009,7 @@ function renderNormalTable(bonds,filters){
   pageBonds.forEach((b,idx)=>{
     const globalIdx=start+idx+1,favorite=STATE.favorites.has(b.code);
     html+=`<tr><td class="sticky-1"><button class="fav-btn${favorite?' active':''}" title="${favorite?'取消关注':'加入关注'}" onclick="toggleFavorite('${escAttr(b.code)}')">${favorite?'★':'☆'}</button></td>`;
-    html+=`<td class="sticky-2">${globalIdx}</td><td class="sticky-3"><strong>${esc(b.name)}</strong></td><td style="color:var(--tx2)">${esc(b.code)}</td>`;
+    html+=`<td class="sticky-2">${globalIdx}</td><td class="sticky-3"><a href="/bond-detail?code=${encodeURIComponent(b.code)}" title="查看债券详查" style="color:inherit;text-decoration:none"><strong>${esc(b.name)}</strong></a></td><td style="color:var(--tx2)"><a href="/bond-detail?code=${encodeURIComponent(b.code)}" title="查看债券详查" style="color:inherit;text-decoration:none">${esc(b.code)}</a></td>`;
     html+=`<td class="num">${fmt(b.term,2)}</td><td class="num"><strong>${fmt(b.ytm)}</strong></td>`;
     html+=`<td class="num">${volumeDisplay(b.bidVolText,b.bidVol)}</td><td class="num quote-bid quote-cell" title="${quoteTitle('bid',b)}">${b.hasBid?'<span class="quote-dot"></span>':''}${fmt(b.bid)}</td>`;
     html+=`<td class="num quote-ofr quote-cell" title="${quoteTitle('ofr',b)}">${b.hasOfr?'<span class="quote-dot"></span>':''}${fmt(b.ofr)}</td><td class="num">${volumeDisplay(b.ofrVolText,b.ofrVol)}</td>`;
@@ -1249,7 +1249,7 @@ function renderGroupDetail(g){
     if(highCodes.has(b.code)&&!lowCodes.has(b.code)){fillClass='fill-high';rowClass=' class="highlight-row"';}
     else if(lowCodes.has(b.code)&&!highCodes.has(b.code)){fillClass='fill-low';}
     html+=`<tr${rowClass}>
-      <td title="${esc(b.code)}">${esc(b.name)}${rating630Dot(b)}</td>
+      <td title="${esc(b.code)}"><a href="/bond-detail?code=${encodeURIComponent(b.code)}" title="查看债券详查" style="color:inherit;text-decoration:none">${esc(b.name)}</a>${rating630Dot(b)}</td>
       <td class="num">${b.term.toFixed(2)}</td>
       <td class="num"><strong>${b.ytm.toFixed(4)}</strong></td>
       <td><div class="yield-bar"><div class="yield-fill ${fillClass}" style="width:${pct.toFixed(0)}%"></div></div></td>
@@ -1268,10 +1268,10 @@ function renderGroupDetail(g){
   sorted.forEach((inv,i)=>{
     html+=`<tr>
       <td>${i+1}</td>
-      <td style="color:var(--red)" title="${esc(inv.s.code)}">${esc(inv.s.name)}${rating630Dot(inv.s)}</td>
+      <td style="color:var(--red)" title="${esc(inv.s.code)}"><a href="/bond-detail?code=${encodeURIComponent(inv.s.code)}" title="查看债券详查" style="color:inherit;text-decoration:none">${esc(inv.s.name)}</a>${rating630Dot(inv.s)}</td>
       <td class="num">${inv.s.term.toFixed(2)}</td><td class="num">${inv.s.ytm.toFixed(4)}</td>
       <td style="text-align:center;color:var(--tx3)">vs</td>
-      <td style="color:var(--grn)" title="${esc(inv.l.code)}">${esc(inv.l.name)}${rating630Dot(inv.l)}</td>
+      <td style="color:var(--grn)" title="${esc(inv.l.code)}"><a href="/bond-detail?code=${encodeURIComponent(inv.l.code)}" title="查看债券详查" style="color:inherit;text-decoration:none">${esc(inv.l.name)}</a>${rating630Dot(inv.l)}</td>
       <td class="num">${inv.l.term.toFixed(2)}</td><td class="num">${inv.l.ytm.toFixed(4)}</td>
       <td class="num">${inv.td.toFixed(2)}</td>
       <td class="num"><strong style="color:var(--red)">${inv.yd.toFixed(1)}</strong></td>
@@ -1297,7 +1297,7 @@ function renderConvex(convex){
   html+='</tr></thead><tbody>';
   convex.forEach(c=>{
     html+=`<tr>
-      <td class="bond-name" title="${esc(c.bond.code)}"><strong>${esc(c.bond.name)}</strong>${rating630Dot(c.bond)}</td>
+      <td class="bond-name" title="${esc(c.bond.code)}"><a href="/bond-detail?code=${encodeURIComponent(c.bond.code)}" title="查看债券详查" style="color:inherit;text-decoration:none"><strong>${esc(c.bond.name)}</strong></a>${rating630Dot(c.bond)}</td>
       <td class="num">${c.bond.term.toFixed(2)}</td>
       <td class="num"><strong style="color:var(--red)">${c.bond.ytm.toFixed(4)}</strong></td>
       <td class="num quote-ofr">${c.bond.ofr===null?'-':c.bond.ofr.toFixed(4)}</td>
@@ -1306,8 +1306,8 @@ function renderConvex(convex){
       <td>${esc(c.bond.ir)}</td>
       <td class="num" style="color:var(--red)">${c.dp.toFixed(1)}</td>
       <td class="num" style="color:var(--red)">${c.dn.toFixed(1)}</td>
-      <td class="bond-name" title="${c.prev.ytm.toFixed(4)}%">${esc(c.prev.name)}${rating630Dot(c.prev)}</td>
-      <td class="bond-name" title="${c.next.ytm.toFixed(4)}%">${esc(c.next.name)}${rating630Dot(c.next)}</td>
+      <td class="bond-name" title="${c.prev.ytm.toFixed(4)}%"><a href="/bond-detail?code=${encodeURIComponent(c.prev.code)}" title="查看债券详查" style="color:inherit;text-decoration:none">${esc(c.prev.name)}</a>${rating630Dot(c.prev)}</td>
+      <td class="bond-name" title="${c.next.ytm.toFixed(4)}%"><a href="/bond-detail?code=${encodeURIComponent(c.next.code)}" title="查看债券详查" style="color:inherit;text-decoration:none">${esc(c.next.name)}</a>${rating630Dot(c.next)}</td>
     </tr>`;
   });
   html+='</tbody></table></div></div></div>';

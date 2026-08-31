@@ -1,31 +1,65 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>内部研究平台</title>
+<title>内部研究工作台</title>
 <style>
-*{box-sizing:border-box}body{margin:0;background:#f3f4f6;color:#111827;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif}.main{max-width:1120px;margin:0 auto;padding:24px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px}.card{background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:18px;text-decoration:none;color:#111827;box-shadow:0 1px 3px rgba(15,23,42,.06)}.card:hover{border-color:#2563eb;box-shadow:0 8px 22px rgba(37,99,235,.1)}.card h2{font-size:17px;margin:0 0 8px}.card p{font-size:13px;color:#4b5563;line-height:1.6;margin:0 0 14px}.meta{font-size:12px;color:#6b7280;background:#f9fafb;border:1px solid #f3f4f6;border-radius:6px;padding:8px 10px}.section-title{font-size:13px;color:#6b7280;font-weight:700;margin:0 0 12px}.management-title{margin-top:28px;padding-top:22px;border-top:1px solid #dbe2ea}.management-card{border-left:4px solid #475569}.management-card:hover{border-color:#475569;box-shadow:0 8px 22px rgba(71,85,105,.14)}
+*{box-sizing:border-box}
+:root{--ink:#152238;--muted:#66758a;--line:#dfe6ef;--primary:#1f5b99;--surface:#fff;--canvas:#eef2f7}
+body{margin:0;background:var(--canvas);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif}
+.main{max-width:1480px;margin:0 auto;padding:28px 32px 54px}
+.masthead{display:flex;align-items:flex-end;justify-content:space-between;gap:24px;margin-bottom:24px}
+.masthead h1{font-size:27px;line-height:1.2;margin:0;letter-spacing:.02em}
+.masthead p{font-size:13px;color:var(--muted);margin:8px 0 0}
+.capacity{font-size:12px;color:#718096;background:#f8fafc;border:1px solid var(--line);border-radius:999px;padding:7px 12px;white-space:nowrap}
+.section{background:rgba(255,255,255,.65);border:1px solid var(--line);border-radius:12px;padding:16px 18px 18px;margin-bottom:16px}
+.section-head{display:flex;align-items:baseline;gap:12px;margin-bottom:12px}
+.section-head h2{font-size:16px;margin:0;letter-spacing:.02em}
+.section-head span{font-size:10px;color:#8290a3;font-weight:700;letter-spacing:.14em}
+.grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px}
+.card{min-height:140px;background:var(--surface);border:1px solid #e0e6ee;border-radius:9px;padding:16px;text-decoration:none;color:var(--ink);box-shadow:0 1px 3px rgba(15,23,42,.05);display:flex;flex-direction:column;position:relative;overflow:hidden;transition:transform .15s,border-color .15s,box-shadow .15s}
+.card:before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:#9aafc6;transition:width .15s,background .15s}
+.card:hover{transform:translateY(-2px);border-color:#8fb3db;box-shadow:0 10px 24px rgba(30,73,118,.11)}
+.card:hover:before{width:4px;background:var(--primary)}
+.card h3{font-size:15px;margin:0 0 8px;line-height:1.35}
+.card p{font-size:12px;color:#5e6c80;line-height:1.55;margin:0 0 14px}
+.meta{margin-top:auto;font-size:11px;color:#7c899a;border-top:1px solid #edf1f5;padding-top:9px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.section[data-section="interest_rate"] .card:before{background:#2f6fad}
+.section[data-section="credit"] .card:before{background:#16845b}
+.section[data-section="institution"] .card:before{background:#8b5dad}
+.section[data-section="macro"] .card:before{background:#b7791f}
+.section[data-section="management"] .card:before{background:#64748b}
+@media(max-width:1180px){.grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media(max-width:760px){.main{padding:20px 14px 40px}.masthead{align-items:flex-start;flex-direction:column}.capacity{display:none}.grid{grid-template-columns:1fr}.card{min-height:0}.section{padding:14px}}
 </style>
 </head>
 <body>
-
 <main class="main">
-  <div class="section-title">工具入口</div>
-  <div class="grid">
-    <a class="card" href="{{ url_for('secondary_bond_picker') }}"><h2>二级择券工具</h2><p>融合中债估值与经纪商挂盘，提供情绪、推荐名单和交易筛选。</p><div class="meta">更新日期：{{ status.bond_picker.updated }}</div></a>
-    <a class="card" href="{{ url_for('bond_picker') }}"><h2>收益率倒挂挖掘工具</h2><p>寻找同主体期限倒挂与收益率曲线凸点。</p><div class="meta">更新日期：{{ status.bond_picker.updated }}</div></a>
-    <a class="card" href="{{ url_for('strategy_dashboard') }}"><h2>信用债策略仪表盘</h2><p>寻找目前市场占优信用策略。</p><div class="meta">更新日期：{{ status.strategy_dashboard.updated }}</div></a>
-    <a class="card" href="{{ url_for('spread_monitor') }}"><h2>存量债利差监控</h2><p>查看全市场、重点债券利差变化。</p><div class="meta">更新日期：{{ status.spread_monitor.updated }}</div></a>
-    <a class="card" href="{{ url_for('primary_market_pricing.index') }}"><h2>一级发行研究</h2><p>分析发行人一级发行定价偏离、非市场化比例与发飞情况。</p><div class="meta">缓存更新：{{ status.primary_market_pricing.updated }}</div></a>
-    <a class="card" href="{{ url_for('industry_prosperity') }}"><h2>行业景气度跟踪</h2><p>分析各个行业景气度</p><div class="meta">更新日期：{{ status.industry_prosperity.updated }}</div></a>
-    <a class="card" href="{{ url_for('credit_std_dev') }}"><h2>信用债两倍标准差</h2><p>跟踪信用利差相对均值与标准差区间的位置。</p><div class="meta">数据：{{ status.credit_std_dev.data_updated }}</div></a>
-    <a class="card" href="{{ url_for('institution_flow') }}"><h2>机构行为监测</h2><p>观察机构净买入，并叠加国债、国开债、地方债、信用收益率和利差走势。</p><div class="meta">曲线更新：{{ status.institution_flow.updated }}</div></a>
-  </div>
-  <div class="section-title management-title">管理与协同</div>
-  <div class="grid">
-    <a class="card management-card" href="{{ url_for('internal_knowledge_base.index') }}"><h2>内部知识库</h2><p>统一管理内部研究成果、团队评阅、意见反馈与知识检索。</p></a>
-  </div>
+  <header class="masthead">
+    <div>
+      <h1>内部研究工作台</h1>
+      <p>利率、信用、机构行为与中观研究集中入口</p>
+    </div>
+  </header>
+
+  {% for section in sections %}
+  <section class="section" data-section="{{ section.key }}">
+    <div class="section-head"><h2>{{ section.title }}</h2>{% if section.eyebrow %}<span>{{ section.eyebrow }}</span>{% endif %}</div>
+    <div class="grid">
+      {% for page in section.pages %}
+      {% set info = status.get(page.meta_key, {}) if page.meta_key else {} %}
+      <a class="card" href="{{ url_for(page.endpoint) }}">
+        <h3>{{ page.title }}</h3>
+        <p>{{ page.description }}</p>
+        <div class="meta">
+          {% if page.meta_key %}数据更新：{{ info.get('updated', '-') }}{% else %}团队研究协同与知识沉淀{% endif %}
+        </div>
+      </a>
+      {% endfor %}
+    </div>
+  </section>
+  {% endfor %}
 </main>
 </body>
 </html>

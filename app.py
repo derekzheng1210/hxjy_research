@@ -35,8 +35,24 @@ from juyuan_update.neiping_portal_fetch import load_portal_data
 import llm_config
 from primary_market_pricing.app import pricing_bp
 from internal_knowledge_base import bp as internal_knowledge_base_bp
+from ipm_tracker import bp as ipm_tracker_bp, init_app as init_ipm_tracker
+from ipm_tracker.routes import CACHE_FILE as IPM_TRACKER_CACHE
+from interest_bond import (
+    bond_switch_bp,
+    init_bond_switch,
+    init_issuance,
+    init_spread,
+    issuance_bp,
+    spread_bp,
+)
+from interest_bond import settings as interest_bond_settings
+from interest_bond.bond_switch import db as interest_bond_switch_db
+from interest_bond.issuance import database as interest_issuance_db
+from interest_bond.spread import db as interest_spread_db
+from page_registry import PAGE_SECTIONS, load_page_visibility, save_page_visibility, visible_sections
 import institution_flow_config
 import institution_flow_data
+from bond_detail import build_bond_detail, search_bonds
 from broker_market import (
     MARKET_DIR,
     data_version as bond_picker_data_version,
@@ -89,6 +105,10 @@ for _warn_var, _warn_default in (
 
 app.register_blueprint(pricing_bp, url_prefix="/primary-market-pricing")
 app.register_blueprint(internal_knowledge_base_bp, url_prefix="/internal-knowledge-base")
+app.register_blueprint(spread_bp)
+app.register_blueprint(bond_switch_bp)
+app.register_blueprint(issuance_bp)
+app.register_blueprint(ipm_tracker_bp, url_prefix="/ipm-tracker")
 
 BONDS_CACHE = []
 DATA_TIMESTAMP = "尚未加载"
@@ -159,9 +179,22 @@ def admin_required(func):
 
 
 @app.before_request
-def protect_primary_market_pricing():
-    if request.blueprint == pricing_bp.name and not session.get("authenticated"):
+def protect_blueprint_pages():
+    protected_blueprints = {
+        pricing_bp.name,
+        spread_bp.name,
+        bond_switch_bp.name,
+        issuance_bp.name,
+        ipm_tracker_bp.name,
+    }
+    if request.blueprint in protected_blueprints and not session.get("authenticated"):
         return redirect(url_for("login", next=request.path))
+
+
+@app.context_processor
+def portal_page_visibility_context():
+    visibility = load_page_visibility()
+    return {"page_is_visible": lambda key: visibility.get(key, True)}
 
 
 
@@ -331,6 +364,10 @@ def status_info():
             "updated": file_updated(INDUSTRY_HTML),
             "size": file_size(INDUSTRY_HTML),
         },
+        "ipm_tracker": {
+            "updated": file_updated_time(Path(IPM_TRACKER_CACHE)),
+            "size": file_size(Path(IPM_TRACKER_CACHE)),
+        },
         "credit_std_dev": {
             "updated": file_updated(STD_DEV_HTML),
             "size": file_size(STD_DEV_HTML),
@@ -362,49 +399,66 @@ def status_info():
             "updated": broker_snapshot.get("generated_at") or "-",
             "quotes": int(broker_snapshot.get("quote_count") or 0),
         },
+        "rate_spread": {
+            "updated": file_updated(interest_bond_settings.DATA_DIR / "spreads.db"),
+            "size": file_size(interest_bond_settings.DATA_DIR / "spreads.db"),
+        },
+        "rate_bond_switch": {
+            "updated": file_updated(interest_bond_settings.DATA_DIR / "bond_switch.db"),
+            "size": file_size(interest_bond_settings.DATA_DIR / "bond_switch.db"),
+        },
+        "rate_issuance": {
+            "updated": file_updated(interest_bond_settings.DATA_DIR / "tracker.db"),
+            "size": file_size(interest_bond_settings.DATA_DIR / "tracker.db"),
+        },
     }
 
 
 def portal_nav(active_endpoint: str):
-    links = [
-        ("home", "首页"),
-        ("secondary_bond_picker", "二级择券工具"),
-        ("bond_picker", "收益率倒挂挖掘工具"),
-        ("strategy_dashboard", "策略仪表盘"),
-        ("spread_monitor", "利差监控"),
-        ("primary_market_pricing.index", "一级发行研究"),
-        ("industry_prosperity", "行业景气度"),
-        ("credit_std_dev", "两倍标准差"),
-        ("institution_flow", "机构行为监测"),
-        ("internal_knowledge_base.index", "内部知识库"),
-        ("admin", "后台上传"),
-    ]
+    sections = visible_sections()
     items = ['<style id="portal-nav-style">']
     items.append(
         ".portal-nav{position:sticky;top:0;z-index:10000;background:#fff;color:#1e293b;"
-        "height:44px;display:flex;align-items:center;gap:6px;padding:0 16px;"
-        "border-bottom:1px solid #e2e8f0;overflow-x:auto;white-space:nowrap;font-family:-apple-system,BlinkMacSystemFont,"
+        "height:44px;display:flex;align-items:center;gap:4px;padding:0 18px;"
+        "border-bottom:1px solid #dbe3ee;white-space:nowrap;font-family:-apple-system,BlinkMacSystemFont,"
         '"Segoe UI","Microsoft YaHei",sans-serif;box-sizing:border-box}'
         ".portal-nav *{box-sizing:border-box}"
-        ".portal-nav .brand{font-weight:800;color:#2563eb;font-size:15px;margin-right:16px;letter-spacing:.5px}"
-        ".portal-nav a{color:#334155;text-decoration:none;font-size:12.5px;font-weight:600;"
-        "padding:0 14px;height:30px;display:inline-flex;align-items:center;border-radius:4px;transition:all .2s}"
+        ".portal-nav .brand{font-weight:800;color:#1d4f91;font-size:14px;margin-right:12px;letter-spacing:.4px;text-decoration:none}"
+        ".portal-nav a{color:#334155;text-decoration:none;font-size:12px;font-weight:600;"
+        "padding:0 11px;height:30px;display:inline-flex;align-items:center;border-radius:5px;transition:all .15s}"
         ".portal-nav a:hover{color:#2563eb;background:#eff6ff}"
         ".portal-nav a.active{color:#2563eb;background:#eff6ff;font-weight:700}"
-        ".portal-nav a.management-link{margin-left:8px;border-left:1px solid #cbd5e1;border-radius:0 4px 4px 0;padding-left:18px;color:#475569}"
+        ".portal-nav-groups{display:flex;align-items:center;gap:2px;min-width:0;flex:1}"
+        ".portal-nav-knowledge{margin-right:8px!important;padding-right:16px!important;border-right:1px solid #cbd5e1;border-radius:5px 0 0 5px!important;color:#1d4f91!important}"
+        ".portal-nav-group{position:relative;height:44px;display:flex;align-items:center}"
+        ".portal-nav-group>button{height:30px;padding:0 11px;border:0;border-radius:5px;background:transparent;color:#334155;font-family:inherit;font-size:12px;font-weight:600;cursor:pointer}"
+        ".portal-nav-group.active>button,.portal-nav-group:hover>button{color:#2563eb;background:#eff6ff}"
+        ".portal-nav-menu{display:none;position:absolute;top:38px;left:0;min-width:230px;padding:7px;background:#fff;border:1px solid #dbe3ee;border-radius:8px;box-shadow:0 14px 35px rgba(15,23,42,.16)}"
+        ".portal-nav-group:hover .portal-nav-menu,.portal-nav-group:focus-within .portal-nav-menu{display:grid}"
+        ".portal-nav-menu a{height:auto;min-height:34px;padding:8px 10px;white-space:normal}"
+        ".portal-nav-admin{margin-left:auto!important;color:#475569!important;border-left:1px solid #cbd5e1;border-radius:0 5px 5px 0!important;padding-left:16px!important}"
+        "@media(max-width:900px){.portal-nav{overflow-x:auto}.portal-nav-groups{flex:none}.portal-nav-menu{position:fixed;top:42px;left:auto}.portal-nav-admin{margin-left:8px!important}}"
     )
     items.append("</style>")
     items.append('<!-- CREDIT_TOOLS_PORTAL_NAV -->')
     items.append('<div class="portal-nav" data-portal-nav="credit-tools">')
-    items.append('<div class="brand">内部研究平台</div>')
-    for endpoint, label in links:
-        classes = []
-        if endpoint == active_endpoint:
-            classes.append("active")
-        if endpoint == "internal_knowledge_base.index":
-            classes.append("management-link")
-        class_attr = f' class="{" ".join(classes)}"' if classes else ""
-        items.append(f'<a href="{url_for(endpoint)}"{class_attr}>{label}</a>')
+    items.append(f'<a class="brand" href="{url_for("home")}">内部研究工作台</a>')
+    items.append('<div class="portal-nav-groups">')
+    for section in sections:
+        if section["key"] == "management":
+            page = section["pages"][0]
+            active_class = " active" if page["endpoint"] == active_endpoint else ""
+            items.append(f'<a class="portal-nav-knowledge{active_class}" href="{url_for(page["endpoint"])}">内部知识库</a>')
+            continue
+        section_active = any(page["endpoint"] == active_endpoint for page in section["pages"])
+        group_class = "portal-nav-group active" if section_active else "portal-nav-group"
+        items.append(f'<div class="{group_class}"><button type="button">{section["title"]} ▾</button><div class="portal-nav-menu">')
+        for page in section["pages"]:
+            active_class = ' class="active"' if page["endpoint"] == active_endpoint else ""
+            items.append(f'<a href="{url_for(page["endpoint"])}"{active_class}>{page["title"]}</a>')
+        items.append('</div></div>')
+    items.append('</div>')
+    items.append(f'<a class="portal-nav-admin" href="{url_for("admin")}">后台上传</a>')
     items.append("</div>")
     return "".join(items)
 
@@ -493,6 +547,7 @@ def html_response(path: Path, active_endpoint: str, missing_message: str, replac
         str(path),
         active_endpoint,
         tuple(sorted(replacements.items())) if replacements else None,
+        tuple(load_page_visibility().items()),
     )
 
     html = None
@@ -510,11 +565,11 @@ def html_response(path: Path, active_endpoint: str, missing_message: str, replac
         with _html_cache_lock:
             _html_cache[cache_key] = {"mtime": mtime, "html": html}
 
-    # 浏览器缓存：1 分钟内不重复请求整页；ETag 命中时仅回 304，省去 7MB 传输。
+    # HTML 每次先校验 ETag，命中时仅回 304；避免导航显隐或新增入口后仍显示旧菜单。
     etag = f'"{active_endpoint}-{int(mtime or 0)}-{size or 0}"'
     resp = Response(html, content_type="text/html; charset=utf-8")
     resp.headers["ETag"] = etag
-    resp.headers["Cache-Control"] = "private, max-age=60"
+    resp.headers["Cache-Control"] = "private, no-cache"
     resp.make_conditional(request)
     return resp
 
@@ -574,10 +629,18 @@ def compress_text_response(response):
 
 
 @app.after_request
-def inject_primary_market_pricing_nav(response):
-    if request.blueprint != pricing_bp.name or not response.content_type.startswith("text/html"):
+def inject_blueprint_portal_nav(response):
+    active_by_blueprint = {
+        pricing_bp.name: "primary_market_pricing.index",
+        spread_bp.name: "spread.index",
+        bond_switch_bp.name: "bond_switch.index",
+        issuance_bp.name: "issuance.index",
+        ipm_tracker_bp.name: "ipm_tracker.whale_dashboard",
+    }
+    active_endpoint = active_by_blueprint.get(request.blueprint)
+    if not active_endpoint or not response.content_type.startswith("text/html"):
         return response
-    response.set_data(inject_portal_nav(response.get_data(as_text=True), "primary_market_pricing.index"))
+    response.set_data(inject_portal_nav(response.get_data(as_text=True), active_endpoint))
     return response
 
 BACKUP_RETENTION_COUNT = 3
@@ -683,7 +746,56 @@ def admin_logout():
 @app.route("/")
 @login_required
 def home():
-    return render_portal_template("home.html", "home", status=status_info())
+    return render_portal_template(
+        "home.html",
+        "home",
+        status=status_info(),
+        sections=visible_sections(),
+    )
+
+
+@app.route("/bond-detail")
+@login_required
+def bond_detail():
+    return render_portal_template(
+        "bond_detail.html",
+        "bond_detail",
+        initial_code=str(request.args.get("code") or "").strip(),
+    )
+
+
+@app.route("/api/bond-detail/search")
+@login_required
+def api_bond_detail_search():
+    query = str(request.args.get("q") or "").strip()
+    if not query:
+        return jsonify({"items": []})
+    return jsonify({"items": search_bonds(query, request.args.get("limit", 20))})
+
+
+@app.route("/api/bond-detail/<path:code>")
+@login_required
+def api_bond_detail(code):
+    try:
+        exclude_exchange_tech = str(request.args.get("exclude_exchange_tech", "1")).lower() not in {
+            "0", "false", "no", "off",
+        }
+        horizon_months = int(request.args.get("horizon_months", 3))
+        payload = build_bond_detail(
+            code,
+            exclude_exchange_tech=exclude_exchange_tech,
+            horizon_months=horizon_months,
+        )
+    except KeyError as exc:
+        return jsonify({"error": str(exc).strip("'")}), 404
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 422
+    except Exception as exc:
+        return jsonify({"error": f"债券诊断加载失败: {str(exc)[:240]}"}), 500
+    response = jsonify(payload)
+    response.set_etag(payload["version"])
+    response.headers["Cache-Control"] = "private, no-cache"
+    return response
 
 
 @app.route("/bond-picker")
@@ -810,10 +922,13 @@ def strategy_dashboard():
     return html_response(
         STRATEGY_HTML,
         "strategy_dashboard",
-        "策略仪表盘 HTML 文件不存在，请先到后台上传。",
+        "信用骑乘策略 HTML 文件不存在，请先执行后台一键更新。",
         replacements={
+            "信用债策略仪表盘": "信用骑乘策略",
+            "骑乘效应与配置策略仪表盘": "信用骑乘策略",
             "https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js": local_echarts,
             "https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js": local_echarts,
+            "</head>": "<style id=\"portal-strategy-colors\">.header{background:#fff!important;border-bottom:1px solid #dfe6ef!important;box-shadow:0 2px 10px rgba(15,23,42,.06)!important}.header h1{background:none!important;color:#1d4f91!important;-webkit-text-fill-color:#1d4f91!important}</style></head>",
         },
     )
 
@@ -976,17 +1091,21 @@ def admin():
     error = None
     if request.method == "POST":
         target = request.form.get("target", "")
-        file = request.files.get("file")
-        if not file or not file.filename:
-            error = "请选择要上传的文件"
+        if target == "page_visibility":
+            save_page_visibility(request.form.getlist("visible_pages"))
+            message = "页面显隐设置已保存并即时生效。"
         else:
+            file = request.files.get("file")
+        if target != "page_visibility" and (not file or not file.filename):
+            error = "请选择要上传的文件"
+        elif target != "page_visibility":
             try:
                 if target == "unified_excel":
                     error = "基金指数已改为每日自动从量化数据库同步，不再支持 Excel 上传"
                 elif target == "bond_picker":
                     error = "债券清单由 Oracle 自动更新，不再支持 Excel 上传"
                 elif target == "strategy_dashboard":
-                    error = "策略仪表盘 HTML 上传入口已停用，请使用基金指数 Excel 和一键更新"
+                    error = "信用骑乘策略 HTML 上传入口已停用，请使用基金指数 Excel 和一键更新"
                 elif target == "spread_monitor_js":
                     error = "利差监控 JS 上传入口已停用，请使用一键更新"
                 elif target == "spread_monitor_bond_list":
@@ -1007,6 +1126,8 @@ def admin():
         update_status=get_update_status(),
         message=message,
         error=error,
+        page_sections=PAGE_SECTIONS,
+        page_visibility=load_page_visibility(),
     )
 
 
@@ -1087,6 +1208,10 @@ for directory in [BOND_DIR, STRATEGY_DIR, SPREAD_DIR, INDUSTRY_DIR, STD_DEV_JS.p
     directory.mkdir(parents=True, exist_ok=True)
 
 ensure_broker_directories()
+interest_spread_db.initialize()
+interest_bond_switch_db.initialize()
+interest_issuance_db.initialize()
+init_ipm_tracker()
 load_bond_data()
 
 if __name__ == "__main__":
@@ -1095,4 +1220,8 @@ if __name__ == "__main__":
     debug = os.environ.get("FLASK_DEBUG", "0") == "1"
     if os.environ.get("BROKER_SCHEDULER_ENABLED", "1") == "1":
         start_broker_scheduler()
+    if os.environ.get("BOND_MONITOR_SCHEDULERS_ENABLED", "1") == "1":
+        init_spread()
+        init_bond_switch()
+        init_issuance()
     app.run(host=host, port=port, debug=debug, use_reloader=False)
