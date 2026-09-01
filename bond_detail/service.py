@@ -740,7 +740,9 @@ def _one_year_reference(cache_dates: dict[str, Any], current: str) -> str:
     return max(candidates) if candidates else ""
 
 
-def spread_analysis(target: dict[str, Any], issuer_bonds: list[dict[str, Any]]) -> dict[str, Any]:
+def spread_analysis(
+    target: dict[str, Any], issuer_bonds: list[dict[str, Any]], yields: dict[str, float] | None = None,
+) -> dict[str, Any]:
     payload = read_js_data(config.SPREAD_JS) or {}
     rows = payload.get("data") or []
     row_index = {}
@@ -780,6 +782,10 @@ def spread_analysis(target: dict[str, Any], issuer_bonds: list[dict[str, Any]]) 
             "code": code,
             "name": bond.get("name") or "",
             "term": _number(bond.get("term")),
+            "yield": _number(
+                (yields or {}).get(code) if (yields or {}).get(code) is not None
+                else (yields or {}).get(bare_code(code))
+            ),
             "values": values,
             "change_week": round(current_value - values["一周前"], 2) if current_value is not None and values.get("一周前") is not None else None,
             "change_ytd": round(current_value - values["年初"], 2) if current_value is not None and values.get("年初") is not None else None,
@@ -949,7 +955,7 @@ def build_bond_detail(
         current_yield, rating_curve_yield, rating_curve_horizon, horizon_months=horizon_months,
     )
     quotes = quote_analysis(bond, issuer_bonds, yields)
-    spreads = spread_analysis(bond, issuer_bonds)
+    spreads = spread_analysis(bond, issuer_bonds, yields)
     credit_facility = credit_facility_analysis(bond)
     rating_compliance = rating_compliance_analysis(code)
     relative = {
