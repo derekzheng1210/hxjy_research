@@ -2839,6 +2839,7 @@
       ${modalHeader('在线查看', report.title)}
       <div class="modal-body" id="previewBody"><div class="preview-notice">${isPdf ? '正在加载文件，请稍候……' : '正在转换为 PDF 预览格式，请稍候……'}</div></div>
       <div class="modal-footer">
+        <button class="btn btn-ghost" data-action="toggle-preview-fullscreen" id="previewFullscreenBtn"><svg viewBox="0 0 24 24" fill="none"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>全屏</button>
         <button class="btn btn-ghost" data-close="modal">关闭</button>
         <button class="btn btn-primary" data-action="download" data-id="${report.id}"><svg viewBox="0 0 24 24" fill="none"><path d="M12 3v12M7 10l5 5 5-5M5 20h14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>下载报告</button>
       </div>
@@ -2876,6 +2877,55 @@
       notify('预览失败，请尝试下载后查看', 'error');
     }
   }
+
+  function previewFullscreenActive() {
+    const body = document.getElementById('previewBody');
+    return !!body && (document.fullscreenElement === body || body.classList.contains('preview-pseudo-fullscreen'));
+  }
+
+  function addPreviewExitButton(body) {
+    if (body.querySelector('.preview-exit-fullscreen')) return;
+    body.insertAdjacentHTML('beforeend', '<button type="button" class="btn btn-ghost preview-exit-fullscreen" data-action="exit-preview-fullscreen"><svg viewBox="0 0 24 24" fill="none"><path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>退出全屏</button>');
+  }
+
+  function updatePreviewFullscreenButton() {
+    const btn = document.getElementById('previewFullscreenBtn');
+    if (btn) btn.lastChild.textContent = previewFullscreenActive() ? '退出全屏' : '全屏';
+  }
+
+  function togglePreviewFullscreen() {
+    if (previewFullscreenActive()) return exitPreviewFullscreen();
+    const body = document.getElementById('previewBody');
+    if (!body) return notify('预览窗口已关闭', 'error');
+    if (!body.querySelector('iframe')) return notify('文件加载完成后才能全屏', 'error');
+    const activate = () => { addPreviewExitButton(body); updatePreviewFullscreenButton(); };
+    if (body.requestFullscreen) {
+      body.requestFullscreen().then(activate).catch(() => {
+        // 浏览器限制或拒绝真全屏时退化为覆盖整屏的伪全屏
+        body.classList.add('preview-pseudo-fullscreen');
+        activate();
+      });
+    } else {
+      body.classList.add('preview-pseudo-fullscreen');
+      activate();
+    }
+  }
+
+  function exitPreviewFullscreen() {
+    const body = document.getElementById('previewBody');
+    if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+    if (body) {
+      body.classList.remove('preview-pseudo-fullscreen');
+      const exit = body.querySelector('.preview-exit-fullscreen');
+      if (exit) exit.remove();
+    }
+    updatePreviewFullscreenButton();
+  }
+
+  // Esc 或系统手势退出真全屏时同步界面状态
+  document.addEventListener('fullscreenchange', () => {
+    if (!document.fullscreenElement) exitPreviewFullscreen();
+  });
 
   async function fetchConvertedPdfUrl(report) {
     // 先取文件 Blob
@@ -3118,6 +3168,8 @@
     else if (action === 'set-report-view') { state.reportView = target.dataset.viewMode === 'card' ? 'card' : 'list'; renderView(); }
     else if (action === 'sort-report-date') { state.reportListDateSort = state.reportListDateSort === 'desc' ? 'asc' : 'desc'; renderView(); }
     else if (action === 'preview-report') previewReport(reportId);
+    else if (action === 'toggle-preview-fullscreen') togglePreviewFullscreen();
+    else if (action === 'exit-preview-fullscreen') exitPreviewFullscreen();
     else if (action === 'download') downloadReport(reportId);
     else if (action === 'delete-report') showDeleteConfirm(reportId);
     else if (action === 'confirm-delete') deleteReport(reportId);

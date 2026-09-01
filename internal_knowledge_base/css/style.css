@@ -606,6 +606,11 @@ input::placeholder, textarea::placeholder { color: var(--text-faint); }
 .modal-card > form { min-height: 0; display: flex; flex: 1; flex-direction: column; }
 .modal-preview .modal-body { padding: 0; flex: 1; overflow: hidden; }
 .modal-preview iframe { width: 100%; height: 100%; border: 0; }
+/* 在线查看 · 全屏（真全屏 + 受限环境下的伪全屏兜底） */
+#previewBody:fullscreen { width: 100vw; height: 100vh; background: #1e2633; }
+#previewBody.preview-pseudo-fullscreen { position: fixed; inset: 0; z-index: 1100; background: #1e2633; }
+.preview-exit-fullscreen { position: fixed; bottom: 18px; right: 18px; z-index: 1110; background: var(--surface); color: var(--text-secondary); border-color: var(--border-strong); box-shadow: 0 8px 24px rgba(15,23,42,.3); }
+.preview-exit-fullscreen:hover { color: var(--text); background: #fff; }
 .modal-preview .preview-notice { padding: 16px 21px; color: var(--text-muted); background: var(--surface-muted); border-bottom: 1px solid var(--border); font-size: 13px; line-height: 1.6; }
 .modal-header { min-height: 76px; display: flex; flex: 0 0 auto; align-items: center; justify-content: space-between; gap: 18px; padding: 17px 21px; background: var(--surface); border-bottom: 1px solid var(--border); }
 .modal-header > div { min-width: 0; }
