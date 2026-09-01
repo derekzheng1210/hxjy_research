@@ -75,6 +75,65 @@ class BondDetailMathTests(unittest.TestCase):
         self.assertEqual(included["sample_count"], 6)
         self.assertEqual(included["excluded_exchange_tech_count"], 0)
 
+    def test_issuer_curve_extrapolates_with_sufficient_samples(self):
+        target = {"code": "T.IB", "term": 5.0, "sub": "否", "guarantor": ""}
+        bonds = [
+            target,
+            {"code": "L1.IB", "name": "左1", "term": 1.0, "sub": "否", "guarantor": ""},
+            {"code": "L2.IB", "name": "左2", "term": 1.5, "sub": "否", "guarantor": ""},
+            {"code": "R1.IB", "name": "右1", "term": 3.0, "sub": "否", "guarantor": ""},
+            {"code": "R2.IB", "name": "右2", "term": 4.0, "sub": "否", "guarantor": ""},
+        ]
+        yields = {
+            "T.IB": 2.10,
+            "L1.IB": 1.80,
+            "L2.IB": 1.85,
+            "R1.IB": 1.95,
+            "R2.IB": 2.00,
+        }
+        result = issuer_curve_analysis(target, bonds, yields)
+        self.assertTrue(result["available"])
+        self.assertTrue(result["extrapolated"])
+        self.assertIn("线性外推", result["extrapolation_note"])
+        self.assertFalse(result["has_right_sample"])
+        self.assertTrue(result["has_left_sample"])
+        # 最近3只样本 (1.5,1.85)(3.0,1.95)(4.0,2.00) 的最小二乘外推值
+        self.assertAlmostEqual(result["curve_yield"], 2.0645, places=3)
+        # 外推结果置信度上限为“中”
+        self.assertEqual(result["confidence"], "中")
+
+    def test_issuer_curve_declines_extrapolation_when_target_too_far(self):
+        target = {"code": "T.IB", "term": 7.0, "sub": "否", "guarantor": ""}
+        bonds = [
+            target,
+            {"code": "L1.IB", "name": "左1", "term": 1.0, "sub": "否", "guarantor": ""},
+            {"code": "L2.IB", "name": "左2", "term": 1.5, "sub": "否", "guarantor": ""},
+            {"code": "R1.IB", "name": "右1", "term": 3.0, "sub": "否", "guarantor": ""},
+            {"code": "R2.IB", "name": "右2", "term": 4.0, "sub": "否", "guarantor": ""},
+        ]
+        yields = {
+            "T.IB": 2.10,
+            "L1.IB": 1.80,
+            "L2.IB": 1.85,
+            "R1.IB": 1.95,
+            "R2.IB": 2.00,
+        }
+        result = issuer_curve_analysis(target, bonds, yields)
+        self.assertFalse(result["available"])
+        self.assertIn("过远", result["reason"])
+
+    def test_issuer_curve_declines_extrapolation_with_few_samples(self):
+        target = {"code": "T.IB", "term": 5.0, "sub": "否", "guarantor": ""}
+        bonds = [
+            target,
+            {"code": "R1.IB", "name": "右1", "term": 3.0, "sub": "否", "guarantor": ""},
+            {"code": "R2.IB", "name": "右2", "term": 4.0, "sub": "否", "guarantor": ""},
+        ]
+        yields = {"T.IB": 2.10, "R1.IB": 1.95, "R2.IB": 2.00}
+        result = issuer_curve_analysis(target, bonds, yields)
+        self.assertFalse(result["available"])
+        self.assertIn("样本不足", result["reason"])
+
     def test_holding_return_compares_same_cashflow_rating_benchmark(self):
         bond = {"effective_maturity_date": "2028-08-31"}
         details = {

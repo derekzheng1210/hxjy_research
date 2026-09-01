@@ -30,6 +30,12 @@ from juyuan_update.unified_excel import (
 )
 HOLDING_DAYS_BY_MONTHS = {3: 91, 6: 182}
 
+# 主体曲线外推：目标期限落在样本区间外时，样本（不含目标债）不少于该数量、
+# 且偏离样本区间不超过 max(下限, 区间跨度×比例) 才允许线性外推
+EXTRAPOLATION_MIN_SAMPLES = 4
+EXTRAPOLATION_MIN_SPAN = 0.75
+EXTRAPOLATION_SPAN_RATIO = 0.5
+
 CURVE_TO_STD_CATEGORY = {
     "中短票AAA": "中短票AAA-国开",
     "中短票AA+": "中短票AA+-国开",
@@ -285,6 +291,43 @@ def _mad(values: list[float]) -> float:
     return statistics.median(abs(value - center) for value in values)
 
 
+def _extrapolate_issuer_curve(samples: list[dict[str, Any]], target_term: float) -> tuple[float | None, str]:
+    """目标期限落在样本区间外时，用靠边最近的2-3只样本最小二乘线性外推。
+
+    返回 (公平收益率, 外推说明)；不满足条件时返回 (None, 不外推原因)。
+    """
+    if len(samples) < EXTRAPOLATION_MIN_SAMPLES:
+        return None, f"单侧样本不足{EXTRAPOLATION_MIN_SAMPLES}只，不做外推"
+    terms = [row["term"] for row in samples]
+    lo, hi = min(terms), max(terms)
+    cap = max(EXTRAPOLATION_MIN_SPAN, (hi - lo) * EXTRAPOLATION_SPAN_RATIO)
+    if target_term > hi:
+        if target_term - hi > cap:
+            return None, "目标期限超出样本区间过远，不做外推"
+        nearest = sorted(samples, key=lambda row: row["term"])[-3:]
+        direction = "右侧"
+    else:
+        if lo - target_term > cap:
+            return None, "目标期限超出样本区间过远，不做外推"
+        nearest = sorted(samples, key=lambda row: row["term"])[:3]
+        direction = "左侧"
+    if len(nearest) < 2:
+        return None, "可用样本不足，不做外推"
+    count = len(nearest)
+    mean_x = sum(row["term"] for row in nearest) / count
+    mean_y = sum(row["yield"] for row in nearest) / count
+    var_x = sum((row["term"] - mean_x) ** 2 for row in nearest)
+    if var_x <= 1e-12:
+        return None, "边界样本期限重复，无法估计斜率"
+    slope = sum(
+        (row["term"] - mean_x) * (row["yield"] - mean_y) for row in nearest
+    ) / var_x
+    fair = mean_y + slope * (target_term - mean_x)
+    if fair is None or fair <= 0:
+        return None, "外推收益率非正，结果不可信"
+    return fair, f"目标期限{direction}无样本，按最近{count}只样本最小二乘线性外推"
+
+
 def issuer_curve_analysis(
     target: dict[str, Any], issuer_bonds: list[dict[str, Any]], yields: dict[str, float],
     *, exclude_exchange_tech: bool = True,
@@ -331,17 +374,23 @@ def issuer_curve_analysis(
     left = [row for row in others if row["term"] < target_term]
     right = [row for row in others if row["term"] > target_term]
     same = [row for row in others if abs(row["term"] - target_term) < 1e-9]
+    extrapolated = False
+    extrapolation_note = ""
     if same:
         fair = statistics.median(row["yield"] for row in same)
     elif left and right:
         fair = interpolate_points([(row["term"], row["yield"]) for row in others], target_term)
     else:
-        return {
-            **base,
-            "available": False,
-            "confidence": "低",
-            "reason": "目标期限两侧样本不完整，不做外推",
-        }
+        # 单侧样本：主体样本足够多且目标期限未偏离过远时线性外推，否则降级
+        fair, extrapolation_note = _extrapolate_issuer_curve(others, target_term)
+        if fair is None:
+            return {
+                **base,
+                "available": False,
+                "confidence": "低",
+                "reason": extrapolation_note or "目标期限单侧无样本，不做外推",
+            }
+        extrapolated = True
     residuals_bp = []
     for row in others:
         remaining = [item for item in others if item["code"] != row["code"]]
@@ -360,7 +409,11 @@ def issuer_curve_analysis(
         convexity = "轻微凸点"
     else:
         convexity = "无凸点"
-    confidence = "高" if len(peers) >= 5 and left and right else "中" if len(peers) >= 4 else "低"
+    if extrapolated:
+        # 外推结果的置信度上限为“中”：曲线本身可靠但目标期限在样本区间外
+        confidence = "中" if len(peers) >= 5 else "低"
+    else:
+        confidence = "高" if len(peers) >= 5 and left and right else "中" if len(peers) >= 4 else "低"
     return {
         **base,
         "available": True,
@@ -371,6 +424,8 @@ def issuer_curve_analysis(
         "convexity": convexity,
         "has_left_sample": bool(left or same),
         "has_right_sample": bool(right or same),
+        "extrapolated": extrapolated,
+        "extrapolation_note": extrapolation_note,
     }
 
 
