@@ -1803,10 +1803,10 @@
                 return baseLayer;
             };
             const restoreBase = function() {
-                if (!baseLayer) return;
+                const base = ensureBase();
                 ctx.setTransform(1, 0, 0, 1, 0, 0);
                 ctx.clearRect(0, 0, canvas.width, canvas.height);
-                ctx.drawImage(baseLayer, 0, 0);
+                ctx.drawImage(base, 0, 0);
                 ctx.scale(dpr, dpr);
             };
 
