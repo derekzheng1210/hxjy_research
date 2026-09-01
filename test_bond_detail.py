@@ -103,7 +103,7 @@ class BondDetailMathTests(unittest.TestCase):
         self.assertEqual(result["confidence"], "中")
 
     def test_issuer_curve_declines_extrapolation_when_target_too_far(self):
-        target = {"code": "T.IB", "term": 7.0, "sub": "否", "guarantor": ""}
+        target = {"code": "T.IB", "term": 8.5, "sub": "否", "guarantor": ""}
         bonds = [
             target,
             {"code": "L1.IB", "name": "左1", "term": 1.0, "sub": "否", "guarantor": ""},
@@ -121,6 +121,53 @@ class BondDetailMathTests(unittest.TestCase):
         result = issuer_curve_analysis(target, bonds, yields)
         self.assertFalse(result["available"])
         self.assertIn("过远", result["reason"])
+
+    def test_issuer_curve_extrapolates_by_rating_curve_spread_when_far(self):
+        # 样本 0.5-6Y，目标 7.5Y（偏离边界 1.5Y > 1Y）：按最近样本相对评级曲线的平均利差外推
+        target = {"code": "T.IB", "term": 7.5, "sub": "否", "guarantor": ""}
+        bonds = [
+            target,
+            {"code": "B1.IB", "name": "债1", "term": 0.5, "sub": "否", "guarantor": ""},
+            {"code": "B2.IB", "name": "债2", "term": 1.0, "sub": "否", "guarantor": ""},
+            {"code": "B3.IB", "name": "债3", "term": 3.0, "sub": "否", "guarantor": ""},
+            {"code": "B4.IB", "name": "债4", "term": 6.0, "sub": "否", "guarantor": ""},
+        ]
+        # 评级曲线：2.0 + 0.1t；样本收益率 = 曲线 + 0.3 利差
+        curve = lambda t: 2.0 + 0.1 * t
+        yields = {
+            "T.IB": 3.10,
+            "B1.IB": 2.35,
+            "B2.IB": 2.40,
+            "B3.IB": 2.60,
+            "B4.IB": 2.90,
+        }
+        result = issuer_curve_analysis(target, bonds, yields, rating_curve_yield=curve)
+        self.assertTrue(result["available"])
+        self.assertTrue(result["extrapolated"])
+        self.assertIn("平均利差", result["extrapolation_note"])
+        # 评级曲线(7.5)=2.75 + 平均利差0.3 = 3.05
+        self.assertAlmostEqual(result["curve_yield"], 3.05, places=4)
+        self.assertEqual(result["confidence"], "中")
+
+    def test_issuer_curve_declines_far_extrapolation_without_rating_curve(self):
+        target = {"code": "T.IB", "term": 7.0, "sub": "否", "guarantor": ""}
+        bonds = [
+            target,
+            {"code": "L1.IB", "name": "左1", "term": 1.0, "sub": "否", "guarantor": ""},
+            {"code": "L2.IB", "name": "左2", "term": 1.5, "sub": "否", "guarantor": ""},
+            {"code": "R1.IB", "name": "右1", "term": 3.0, "sub": "否", "guarantor": ""},
+            {"code": "R2.IB", "name": "右2", "term": 4.0, "sub": "否", "guarantor": ""},
+        ]
+        yields = {
+            "T.IB": 2.10,
+            "L1.IB": 1.80,
+            "L2.IB": 1.85,
+            "R1.IB": 1.95,
+            "R2.IB": 2.00,
+        }
+        result = issuer_curve_analysis(target, bonds, yields)
+        self.assertFalse(result["available"])
+        self.assertIn("利差外推", result["reason"])
 
     def test_issuer_curve_declines_extrapolation_with_few_samples(self):
         target = {"code": "T.IB", "term": 5.0, "sub": "否", "guarantor": ""}

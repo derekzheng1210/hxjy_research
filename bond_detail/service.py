@@ -30,11 +30,14 @@ from juyuan_update.unified_excel import (
 )
 HOLDING_DAYS_BY_MONTHS = {3: 91, 6: 182}
 
-# 主体曲线外推：目标期限落在样本区间外时，样本（不含目标债）不少于该数量、
-# 且偏离样本区间不超过 max(下限, 区间跨度×比例) 才允许线性外推
+# 主体曲线外推：目标期限落在样本区间外时，样本（不含目标债）不少于该数量才允许外推。
+# 偏离边界不超过 EXTRAPOLATION_LINEAR_MAX_GAP 年时用最小二乘线性外推；更远时改用
+# “最近样本相对同隐含评级曲线的平均利差 + 评级曲线在目标期限收益率”推算，可达距离
+# 不超过 max(EXTRAPOLATION_SPREAD_MIN_REACH, 样本区间跨度×比例)
 EXTRAPOLATION_MIN_SAMPLES = 4
-EXTRAPOLATION_MIN_SPAN = 0.75
-EXTRAPOLATION_SPAN_RATIO = 0.5
+EXTRAPOLATION_LINEAR_MAX_GAP = 1.0
+EXTRAPOLATION_SPREAD_MIN_REACH = 2.0
+EXTRAPOLATION_SPREAD_REACH_RATIO = 1.0
 
 CURVE_TO_STD_CATEGORY = {
     "中短票AAA": "中短票AAA-国开",
@@ -291,29 +294,54 @@ def _mad(values: list[float]) -> float:
     return statistics.median(abs(value - center) for value in values)
 
 
-def _extrapolate_issuer_curve(samples: list[dict[str, Any]], target_term: float) -> tuple[float | None, str]:
-    """目标期限落在样本区间外时，用靠边最近的2-3只样本最小二乘线性外推。
+def _extrapolate_issuer_curve(
+    samples: list[dict[str, Any]], target_term: float, rating_curve_yield=None,
+) -> tuple[float | None, str]:
+    """目标期限落在样本区间外时的外推，返回 (公平收益率, 外推说明)。
 
-    返回 (公平收益率, 外推说明)；不满足条件时返回 (None, 不外推原因)。
+    偏离边界不超过 EXTRAPOLATION_LINEAR_MAX_GAP 年：边界最近 2-3 只样本
+    最小二乘线性外推；偏离更远：最近 2-3 只样本相对同隐含评级曲线的平均
+    利差，加到评级曲线在目标期限的收益率上（远端曲线形态由评级曲线承载，
+    避免直线外推失真）。不满足条件时返回 (None, 不外推原因)。
     """
     if len(samples) < EXTRAPOLATION_MIN_SAMPLES:
         return None, f"单侧样本不足{EXTRAPOLATION_MIN_SAMPLES}只，不做外推"
     terms = [row["term"] for row in samples]
     lo, hi = min(terms), max(terms)
-    cap = max(EXTRAPOLATION_MIN_SPAN, (hi - lo) * EXTRAPOLATION_SPAN_RATIO)
     if target_term > hi:
-        if target_term - hi > cap:
-            return None, "目标期限超出样本区间过远，不做外推"
+        gap = target_term - hi
         nearest = sorted(samples, key=lambda row: row["term"])[-3:]
         direction = "右侧"
     else:
-        if lo - target_term > cap:
-            return None, "目标期限超出样本区间过远，不做外推"
+        gap = lo - target_term
         nearest = sorted(samples, key=lambda row: row["term"])[:3]
         direction = "左侧"
     if len(nearest) < 2:
         return None, "可用样本不足，不做外推"
     count = len(nearest)
+    reach = max(EXTRAPOLATION_SPREAD_MIN_REACH, (hi - lo) * EXTRAPOLATION_SPREAD_REACH_RATIO)
+    if gap > reach:
+        return None, "目标期限超出样本区间过远，不做外推"
+    if gap > EXTRAPOLATION_LINEAR_MAX_GAP:
+        # 偏离较远：按最近样本相对隐含评级曲线的平均利差推算
+        if rating_curve_yield is None:
+            return None, (
+                f"目标期限{direction}偏离边界超过{EXTRAPOLATION_LINEAR_MAX_GAP:g}年，"
+                "且隐含评级曲线不可用，无法按利差外推"
+            )
+        curve_at_target = rating_curve_yield(target_term)
+        curve_at_samples = [rating_curve_yield(row["term"]) for row in nearest]
+        if curve_at_target is None or any(value is None for value in curve_at_samples):
+            return None, "隐含评级曲线在样本或目标期限处无收益率，无法按利差外推"
+        spreads = [row["yield"] - value for row, value in zip(nearest, curve_at_samples)]
+        fair = curve_at_target + sum(spreads) / len(spreads)
+        if fair <= 0:
+            return None, "外推收益率非正，结果不可信"
+        return fair, (
+            f"目标期限{direction}无样本且偏离边界{gap:.2f}年，按最近{count}只样本"
+            "相对同隐含评级曲线的平均利差外推"
+        )
+    # 偏离较近：边界最近样本最小二乘线性外推
     mean_x = sum(row["term"] for row in nearest) / count
     mean_y = sum(row["yield"] for row in nearest) / count
     var_x = sum((row["term"] - mean_x) ** 2 for row in nearest)
@@ -330,7 +358,7 @@ def _extrapolate_issuer_curve(samples: list[dict[str, Any]], target_term: float)
 
 def issuer_curve_analysis(
     target: dict[str, Any], issuer_bonds: list[dict[str, Any]], yields: dict[str, float],
-    *, exclude_exchange_tech: bool = True,
+    *, exclude_exchange_tech: bool = True, rating_curve_yield=None,
 ) -> dict[str, Any]:
     target_code = normalize_code(target.get("code"))
     target_term = finite_number(target.get("term"))
@@ -382,7 +410,9 @@ def issuer_curve_analysis(
         fair = interpolate_points([(row["term"], row["yield"]) for row in others], target_term)
     else:
         # 单侧样本：主体样本足够多且目标期限未偏离过远时线性外推，否则降级
-        fair, extrapolation_note = _extrapolate_issuer_curve(others, target_term)
+        fair, extrapolation_note = _extrapolate_issuer_curve(
+            others, target_term, rating_curve_yield=rating_curve_yield,
+        )
         if fair is None:
             return {
                 **base,
@@ -900,7 +930,8 @@ def build_bond_detail(
         "available": False, "reason": "该券种暂未映射至两倍标准差曲线"
     }
     issuer_curve = issuer_curve_analysis(
-        bond, issuer_bonds, yields, exclude_exchange_tech=exclude_exchange_tech
+        bond, issuer_bonds, yields, exclude_exchange_tech=exclude_exchange_tech,
+        rating_curve_yield=lambda tenor: _curve_yield(curve_day, curve_name, tenor),
     )
     overlay_terms = [row.get("term") for row in issuer_curve.get("peers") or []]
     overlay_terms.append(term)
