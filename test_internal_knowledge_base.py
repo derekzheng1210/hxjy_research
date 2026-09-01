@@ -1,8 +1,10 @@
+import json
 import os
 import re
 import unittest
 import uuid
 from pathlib import Path
+from unittest.mock import patch
 
 from werkzeug.security import generate_password_hash
 
@@ -13,6 +15,7 @@ os.environ["SECRET_KEY"] = "internal-kb-test-secret"
 os.environ["SITE_PASSWORD"] = "portal-test-password"
 
 from app import app  # noqa: E402
+from internal_knowledge_base import routes  # noqa: E402
 from internal_knowledge_base.routes import (  # noqa: E402
     KNOWLEDGE_INTENT_GENERAL, KNOWLEDGE_INTENT_RETRIEVAL, KNOWLEDGE_SOURCE_MARKER,
     PREVIEW_CACHE_DIR, _index_knowledge_report, _knowledge_candidates, _knowledge_intent,
@@ -20,12 +23,22 @@ from internal_knowledge_base.routes import (  # noqa: E402
 )
 
 
+def parse_sse(response):
+    """解析测试客户端缓冲下来的 SSE 响应体，返回事件 dict 列表。"""
+    events = []
+    for block in response.get_data(as_text=True).split("\n\n"):
+        for line in block.split("\n"):
+            if line.startswith("data:"):
+                events.append(json.loads(line[len("data:"):].strip()))
+    return events
+
+
 class InternalKnowledgeBaseTest(unittest.TestCase):
     def setUp(self):
         app.config.update(TESTING=True)
         with store.transaction() as conn:
-            for table in ("audit_log", "pdf_cache", "engagement", "ratings", "reports",
-                          "roadshow_schedule", "qa_usage", "qa_history", "users"):
+            for table in ("audit_log", "pdf_cache", "report_summaries", "engagement", "ratings",
+                          "reports", "roadshow_schedule", "qa_usage", "qa_history", "users"):
                 conn.execute(f"DELETE FROM {table}")
         store.add_user({
             "id": "member", "name": "测试成员", "org": "固收中心", "role": "member",
@@ -202,6 +215,159 @@ class InternalKnowledgeBaseTest(unittest.TestCase):
         self.assertEqual(candidates[0]["id"], relevant["id"])
         # Unchanged content uses the persisted vector rather than rebuilding.
         self.assertFalse(_index_knowledge_report(relevant))
+
+
+class ReportAiSummaryTests(unittest.TestCase):
+    """单篇报告 AI 摘要（三版本缓存 + 指纹失效）与就本文提问。"""
+
+    REPORT_ID = "r-ai-001"
+
+    def setUp(self):
+        app.config.update(TESTING=True)
+        with store.transaction() as conn:
+            for table in ("audit_log", "pdf_cache", "report_summaries", "engagement", "ratings",
+                          "reports", "roadshow_schedule", "qa_usage", "qa_history", "users"):
+                conn.execute(f"DELETE FROM {table}")
+        store.add_user({
+            "id": "member", "name": "测试成员", "org": "固收中心", "role": "member",
+            "password_hash": generate_password_hash("member-password"),
+        })
+        # 报告挂一个真实存在的占位文件，保证 report_file_path 可用；正文提取用 mock 控制。
+        upload_dir = Path(routes.UPLOAD_DIR)
+        upload_dir.mkdir(parents=True, exist_ok=True)
+        (upload_dir / "ai-summary-fixture.pdf").write_bytes(b"%PDF-1.4\n%%EOF")
+        store.add_report({
+            "id": self.REPORT_ID, "title": "信用利差专题", "author": "研究员甲", "org": "固收中心",
+            "reportType": "internal", "category": "credit", "theme": "credit",
+            "reportDate": "2026-08-28", "summary": "人工简介", "tags": ["信用"],
+            "fileUrl": "uploads/ai-summary-fixture.pdf", "fileStored": True,
+            "fileSha256": "sha-001", "uploadedAt": "2026-08-28T10:00:00",
+        })
+        self.client = app.test_client()
+        with self.client.session_transaction() as session:
+            session["authenticated"] = True
+            session["internal_knowledge_base_user_id"] = "member"
+            session["internal_knowledge_base_csrf"] = "test-csrf-token"
+        self.headers = {"X-CSRF-Token": "test-csrf-token"}
+        self.base = f"/internal-knowledge-base/api/reports/{self.REPORT_ID}/ai-summary"
+
+    def test_summary_requires_login(self):
+        anonymous = app.test_client()
+        response = anonymous.get(f"{self.base}?style=standard")
+        self.assertEqual(response.status_code, 401)
+
+    def test_get_summary_without_cache(self):
+        response = self.client.get(f"{self.base}?style=standard")
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertFalse(data["available"])
+        self.assertEqual(data["style"], "standard")
+
+    def test_invalid_style_rejected(self):
+        self.assertEqual(self.client.get(f"{self.base}?style=huge").status_code, 400)
+        response = self.client.post(self.base, json={"style": "huge"}, headers=self.headers)
+        self.assertEqual(response.status_code, 400)
+
+    @patch("internal_knowledge_base.routes._llm_api_key", return_value="test-key")
+    @patch("internal_knowledge_base.routes._extract_text", return_value="本周信用利差整体收窄，短端表现更为明显。" * 5)
+    @patch("internal_knowledge_base.routes._stream_llm")
+    def test_generate_summary_streams_and_caches(self, stream_llm, _extract, _key):
+        def fake_stream(prompt, system=None, max_tokens=None, provider_sink=None):
+            self.assertIn("信用利差专题", prompt)  # 报告元数据进入提示词
+            self.assertIn("核心结论", prompt)  # 摘要结构模板进入提示词
+            if provider_sink is not None:
+                provider_sink.append("self")
+            yield "### 核心结论\n"
+            yield "- 利差整体收窄"
+
+        stream_llm.side_effect = fake_stream
+        response = self.client.post(self.base, json={"style": "standard"}, headers=self.headers)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("text/event-stream", response.headers["Content-Type"])
+        events = parse_sse(response)
+        types = [event["type"] for event in events]
+        self.assertIn("stage", types)
+        self.assertTrue(any(event["type"] == "delta" for event in events))
+        done = [event for event in events if event["type"] == "done"][0]
+        self.assertEqual(done["summary"], "### 核心结论\n- 利差整体收窄")
+        self.assertEqual(done["model"], "self")
+        self.assertEqual(done["generatedByName"], "测试成员")
+        # 生成后入库，GET 命中缓存
+        cached = self.client.get(f"{self.base}?style=standard").get_json()
+        self.assertTrue(cached["available"])
+        self.assertEqual(cached["summary"], "### 核心结论\n- 利差整体收窄")
+        self.assertEqual(cached["model"], "self")
+        # 各版本独立缓存：其他版本仍无缓存
+        other = self.client.get(f"{self.base}?style=deep").get_json()
+        self.assertFalse(other["available"])
+
+    @patch("internal_knowledge_base.routes._llm_api_key", return_value="test-key")
+    @patch("internal_knowledge_base.routes._extract_text", return_value="   ")
+    def test_generate_reports_error_when_text_missing(self, _extract, _key):
+        response = self.client.post(self.base, json={"style": "concise"}, headers=self.headers)
+        events = parse_sse(response)
+        self.assertEqual(events[-1]["type"], "error")
+        self.assertIn("提取正文", events[-1]["message"])
+
+    @patch("internal_knowledge_base.routes._llm_api_key", return_value="test-key")
+    @patch("internal_knowledge_base.routes._extract_text", return_value="正文")
+    @patch("internal_knowledge_base.routes._stream_llm")
+    def test_cached_summary_replayed_without_llm_and_force_regenerates(self, stream_llm, _extract, _key):
+        store.save_report_summary(self.REPORT_ID, "standard", "member", "缓存中的摘要", "self", "sha-001")
+        response = self.client.post(self.base, json={"style": "standard"}, headers=self.headers)
+        events = parse_sse(response)
+        stream_llm.assert_not_called()
+        done = [event for event in events if event["type"] == "done"][0]
+        self.assertEqual(done["summary"], "缓存中的摘要")
+
+        stream_llm.side_effect = lambda *args, **kwargs: iter(["重新生成的摘要"])
+        response = self.client.post(self.base, json={"style": "standard", "force": True}, headers=self.headers)
+        events = parse_sse(response)
+        stream_llm.assert_called_once()
+        done = [event for event in events if event["type"] == "done"][0]
+        self.assertEqual(done["summary"], "重新生成的摘要")
+        cached = self.client.get(f"{self.base}?style=standard").get_json()
+        self.assertEqual(cached["summary"], "重新生成的摘要")
+
+    def test_summary_cache_invalidates_on_file_change(self):
+        store.save_report_summary(self.REPORT_ID, "standard", "member", "旧摘要", "self", "sha-001")
+        fresh = self.client.get(f"{self.base}?style=standard").get_json()
+        self.assertTrue(fresh["available"])
+
+        store.save_report_summary(self.REPORT_ID, "standard", "member", "旧摘要", "self", "sha-002")
+        stale = self.client.get(f"{self.base}?style=standard").get_json()
+        self.assertFalse(stale["available"])
+
+    @patch("internal_knowledge_base.routes._llm_api_key", return_value="test-key")
+    @patch("internal_knowledge_base.routes._extract_text", return_value="报告正文内容")
+    @patch("internal_knowledge_base.routes._stream_llm")
+    def test_report_ask_streams_without_persistence(self, stream_llm, _extract, _key):
+        stream_llm.side_effect = lambda prompt, system=None, max_tokens=None, provider_sink=None: iter(["回答第一段", "，回答第二段"])
+        response = self.client.post(
+            f"/internal-knowledge-base/api/reports/{self.REPORT_ID}/ask",
+            json={"question": "这篇报告的核心结论是什么？"},
+            headers=self.headers,
+        )
+        self.assertEqual(response.status_code, 200)
+        events = parse_sse(response)
+        done = [event for event in events if event["type"] == "done"][0]
+        self.assertEqual(done["answer"], "回答第一段，回答第二段")
+        # 问答不写任何业务表（不占知识搜索额度、不留历史、不产生摘要缓存）
+        with store.connect() as conn:
+            for table in ("qa_usage", "qa_history", "report_summaries"):
+                self.assertEqual(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0], 0)
+
+    def test_report_ask_validates_question(self):
+        short = self.client.post(
+            f"/internal-knowledge-base/api/reports/{self.REPORT_ID}/ask",
+            json={"question": "好"}, headers=self.headers,
+        )
+        self.assertEqual(short.status_code, 400)
+        long = self.client.post(
+            f"/internal-knowledge-base/api/reports/{self.REPORT_ID}/ask",
+            json={"question": "长" * 501}, headers=self.headers,
+        )
+        self.assertEqual(long.status_code, 400)
 
 
 if __name__ == "__main__":

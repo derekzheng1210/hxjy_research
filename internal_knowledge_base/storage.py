@@ -142,6 +142,18 @@ class SQLiteStore:
                     size_bytes INTEGER NOT NULL DEFAULT 0,
                     conversion_version TEXT NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS report_summaries (
+                    report_id TEXT NOT NULL REFERENCES reports(id) ON DELETE CASCADE,
+                    style TEXT NOT NULL CHECK(style IN ('concise','standard','deep')),
+                    user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+                    content TEXT NOT NULL,
+                    model TEXT NOT NULL DEFAULT '',
+                    file_sha256 TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY(report_id, style)
+                );
                 CREATE INDEX IF NOT EXISTS idx_pdf_cache_report ON pdf_cache(report_id);
 
                 CREATE TABLE IF NOT EXISTS audit_log (
@@ -668,6 +680,26 @@ class SQLiteStore:
             keys = [row[0] for row in conn.execute("SELECT cache_key FROM pdf_cache")]
             conn.execute("DELETE FROM pdf_cache")
             return keys
+
+    # AI 详细摘要缓存（每报告每篇幅版本一条，全团队共享；文件指纹变化即失效）
+    def get_report_summary(self, report_id, style):
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM report_summaries WHERE report_id=? AND style=?",
+                (report_id, style),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def save_report_summary(self, report_id, style, user_id, content, model, file_sha256):
+        stamp = now_iso()
+        with self.transaction() as conn:
+            conn.execute(
+                "INSERT INTO report_summaries(report_id,style,user_id,content,model,file_sha256,created_at,updated_at) "
+                "VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(report_id, style) DO UPDATE SET "
+                "user_id=excluded.user_id,content=excluded.content,model=excluded.model,"
+                "file_sha256=excluded.file_sha256,updated_at=excluded.updated_at",
+                (report_id, style, user_id, content, model, file_sha256, stamp, stamp),
+            )
 
     @staticmethod
     def _ensure_roadshow_columns(conn: sqlite3.Connection) -> None:

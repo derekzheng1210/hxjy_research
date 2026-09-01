@@ -13,7 +13,7 @@
 
   const { config, categories, themes } = window.InternalLibraryData;
 
-  // 全部数据走服务端 API，前端不再使用 localStorage / IndexedDB
+  // 全部业务数据走服务端 API；localStorage 仅存少量 UI 偏好（如 AI 摘要版本记忆），不存业务数据
   const API = {
     login: (u, p) => apiFetch('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ username: u, password: p }) }).then(handleJson),
     logout: () => apiFetch('/api/logout', { method: 'POST', credentials: 'same-origin' }).then(handleJson),
@@ -44,24 +44,29 @@
         onEvent({ type: 'done', ...result });
         return;
       }
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        let sep;
-        while ((sep = buffer.indexOf('\n\n')) !== -1) {
-          const frame = buffer.slice(0, sep);
-          buffer = buffer.slice(sep + 2);
-          const dataLine = frame.split('\n').find(line => line.startsWith('data:'));
-          if (!dataLine) continue;
-          let payload = null;
-          try { payload = JSON.parse(dataLine.slice(5).trim()); } catch (err) { payload = null; }
-          if (payload) onEvent(payload);
-        }
+      await consumeSseStream(response, onEvent);
+    },
+    // 单篇报告 AI 摘要：读取缓存 / 流式生成（style: concise|standard|deep，force 强制重新生成；
+    // signal 用于切换版本/关闭面板时打断进行中的生成流）
+    getAiSummary: (id, style) => apiFetch(`/api/reports/${id}/ai-summary?style=${encodeURIComponent(style)}`, { credentials: 'same-origin' }).then(handleJson),
+    aiSummaryStream: async (id, style, force, onEvent, signal) => {
+      const response = await apiFetch(`/api/reports/${id}/ai-summary`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ style, force: Boolean(force) }), signal });
+      if (!response.ok || !(response.headers.get('content-type') || '').includes('text/event-stream')) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.error || `AI 摘要失败 (${response.status})`);
       }
+      if (!response.body || typeof response.body.getReader !== 'function') throw new Error('当前浏览器不支持流式生成，请更换浏览器后重试');
+      await consumeSseStream(response, onEvent);
+    },
+    // 就本文提问：基于单篇报告摘要与全文的问答（SSE）
+    reportAskStream: async (id, question, onEvent) => {
+      const response = await apiFetch(`/api/reports/${id}/ask`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ question }) });
+      if (!response.ok || !(response.headers.get('content-type') || '').includes('text/event-stream')) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.error || `提问失败 (${response.status})`);
+      }
+      if (!response.body || typeof response.body.getReader !== 'function') throw new Error('当前浏览器不支持流式回答，请更换浏览器后重试');
+      await consumeSseStream(response, onEvent);
     },
     knowledgeClearHistory: () => apiFetch('/api/knowledge-search', { method: 'DELETE', credentials: 'same-origin' }).then(handleJson),
     toggleLike: (id) => apiFetch(`/api/reports/${id}/like`, { method: 'POST', credentials: 'same-origin' }).then(handleJson),
@@ -85,6 +90,28 @@
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || `请求失败 (${res.status})`);
     return data;
+  }
+
+  // 消费服务端 SSE 流（data: 行 JSON），逐事件回调 onEvent。知识搜索 / AI 摘要 / 就本文提问共用。
+  async function consumeSseStream(response, onEvent) {
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let sep;
+      while ((sep = buffer.indexOf('\n\n')) !== -1) {
+        const frame = buffer.slice(0, sep);
+        buffer = buffer.slice(sep + 2);
+        const dataLine = frame.split('\n').find(line => line.startsWith('data:'));
+        if (!dataLine) continue;
+        let payload = null;
+        try { payload = JSON.parse(dataLine.slice(5).trim()); } catch (err) { payload = null; }
+        if (payload) onEvent(payload);
+      }
+    }
   }
 
   async function uploadReports(formData, reportType) {
@@ -2110,6 +2137,291 @@
     return `<div class="modal-header"><div><span>${escapeHTML(kicker)}</span><h2>${escapeHTML(title)}</h2></div><button class="icon-button modal-close" data-close="modal" aria-label="关闭"><svg viewBox="0 0 24 24" fill="none"><path d="m6 6 12 12M18 6 6 18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></button></div>`;
   }
 
+  // ---- 单篇报告 AI 摘要面板（报告详情弹窗与在线查看分栏共用） ----
+  const AI_SUMMARY_STYLES = [['concise', '精炼版'], ['standard', '标准版'], ['deep', '深度版']];
+  const AI_SUMMARY_PREF_KEY = 'kbAiSummaryPrefs';
+  // 同一时刻只存在一个面板实例（详情弹窗或在线查看二选一）
+  const aiSummaryState = { reportId: null, style: 'standard', generating: false, asking: false, abortController: null };
+
+  function aiSummaryPrefs() {
+    try { return JSON.parse(localStorage.getItem(AI_SUMMARY_PREF_KEY) || '{}') || {}; } catch (_) { return {}; }
+  }
+  function saveAiSummaryPrefs(patch) {
+    try { localStorage.setItem(AI_SUMMARY_PREF_KEY, JSON.stringify({ ...aiSummaryPrefs(), ...patch })); } catch (_) { /* 无痕模式等场景静默忽略 */ }
+  }
+  function currentAiSummaryStyle() {
+    const prefs = aiSummaryPrefs();
+    return AI_SUMMARY_STYLES.some(([key]) => key === prefs.style) ? prefs.style : 'standard';
+  }
+  function aiSummaryStyleLabel(style) {
+    return (AI_SUMMARY_STYLES.find(([key]) => key === style) || [, '标准版'])[1];
+  }
+  function aiSummaryBodyEl() { return document.querySelector('.ai-summary-panel .ai-summary-body'); }
+
+  function mountAiSummaryPanel(container, report) {
+    // 新面板挂载时打断上一份报告还在进行的生成流
+    aiSummaryState.abortController?.abort();
+    aiSummaryState.abortController = null;
+    aiSummaryState.reportId = report.id;
+    aiSummaryState.style = currentAiSummaryStyle();
+    aiSummaryState.generating = false;
+    aiSummaryState.asking = false;
+    container.innerHTML = `
+      <div class="ai-summary-panel" data-report-id="${report.id}">
+        <div class="ai-summary-head">
+          <span class="detail-label">AI 摘要</span>
+          <div class="ai-summary-styles">
+            ${AI_SUMMARY_STYLES.map(([key, label]) => `<button type="button" class="ai-summary-style ${key === aiSummaryState.style ? 'active' : ''}" data-action="ai-summary-style" data-id="${report.id}" data-style="${key}">${label}</button>`).join('')}
+          </div>
+        </div>
+        <div class="ai-qa">
+          <button type="button" class="ai-qa-toggle" data-action="toggle-report-qa">就本文提问 ▾</button>
+          <div class="ai-qa-panel" hidden>
+            <div class="ai-qa-form">
+              <input type="text" class="ai-qa-input" maxlength="500" placeholder="就这份报告提问，Enter 发送">
+              <button type="button" class="btn btn-secondary ai-qa-send" data-action="submit-report-qa" data-id="${report.id}">提问</button>
+            </div>
+            <div class="ai-qa-answer"></div>
+          </div>
+        </div>
+        <div class="ai-summary-body"><div class="ai-summary-status">正在读取 AI 摘要…</div></div>
+      </div>`;
+    loadAiSummary(report.id, aiSummaryState.style);
+  }
+
+  async function loadAiSummary(reportId, style) {
+    let body = aiSummaryBodyEl();
+    if (!body) return;
+    body.innerHTML = '<div class="ai-summary-status">正在读取 AI 摘要…</div>';
+    try {
+      const data = await API.getAiSummary(reportId, style);
+      body = aiSummaryBodyEl();
+      if (!body || aiSummaryState.reportId !== reportId || aiSummaryState.style !== style) return;
+      if (data.available) {
+        // 命中缓存：打断可能仍在进行的旧生成流，直接展示缓存
+        aiSummaryState.abortController?.abort();
+        renderAiSummaryContent(body, data);
+      } else {
+        // 无缓存：自动生成当前版本，无需用户再点
+        generateAiSummary(reportId, style, false);
+      }
+    } catch (error) {
+      body = aiSummaryBodyEl();
+      if (body) body.innerHTML = `<div class="ai-summary-error">${escapeHTML(error.message || 'AI 摘要加载失败')}</div>`;
+    }
+  }
+
+  function renderAiSummaryContent(body, data) {
+    body.innerHTML = `
+      <div class="ai-summary-content">${renderKnowledgeAnswer(data.summary || '')}</div>
+      <div class="ai-summary-meta">
+        <span>${escapeHTML(aiSummaryStyleLabel(data.style || aiSummaryState.style))} · ${escapeHTML(formatDateTime(data.generatedAt))}${data.model ? ` · ${escapeHTML(data.model)}` : ''}${data.generatedByName ? ` · ${escapeHTML(data.generatedByName)}生成` : ''}</span>
+        <button type="button" class="text-button ai-summary-regen" data-action="regenerate-ai-summary" data-id="${aiSummaryState.reportId}">重新生成</button>
+      </div>`;
+  }
+
+  async function generateAiSummary(reportId, style, force) {
+    let body = aiSummaryBodyEl();
+    if (!body || aiSummaryState.reportId !== reportId) return;
+    if (aiSummaryState.generating) aiSummaryState.abortController?.abort();
+    const controller = new AbortController();
+    aiSummaryState.abortController = controller;
+    aiSummaryState.generating = true;
+    body.innerHTML = '<div class="ai-summary-status"><span class="loading-spinner"></span>正在准备生成…</div>';
+    let acc = '';
+    let refreshTimer = null;
+    const refresh = () => {
+      if (refreshTimer) return;
+      refreshTimer = setTimeout(() => {
+        refreshTimer = null;
+        const el = aiSummaryBodyEl();
+        if (el && acc) el.innerHTML = `<div class="ai-summary-content streaming">${renderKnowledgeAnswer(acc)}</div>`;
+      }, 60);
+    };
+    try {
+      await API.aiSummaryStream(reportId, style, force, ev => {
+        const el = aiSummaryBodyEl();
+        if (!el || aiSummaryState.reportId !== reportId || aiSummaryState.style !== style) return;
+        if (ev.type === 'stage') {
+          el.innerHTML = `<div class="ai-summary-status"><span class="loading-spinner"></span>${escapeHTML(ev.text || '正在生成…')}</div>`;
+        } else if (ev.type === 'delta') {
+          acc += ev.text || '';
+          refresh();
+        } else if (ev.type === 'done') {
+          if (refreshTimer) { clearTimeout(refreshTimer); refreshTimer = null; }
+          renderAiSummaryContent(el, ev);
+        } else if (ev.type === 'error') {
+          throw new Error(ev.message || '生成失败');
+        }
+      }, controller.signal);
+    } catch (error) {
+      if (refreshTimer) { clearTimeout(refreshTimer); refreshTimer = null; }
+      if (error.name === 'AbortError') return; // 被新请求/新面板打断，静默退出
+      body = aiSummaryBodyEl();
+      if (body) body.innerHTML = `<div class="ai-summary-error">${escapeHTML(error.message || 'AI 摘要生成失败')} <button type="button" class="text-button" data-action="generate-ai-summary" data-id="${reportId}">重试</button></div>`;
+      notify(error.message || 'AI 摘要生成失败', 'error');
+    } finally {
+      if (aiSummaryState.abortController === controller) {
+        aiSummaryState.generating = false;
+        aiSummaryState.abortController = null;
+      }
+    }
+  }
+
+  function switchAiSummaryStyle(style) {
+    if (!AI_SUMMARY_STYLES.some(([key]) => key === style)) return;
+    if (style === aiSummaryState.style) return;
+    aiSummaryState.style = style;
+    saveAiSummaryPrefs({ style });
+    document.querySelectorAll('.ai-summary-style').forEach(btn => btn.classList.toggle('active', btn.dataset.style === style));
+    // 无缓存会自动开始生成，进行中的旧生成流在 loadAiSummary/generateAiSummary 内被打断
+    loadAiSummary(aiSummaryState.reportId, style);
+  }
+
+  function toggleReportQa() {
+    const panel = document.querySelector('.ai-summary-panel .ai-qa-panel');
+    const toggle = document.querySelector('.ai-summary-panel .ai-qa-toggle');
+    if (!panel || !toggle) return;
+    panel.hidden = !panel.hidden;
+    toggle.textContent = panel.hidden ? '就本文提问 ▾' : '收起提问 ▴';
+    if (!panel.hidden) {
+      const input = panel.querySelector('.ai-qa-input');
+      if (input) input.focus();
+    }
+  }
+
+  async function submitReportQuestion(reportId) {
+    if (aiSummaryState.asking) return;
+    const input = document.querySelector('.ai-summary-panel .ai-qa-input');
+    const answerEl = document.querySelector('.ai-summary-panel .ai-qa-answer');
+    if (!input || !answerEl || aiSummaryState.reportId !== reportId) return;
+    const question = input.value.trim();
+    if (question.length < 2) return notify('请输入具体问题', 'error');
+    aiSummaryState.asking = true;
+    input.disabled = true;
+    const sendBtn = document.querySelector('.ai-summary-panel .ai-qa-send');
+    if (sendBtn) sendBtn.disabled = true;
+    let acc = '';
+    let refreshTimer = null;
+    const refresh = () => {
+      if (refreshTimer) return;
+      refreshTimer = setTimeout(() => {
+        refreshTimer = null;
+        const el = document.querySelector('.ai-summary-panel .ai-qa-answer');
+        if (el && acc) el.innerHTML = `<div class="ai-qa-question">${escapeHTML(question)}</div><div class="ai-qa-content streaming">${renderKnowledgeAnswer(acc)}</div>`;
+      }, 60);
+    };
+    answerEl.innerHTML = `<div class="ai-qa-question">${escapeHTML(question)}</div><div class="ai-qa-status"><span class="loading-spinner"></span>正在阅读本文并思考…</div>`;
+    try {
+      await API.reportAskStream(reportId, question, ev => {
+        const el = document.querySelector('.ai-summary-panel .ai-qa-answer');
+        if (!el) return;
+        if (ev.type === 'stage') {
+          el.innerHTML = `<div class="ai-qa-question">${escapeHTML(question)}</div><div class="ai-qa-status"><span class="loading-spinner"></span>${escapeHTML(ev.text || '正在思考…')}</div>`;
+        } else if (ev.type === 'delta') {
+          acc += ev.text || '';
+          refresh();
+        } else if (ev.type === 'done') {
+          if (refreshTimer) { clearTimeout(refreshTimer); refreshTimer = null; }
+          el.innerHTML = `<div class="ai-qa-question">${escapeHTML(question)}</div><div class="ai-qa-content">${renderKnowledgeAnswer(ev.answer || acc)}</div>`;
+        } else if (ev.type === 'error') {
+          throw new Error(ev.message || '回答失败');
+        }
+      });
+      input.value = '';
+    } catch (error) {
+      if (refreshTimer) { clearTimeout(refreshTimer); refreshTimer = null; }
+      const el = document.querySelector('.ai-summary-panel .ai-qa-answer');
+      if (el) el.innerHTML = `<div class="ai-qa-question">${escapeHTML(question)}</div><div class="ai-qa-error">${escapeHTML(error.message || '问答暂时不可用')}</div>`;
+      notify(error.message || '问答暂时不可用', 'error');
+    } finally {
+      aiSummaryState.asking = false;
+      input.disabled = false;
+      if (sendBtn) sendBtn.disabled = false;
+    }
+  }
+
+  // 分栏比例偏好：摘要栏占预览区宽度的比例，限制在 15%-75%
+  function paneRatioPref() {
+    const ratio = Number(aiSummaryPrefs().paneRatio);
+    return Number.isFinite(ratio) && ratio >= 0.15 && ratio <= 0.75 ? ratio : 0.34;
+  }
+
+  function applyPaneRatio() {
+    const split = document.querySelector('.preview-split');
+    if (split) split.style.setProperty('--pane-ratio', paneRatioPref());
+  }
+
+  // 在线查看：切换左侧 AI 摘要分栏（iframe 不移动不重载，仅切换布局列）。
+  // 在线查看默认隐藏；force=true/false 显式开启/隐藏（详情弹窗"AI 摘要"按钮进入时用），缺省为切换。
+  function togglePreviewSummary(force) {
+    const pane = document.getElementById('previewSummaryPane');
+    const resizer = document.getElementById('previewSplitResizer');
+    const body = document.getElementById('previewBody');
+    if (!pane || !body) return notify('预览窗口已关闭', 'error');
+    const active = force !== undefined ? Boolean(force) : pane.hidden;
+    pane.hidden = !active;
+    if (resizer) resizer.hidden = !active;
+    body.classList.toggle('split-on', active);
+    // 摘要栏隐藏时左缘显示"›"浮出按钮，一键调出；分栏开启时隐藏
+    const edgeToggle = document.getElementById('previewEdgeToggle');
+    if (edgeToggle) edgeToggle.hidden = active;
+    const btn = document.getElementById('previewSummaryBtn');
+    if (btn) btn.classList.toggle('active', active);
+    if (active) {
+      applyPaneRatio();
+      initPreviewSplitResizer();
+      if (!pane.dataset.mounted) {
+        const report = getReport(pane.dataset.reportId);
+        if (report) mountAiSummaryPanel(pane, report);
+        pane.dataset.mounted = '1';
+      }
+    }
+  }
+
+  // 拖拽分隔条调节摘要/原文比例：pointer capture 保证拖过 iframe 时仍收到移动事件。
+  // 箭头按钮的 pointerdown 不启动拖拽；系统取消手势/窗口级 pointerup 兜底，防止卡在拖拽态。
+  function initPreviewSplitResizer() {
+    const resizer = document.getElementById('previewSplitResizer');
+    const body = document.getElementById('previewBody');
+    if (!resizer || !body || resizer.dataset.bound) return;
+    resizer.dataset.bound = '1';
+    resizer.addEventListener('pointerdown', event => {
+      if (event.target.closest('.preview-split-toggle')) return;
+      event.preventDefault();
+      try { resizer.setPointerCapture(event.pointerId); } catch (_) { /* 无活动指针（合成事件）时忽略 */ }
+      resizer.classList.add('dragging');
+      const split = document.querySelector('.preview-split');
+      const ratioAt = clientX => {
+        const rect = body.getBoundingClientRect();
+        return Math.min(Math.max((clientX - rect.left) / rect.width, 0.15), 0.75);
+      };
+      let finished = false;
+      const move = e => split.style.setProperty('--pane-ratio', ratioAt(e.clientX));
+      const finish = e => {
+        if (finished) return;
+        finished = true;
+        resizer.removeEventListener('pointermove', move);
+        resizer.removeEventListener('pointerup', finish);
+        resizer.removeEventListener('pointercancel', finish);
+        window.removeEventListener('pointerup', finish);
+        resizer.classList.remove('dragging');
+        if (e && e.type === 'pointerup') saveAiSummaryPrefs({ paneRatio: Number(ratioAt(e.clientX).toFixed(3)) });
+      };
+      resizer.addEventListener('pointermove', move);
+      resizer.addEventListener('pointerup', finish);
+      resizer.addEventListener('pointercancel', finish);
+      window.addEventListener('pointerup', finish);
+    });
+  }
+
+  // 详情弹窗"AI 摘要"按钮：关闭详情，打开在线查看并直接进入左摘要右原文分栏
+  async function openAiSummary(reportId) {
+    closeModal();
+    await previewReport(reportId);
+    togglePreviewSummary(true);
+  }
+
   function showReportDetail(reportId) {
     const report = getReport(reportId);
     if (!report) return notify('未找到该报告', 'error');
@@ -2147,6 +2459,7 @@
       </div>
       <div class="modal-footer">
         <button class="btn btn-ghost" data-action="preview-report" data-id="${report.id}"><svg viewBox="0 0 24 24" fill="none"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6Z" stroke="currentColor" stroke-width="1.7"/><circle cx="12" cy="12" r="2.5" stroke="currentColor" stroke-width="1.7"/></svg>在线查看</button>
+        <button class="btn btn-ghost" data-action="open-ai-summary" data-id="${report.id}"><svg viewBox="0 0 24 24" fill="none"><path d="M4 6h16M4 12h10M4 18h13" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>AI 摘要</button>
         <button class="btn btn-secondary" data-action="download" data-id="${report.id}"><svg viewBox="0 0 24 24" fill="none"><path d="M12 3v12M7 10l5 5 5-5M5 20h14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>下载报告</button>
         ${external || typed ? `<button class="btn ${report.likedByMe ? 'btn-primary' : 'btn-secondary'}" data-action="toggle-like" data-id="${report.id}">♥ ${report.likedByMe ? '已点赞' : '点赞'} · ${report.likeCount || 0}</button>` : ''}<button class="btn ${report.favoritedByMe ? 'btn-primary' : 'btn-secondary'}" data-action="toggle-favorite" data-id="${report.id}">★ ${report.favoritedByMe ? '已收藏' : '收藏'} · ${report.favoriteCount || 0}</button>${!external && !typed && meta.scored && canRateReport(report) ? (mine ? `<button class="btn btn-primary" data-action="view-my-rating" data-id="${report.id}">查看我的评分</button>` : `<button class="btn btn-primary" data-action="open-rating" data-id="${report.id}">为报告评分</button>`) : !external && !typed && meta.scored ? `<button class="btn btn-primary" data-action="view-results" data-id="${report.id}">查看评分汇总</button>` : ''}
         ${report.reportType === 'roadshow' && canMatchRoadshow(report) ? `<button class="btn btn-secondary" data-action="match-schedule" data-id="${report.id}" title="手工关联/调整该报告对应的路演安排">匹配路演</button>` : ''}
@@ -2847,13 +3160,15 @@
 
     openModal(`<section class="modal-card">
       ${modalHeader('在线查看', report.title)}
-      <div class="modal-body" id="previewBody"><div class="preview-notice">${isPdf ? '正在加载文件，请稍候……' : '正在转换为 PDF 预览格式，请稍候……'}</div></div>
+      <div class="modal-body" id="previewBody"><div class="preview-split"><aside class="preview-summary-pane" id="previewSummaryPane" data-report-id="${report.id}" hidden></aside><div class="preview-split-resizer" id="previewSplitResizer" title="拖动调节摘要与原文比例" hidden><button type="button" class="preview-split-toggle" data-action="toggle-preview-summary" title="隐藏AI摘要栏" aria-label="隐藏AI摘要栏"><svg viewBox="0 0 24 24" fill="none"><path d="M15 6l-6 6 6 6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></button></div><div class="preview-doc" id="previewDoc"><div class="preview-notice">${isPdf ? '正在加载文件，请稍候……' : '正在转换为 PDF 预览格式，请稍候……'}</div></div></div><button type="button" class="preview-edge-toggle" id="previewEdgeToggle" data-action="toggle-preview-summary" title="展开AI摘要栏" aria-label="展开AI摘要栏"><svg viewBox="0 0 24 24" fill="none"><path d="M9 6l6 6-6 6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></button></div>
       <div class="modal-footer">
+        <button class="btn btn-ghost" data-action="toggle-preview-summary" id="previewSummaryBtn"><svg viewBox="0 0 24 24" fill="none"><path d="M4 6h16M4 12h10M4 18h13" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>AI 摘要</button>
         <button class="btn btn-ghost" data-action="toggle-preview-fullscreen" id="previewFullscreenBtn"><svg viewBox="0 0 24 24" fill="none"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>全屏</button>
         <button class="btn btn-ghost" data-close="modal">关闭</button>
         <button class="btn btn-primary" data-action="download" data-id="${report.id}"><svg viewBox="0 0 24 24" fill="none"><path d="M12 3v12M7 10l5 5 5-5M5 20h14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>下载报告</button>
       </div>
     </section>`, 'modal-preview');
+    // 在线查看默认隐藏 AI 摘要栏；仅详情弹窗"AI 摘要"按钮或预览内手动切换时开启
 
     try {
       let pdfUrl, revokeUrl = false;
@@ -2868,9 +3183,10 @@
         revokeUrl = true;
       }
       const body = document.getElementById('previewBody');
-      if (!body) { if (revokeUrl && pdfUrl) URL.revokeObjectURL(pdfUrl); return; }
+      const doc = document.getElementById('previewDoc');
+      if (!body || !doc) { if (revokeUrl && pdfUrl) URL.revokeObjectURL(pdfUrl); return; }
       if (pdfUrl) {
-        body.innerHTML = `<iframe src="${pdfUrl}" title="${escapeHTML(report.title)}"></iframe>`;
+        doc.innerHTML = `<iframe src="${pdfUrl}" title="${escapeHTML(report.title)}"></iframe>`;
         if (revokeUrl) {
           const observer = new MutationObserver(() => {
             if (!document.getElementById('previewBody')) { URL.revokeObjectURL(pdfUrl); observer.disconnect(); }
@@ -2878,12 +3194,12 @@
           observer.observe(els.modalLayer, { childList: true });
         }
       } else {
-        body.innerHTML = `<div class="preview-notice">预览不可用，请下载后查看。</div>`;
+        doc.innerHTML = `<div class="preview-notice">预览不可用，请下载后查看。</div>`;
       }
     } catch (error) {
       console.error(error);
-      const body = document.getElementById('previewBody');
-      if (body) body.innerHTML = `<div class="preview-notice">预览失败：${escapeHTML(error.message || '报告文件不可用')}。请下载后查看。</div>`;
+      const doc = document.getElementById('previewDoc');
+      if (doc) doc.innerHTML = `<div class="preview-notice">预览失败：${escapeHTML(error.message || '报告文件不可用')}。请下载后查看。</div>`;
       notify('预览失败，请尝试下载后查看', 'error');
     }
   }
@@ -3177,6 +3493,13 @@
     else if (action === 'toggle-favorite') toggleFavorite(reportId);
     else if (action === 'set-report-view') { state.reportView = target.dataset.viewMode === 'card' ? 'card' : 'list'; renderView(); }
     else if (action === 'sort-report-list') { const key = ['date', 'favorite', 'view'].includes(target.dataset.sortKey) ? target.dataset.sortKey : 'date'; state.reportListSort = state.reportListSort.key === key ? { key, dir: state.reportListSort.dir === 'desc' ? 'asc' : 'desc' } : { key, dir: 'desc' }; renderView(); }
+    else if (action === 'ai-summary-style') { switchAiSummaryStyle(target.dataset.style); }
+    else if (action === 'generate-ai-summary') { generateAiSummary(reportId, aiSummaryState.style, false); }
+    else if (action === 'regenerate-ai-summary') { generateAiSummary(reportId, aiSummaryState.style, true); }
+    else if (action === 'toggle-report-qa') { toggleReportQa(); }
+    else if (action === 'submit-report-qa') { submitReportQuestion(reportId); }
+    else if (action === 'toggle-preview-summary') { togglePreviewSummary(); }
+    else if (action === 'open-ai-summary') { openAiSummary(reportId); }
     else if (action === 'preview-report') previewReport(reportId);
     else if (action === 'toggle-preview-fullscreen') togglePreviewFullscreen();
     else if (action === 'exit-preview-fullscreen') exitPreviewFullscreen();
@@ -3277,6 +3600,15 @@
       theme: item.dataset.theme !== undefined ? (item.dataset.theme || '') : (item.dataset.view === 'reports' ? state.filters.theme : '')
     }); }));
     document.addEventListener('click', handleRootClick);
+    // 就本文提问输入框：Enter 提交（输入法组合期间不触发）
+    document.addEventListener('keydown', event => {
+      if (event.key !== 'Enter' || event.isComposing) return;
+      const input = event.target.closest ? event.target.closest('.ai-qa-input') : null;
+      if (!input) return;
+      event.preventDefault();
+      const reportId = input.closest('.ai-summary-panel')?.dataset.reportId;
+      if (reportId) submitReportQuestion(reportId);
+    });
     els.viewRoot.addEventListener('input', event => {
       // 输入法组合（中文拼音等）期间不重渲染，避免销毁输入框导致候选窗丢失、无法输入中文。
       if (event.isComposing) return;

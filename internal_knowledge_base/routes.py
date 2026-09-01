@@ -120,6 +120,52 @@ KNOWLEDGE_VECTOR_DIM = 512
 KNOWLEDGE_VECTOR_VERSION = "local-char-ngram-v1-d512"
 KNOWLEDGE_CHUNK_CHARS = 1800
 KNOWLEDGE_CHUNK_OVERLAP = 240
+
+# 单篇报告 AI 摘要：三个篇幅版本 + 送入模型的全文上限
+AI_SUMMARY_TEXT_CHARS = 60000
+AI_SUMMARY_STYLES = {
+    "concise": {"label": "精炼版", "max_tokens": 1200},
+    "standard": {"label": "标准版", "max_tokens": 2200},
+    "deep": {"label": "深度版", "max_tokens": 3200},
+}
+REPORT_TYPE_LABELS = {
+    "internal": "内部报告", "external": "外部报告",
+    "research_visit": "调研报告", "roadshow": "路演报告",
+}
+AI_SUMMARY_SYSTEM = (
+    "你是固收投研团队的研究主管，为团队成员快速消化研究报告撰写详细摘要。"
+    "严格忠于原文，不编造数据、观点或结论，关键处保留具体数字。"
+)
+AI_SUMMARY_STYLE_PROMPTS = {
+    "concise": (
+        "请输出结构化中文摘要（markdown 格式），仅包含以下两节：\n"
+        "### 核心结论\n（3-5 条，每条一句话给出最重要的结论或判断）\n"
+        "### 关键数据\n（支撑结论的关键数据与事实，保留具体数字）\n"
+        "总篇幅控制在 400-600 字。"
+    ),
+    "standard": (
+        "请输出结构化中文摘要（markdown 格式），包含以下四节：\n"
+        "### 核心结论\n（3-5 条，每条一句话给出最重要的结论或判断）\n"
+        "### 主要观点与分析逻辑\n（按报告行文顺序提炼主要论点、分析框架与推理链条）\n"
+        "### 关键数据与论据\n（支撑结论的关键数据、事实与证据，保留具体数字）\n"
+        "### 风险提示与关注点\n（报告提及或隐含的风险、假设与局限）\n"
+        "总篇幅控制在 600-1000 字。"
+    ),
+    "deep": (
+        "请输出结构化中文摘要（markdown 格式），包含以下四节：\n"
+        "### 核心结论\n（3-5 条，每条一句话给出最重要的结论或判断）\n"
+        "### 分章节要点\n（按报告章节逐段提炼，尽量覆盖全文内容）\n"
+        "### 关键数据与论据\n（支撑结论的关键数据、事实与证据，保留具体数字）\n"
+        "### 风险提示与关注点\n（报告提及或隐含的风险、假设与局限）\n"
+        "总篇幅控制在 1000-1500 字。"
+    ),
+}
+AI_SUMMARY_COMMON_RULES = (
+    "其他要求：\n"
+    "- 调研/路演纪要类报告，重点提炼交流对象的核心观点与问答要点\n"
+    "- 全文过长被截断时，优先覆盖核心章节\n"
+    "- 用中文，严格忠于原文"
+)
 _knowledge_index_lock = threading.Lock()
 
 
@@ -588,11 +634,13 @@ def _call_llm(prompt, system=None, max_tokens=None, json_mode=True):
     raise RuntimeError(f"大模型调用失败：{last_error}")
 
 
-def _stream_llm(prompt, system=None, max_tokens=None):
+def _stream_llm(prompt, system=None, max_tokens=None, provider_sink=None):
     """流式调用大模型（自部署优先，MiMo 兜底，DeepSeek 二层兜底），逐段 yield 文本增量。
 
     流式模式不支持 response_format，输出格式由 system 提示词约束、
     由调用方解析。若当前 provider 已推送过内容则不再回退（回退会导致答案重复）。
+    provider_sink 传入 list 时，成功产出内容的 provider 名称会被 append 进去，
+    供调用方记录实际使用的模型标识。
     """
     messages = _llm_messages(prompt, system=system)
     providers = llm_config.available_providers()
@@ -604,6 +652,8 @@ def _stream_llm(prompt, system=None, max_tokens=None):
             produced = False
             for delta in _stream_provider(provider, messages, max_tokens):
                 produced = True
+                if provider_sink is not None and not provider_sink:
+                    provider_sink.append(provider["name"])
                 yield delta
             return
         except Exception as exc:
@@ -741,6 +791,74 @@ def _ai_complete_tags_summary(file_path, original_name, external=False):
         "summary": summary,
         "author": str(data.get("author", "")).strip()[:100],
         "institution": str(data.get("institution", "")).strip()[:120],
+    }
+
+
+def _report_meta_block(report):
+    """报告元数据文本块，摘要与单篇问答共用。"""
+    lines = [
+        f"标题：{report.get('title') or ''}",
+        f"作者：{report.get('sourceAuthor') or report.get('author') or ''}",
+        f"机构：{report.get('sourceInstitution') or report.get('org') or ''}",
+        f"报告种类：{REPORT_TYPE_LABELS.get(report.get('reportType') or '', '报告')}",
+        f"研究主题：{REPORT_THEME_LABELS.get(report.get('theme') or '', '未分类')}",
+        f"报告日期：{report.get('reportDate') or ''}",
+    ]
+    if report.get("summary"):
+        lines.append(f"人工简介：{report['summary']}")
+    return "\n".join(lines)
+
+
+def _ai_summary_messages(report, text, style):
+    """构造单篇报告摘要的 (system, user) 提示词。"""
+    prompt = (
+        f"【报告信息】\n{_report_meta_block(report)}\n\n"
+        f"【报告全文】\n{text[:AI_SUMMARY_TEXT_CHARS]}\n\n"
+        f"{AI_SUMMARY_STYLE_PROMPTS[style]}\n{AI_SUMMARY_COMMON_RULES}"
+    )
+    return AI_SUMMARY_SYSTEM, prompt
+
+
+def _report_ask_messages(report, question):
+    """构造单篇报告问答的 (system, user) 提示词：已缓存的 AI 摘要 + 全文。"""
+    summaries = []
+    for style in AI_SUMMARY_STYLES:
+        row = _valid_summary_cache(report, style)
+        if row:
+            summaries.append(f"【AI{AI_SUMMARY_STYLES[style]['label']}】\n{row['content']}")
+    file_path = report_file_path(report)
+    text = _extract_text(file_path, max_chars=AI_SUMMARY_TEXT_CHARS) if file_path else ""
+    system = (
+        "你是研究报告阅读助手。仅基于给定报告的内容回答问题，不编造数据或结论；"
+        "报告未涉及时明确说明“报告未提及”。回答简洁，用中文，可分点。"
+    )
+    prompt = (
+        f"【报告信息】\n{_report_meta_block(report)}\n\n"
+        f"【报告 AI 摘要】\n{''.join(summaries) if summaries else '（暂无）'}\n\n"
+        f"【报告全文】\n{text.strip()[:AI_SUMMARY_TEXT_CHARS] if text.strip() else '（无法提取正文文本）'}\n\n"
+        f"【问题】\n{question}"
+    )
+    return system, prompt
+
+
+def _valid_summary_cache(report, style):
+    """读取该报告该版本的摘要缓存；文件指纹（fileSha256）变化视为失效。"""
+    row = store.get_report_summary(report.get("id"), style)
+    if not row:
+        return None
+    if str(report.get("fileSha256") or "") != str(row.get("file_sha256") or ""):
+        return None
+    return row
+
+
+def _summary_payload(row, style, user_id):
+    generator = store.get_user(user_id) if user_id else None
+    return {
+        "style": style,
+        "summary": row["content"],
+        "generatedAt": row["updated_at"],
+        "generatedByName": (generator or {}).get("name", ""),
+        "model": row.get("model") or "",
     }
 
 
@@ -1711,6 +1829,134 @@ def api_reports_ai_complete():
             os.unlink(tmp_path)
         except OSError:
             pass
+
+
+@app.route("/api/reports/<rid>/ai-summary", methods=["GET"])
+def api_report_ai_summary(rid):
+    """读取单篇报告 AI 摘要缓存（每篇幅版本独立缓存，全团队共享）。"""
+    user = require_user()
+    if not user:
+        return json_error("未登录", 401)
+    report = store.get_report(rid)
+    if not report:
+        return json_error("未找到该报告", 404)
+    style = str(request.args.get("style") or "standard")
+    if style not in AI_SUMMARY_STYLES:
+        return json_error("不支持的摘要版本", 400)
+    row = _valid_summary_cache(report, style)
+    if not row:
+        return jsonify({"available": False, "style": style})
+    return jsonify({"available": True, **_summary_payload(row, style, row.get("user_id"))})
+
+
+@app.route("/api/reports/<rid>/ai-summary", methods=["POST"])
+def api_report_ai_summary_generate(rid):
+    """生成单篇报告 AI 摘要（SSE 流式）。
+
+    前置校验在进流之前完成，失败返回普通 JSON 错误；校验通过后返回
+    text/event-stream，事件格式与知识搜索一致：
+    data: {"type": "stage"|"delta"|"done"|"error", ...}\n\n
+    缓存命中且非 force 时直接回放缓存不调用模型；生成成功后 UPSERT 入库。
+    """
+    user = require_user()
+    if not user:
+        return json_error("未登录", 401)
+    report = store.get_report(rid)
+    if not report:
+        return json_error("未找到该报告", 404)
+    payload = request.get_json(silent=True) or {}
+    style = str(payload.get("style") or "standard")
+    if style not in AI_SUMMARY_STYLES:
+        return json_error("不支持的摘要版本", 400)
+    force = bool(payload.get("force"))
+    if not _llm_api_key():
+        return json_error("AI 摘要尚未配置大模型 API 密钥", 503)
+    label = AI_SUMMARY_STYLES[style]["label"]
+    cached = _valid_summary_cache(report, style)
+    user_id = user["id"]
+
+    def event(data):
+        return "data: " + json.dumps(data, ensure_ascii=False) + "\n\n"
+
+    def generate():
+        if cached is not None and not force:
+            yield event({"type": "stage", "text": "读取已生成的摘要…"})
+            yield event({"type": "delta", "text": cached["content"]})
+            yield event({"type": "done", **_summary_payload(cached, style, cached.get("user_id"))})
+            return
+        file_path = report_file_path(report)
+        text = _extract_text(file_path, max_chars=AI_SUMMARY_TEXT_CHARS) if file_path else ""
+        if not text.strip():
+            yield event({"type": "error", "message": "无法从该报告文件提取正文文本，暂不能生成 AI 摘要"})
+            return
+        yield event({"type": "stage", "text": f"正在生成{label}摘要…"})
+        system, prompt = _ai_summary_messages(report, text, style)
+        used_provider = []
+        content = ""
+        try:
+            for delta in _stream_llm(prompt, system=system,
+                                     max_tokens=AI_SUMMARY_STYLES[style]["max_tokens"],
+                                     provider_sink=used_provider):
+                content += delta
+                yield event({"type": "delta", "text": delta})
+            content = content.strip()
+            if not content:
+                yield event({"type": "error", "message": "模型未返回有效摘要，请稍后重试"})
+                return
+            model = used_provider[0] if used_provider else ""
+            store.save_report_summary(report["id"], style, user_id, content,
+                                      model, str(report.get("fileSha256") or ""))
+            row = store.get_report_summary(report["id"], style) or {}
+            yield event({"type": "done", **_summary_payload(row, style, user_id)})
+        except Exception as exc:
+            # 不把底层 WinError/代理地址直接暴露给用户，保持提示可读。
+            yield event({"type": "error", "message": f"AI 摘要暂时不可用：{exc}"})
+
+    response = Response(stream_with_context(generate()), mimetype="text/event-stream")
+    response.headers["Cache-Control"] = "no-cache"
+    response.headers["X-Accel-Buffering"] = "no"
+    return response
+
+
+@app.route("/api/reports/<rid>/ask", methods=["POST"])
+def api_report_ask(rid):
+    """就本文提问：基于该报告已缓存 AI 摘要与全文的单轮问答（SSE 流式）。
+
+    次要功能：不计数、不写库（audit_log 由 after_request 统一记录）。
+    """
+    user = require_user()
+    if not user:
+        return json_error("未登录", 401)
+    report = store.get_report(rid)
+    if not report:
+        return json_error("未找到该报告", 404)
+    question = str((request.get_json(silent=True) or {}).get("question") or "").strip()
+    if len(question) < 2:
+        return json_error("请输入具体问题", 400)
+    if len(question) > 500:
+        return json_error("问题请控制在 500 字以内", 400)
+    if not _llm_api_key():
+        return json_error("问答尚未配置大模型 API 密钥", 503)
+
+    def event(data):
+        return "data: " + json.dumps(data, ensure_ascii=False) + "\n\n"
+
+    def generate():
+        system, prompt = _report_ask_messages(report, question)
+        yield event({"type": "stage", "text": "正在阅读本文并思考…"})
+        answer = ""
+        try:
+            for delta in _stream_llm(prompt, system=system, max_tokens=1500):
+                answer += delta
+                yield event({"type": "delta", "text": delta})
+            yield event({"type": "done", "answer": answer.strip()})
+        except Exception as exc:
+            yield event({"type": "error", "message": f"问答暂时不可用：{exc}"})
+
+    response = Response(stream_with_context(generate()), mimetype="text/event-stream")
+    response.headers["Cache-Control"] = "no-cache"
+    response.headers["X-Accel-Buffering"] = "no"
+    return response
 
 
 @app.route("/api/reports/<rid>/file", methods=["GET"])
