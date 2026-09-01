@@ -35,6 +35,7 @@ PAGE_SECTIONS = (
             {"key": "bond_picker", "endpoint": "bond_picker", "title": "收益率倒挂挖掘工具", "description": "寻找同主体期限倒挂与收益率曲线凸点。", "meta_key": "bond_picker"},
             {"key": "strategy_dashboard", "endpoint": "strategy_dashboard", "title": "信用骑乘策略", "description": "识别当前市场占优的信用骑乘与期限策略。", "meta_key": "strategy_dashboard"},
             {"key": "spread_monitor", "endpoint": "spread_monitor", "title": "存量债利差监控", "description": "查看全市场与重点债券的利差变化。", "meta_key": "spread_monitor"},
+            {"key": "credit_std_dev", "endpoint": "credit_std_dev", "title": "信用债两倍标准差", "description": "跟踪信用利差相对均值与标准差区间的位置。", "meta_key": "credit_std_dev"},
             {"key": "primary_market_pricing", "endpoint": "primary_market_pricing.index", "title": "一级发行研究", "description": "分析一级发行定价偏离、非市场化比例与发飞情况。", "meta_key": "primary_market_pricing"},
             {"key": "bond_detail", "endpoint": "bond_detail", "title": "债券详查", "description": "集中查看单券的评级位置、主体曲线、骑乘收益、报价和利差。", "meta_key": None, "default_visible": False},
         ),

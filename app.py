@@ -930,7 +930,7 @@ def strategy_dashboard():
             "骑乘效应与配置策略仪表盘": "信用骑乘策略",
             "https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js": local_echarts,
             "https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js": local_echarts,
-            "</head>": "<style id=\"portal-strategy-colors\">.header{background:#fff!important;border-bottom:1px solid #dfe6ef!important;box-shadow:0 2px 10px rgba(15,23,42,.06)!important}.header h1{background:none!important;color:#1d4f91!important;-webkit-text-fill-color:#1d4f91!important}</style></head>",
+            "</head>": "<style id=\"portal-strategy-colors\">.header{background:#fff!important;border-bottom:1px solid #e2e8f0!important;box-shadow:0 2px 10px rgba(15,23,42,.06)!important}.header h1{background:none!important;color:#1e293b!important;-webkit-text-fill-color:#1e293b!important}</style></head>",
         },
     )
 
@@ -1073,7 +1073,15 @@ def credit_std_dev():
             'src="data/spread_data.js"': f'src="{url_for("credit_std_dev_data_js")}"',
             "src='data/spread_data.js'": f"src='{url_for('credit_std_dev_data_js')}'",
             "https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js": local_echarts,
-            "</head>": f'<link rel="stylesheet" href="{today_focus_css}">\n</head>',
+            "</head>": (
+                f'<link rel="stylesheet" href="{today_focus_css}">\n'
+                '<style id="portal-credit-std-colors">'
+                ".header{background:#fff!important;color:#1e293b!important;"
+                "border-bottom:1px solid #e2e8f0!important;"
+                "box-shadow:0 2px 10px rgba(15,23,42,.06)!important}"
+                ".header h1{color:#1e293b!important}"
+                "</style>\n</head>"
+            ),
             "</body>": f'<script src="{today_focus_js}"></script>\n</body>',
         },
     )

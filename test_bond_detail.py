@@ -9,6 +9,7 @@ from unittest.mock import patch
 os.environ.setdefault("PORTAL_DATA_ROOT", str(Path(__file__).resolve().parent / ".test_runtime" / "bond_detail"))
 
 import app as portal_app
+from bond_detail import service as bond_service
 from bond_detail.service import (
     calculate_holding_returns,
     interpolate_points,
@@ -100,6 +101,62 @@ class BondDetailMathTests(unittest.TestCase):
         self.assertTrue(six_month["available"])
         self.assertEqual(six_month["horizon_months"], 6)
         self.assertEqual(six_month["horizon_days"], 182)
+
+
+class CreditAndComplianceTests(unittest.TestCase):
+    def test_credit_facility_reports_portal_limit(self):
+        portal_payload = {
+            "limits": {"某集团": 18.03},
+            "ratings": {"某集团": "BBB+"},
+            "limits_date": "2026-08-30",
+        }
+        with patch(
+            "juyuan_update.neiping_portal_fetch.load_portal_data",
+            return_value=portal_payload,
+        ):
+            result = bond_service.credit_facility_analysis({"issuer": "某集团"})
+        self.assertTrue(result["available"])
+        self.assertEqual(result["available_limit"], 18.03)
+        self.assertEqual(result["internal_rating"], "BBB+")
+        self.assertTrue(result["meets_recommend_threshold"])
+        self.assertEqual(result["data_date"], "2026-08-30")
+
+    def test_credit_facility_handles_missing_issuer(self):
+        with patch(
+            "juyuan_update.neiping_portal_fetch.load_portal_data",
+            return_value={"limits": {}, "ratings": {}, "limits_date": "2026-08-30"},
+        ):
+            result = bond_service.credit_facility_analysis({"issuer": "无此主体"})
+        self.assertFalse(result["available"])
+        self.assertIsNone(result["available_limit"])
+        self.assertFalse(result["meets_recommend_threshold"])
+        self.assertTrue(result["note"])
+
+    def test_rating_compliance_uses_cached_facts(self):
+        fact = {
+            "issue_date": "2020-01-01",
+            "issuer_dates": ["2020-06-20", "2026-06-26"],
+            "credit_dates": [],
+        }
+        with patch(
+            "juyuan_update.rating_compliance.load_rating_facts_cache",
+            return_value={"generated_at": "2026-08-31 08:34:30", "facts": {"T.IB": fact}},
+        ):
+            result = bond_service.rating_compliance_analysis("T.IB")
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["issuer_rating_latest"], "2026-06-26")
+        self.assertEqual(result["issuer_rating_count"], 2)
+        self.assertEqual(result["credit_rating_count"], 0)
+        self.assertEqual(result["issue_date"], "2020-01-01")
+
+    def test_rating_compliance_reports_missing_bond(self):
+        with patch(
+            "juyuan_update.rating_compliance.load_rating_facts_cache",
+            return_value={"generated_at": "2026-08-31 08:34:30", "facts": {}},
+        ):
+            result = bond_service.rating_compliance_analysis("UNKNOWN.IB")
+        self.assertEqual(result["status"], "unknown")
+        self.assertTrue(result["reason"])
 
 
 class BondDetailRouteTests(unittest.TestCase):

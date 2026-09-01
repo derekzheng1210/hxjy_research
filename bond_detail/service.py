@@ -714,6 +714,52 @@ def spread_analysis(target: dict[str, Any], issuer_bonds: list[dict[str, Any]]) 
     }
 
 
+def credit_facility_analysis(bond: dict[str, Any]) -> dict[str, Any]:
+    """主体最近授信（内评门户「全部每日有效主体授信」表，含可用对手限额与内评级别）。"""
+    from juyuan_update.neiping_portal_fetch import load_portal_data
+
+    issuer = str(bond.get("issuer") or "").strip()
+    payload = load_portal_data() or {}
+    limits = payload.get("limits") or {}
+    ratings = payload.get("ratings") or {}
+    available = bool(issuer and issuer in limits)
+    limit_value = _number(limits.get(issuer), 2) if available else None
+    return {
+        "available": available,
+        "issuer": issuer,
+        "internal_rating": ratings.get(issuer) or "",
+        "available_limit": limit_value,
+        "data_date": str(payload.get("limits_date") or ""),
+        "meets_recommend_threshold": bool(limit_value is not None and limit_value > 1),
+        "note": "" if available else "内评门户暂无该主体的授信记录",
+    }
+
+
+def rating_compliance_analysis(code: str) -> dict[str, Any]:
+    """合规630跟踪评级判定（复用二级择券工具的判定规则与评级事实缓存）。"""
+    from juyuan_update.rating_compliance import evaluate_rating_compliance, load_rating_facts_cache
+
+    cache = load_rating_facts_cache() or {}
+    fact = (cache.get("facts") or {}).get(code)
+    if fact:
+        verdict = evaluate_rating_compliance(date.today(), fact)
+    else:
+        verdict = {"status": "unknown", "reason": "630评级缓存中无该债券记录"}
+    issuer_dates = [str(d) for d in (fact or {}).get("issuer_dates") or [] if d]
+    credit_dates = [str(d) for d in (fact or {}).get("credit_dates") or [] if d]
+    return {
+        "status": verdict.get("status") or "unknown",
+        "reason": verdict.get("reason") or "",
+        "issue_date": str((fact or {}).get("issue_date") or ""),
+        "issuer_rating_latest": issuer_dates[-1] if issuer_dates else "",
+        "issuer_rating_count": len(issuer_dates),
+        "credit_rating_latest": credit_dates[-1] if credit_dates else "",
+        "credit_rating_count": len(credit_dates),
+        "as_of": date.today().isoformat(),
+        "cache_generated_at": str(cache.get("generated_at") or ""),
+    }
+
+
 def deterministic_summary(payload: dict[str, Any]) -> str:
     bond = payload["bond"]
     relative = payload["relative_value"]
@@ -748,6 +794,9 @@ def deterministic_summary(payload: dict[str, Any]) -> str:
     weekly = (spreads.get("issuer_changes") or {}).get("一周前")
     if weekly is not None:
         sentences.append(f"主体债券利差中位数较一周前{'走阔' if weekly > 0 else '收窄'}{abs(weekly):.1f}BP。")
+    compliance = payload.get("rating_compliance") or {}
+    if compliance.get("status") == "fail":
+        sentences.append(f"注意：该券{compliance.get('reason') or '不满足合规630跟踪评级要求'}，投前请务必确认。")
     return "".join(sentences)
 
 
@@ -808,6 +857,8 @@ def build_bond_detail(
     )
     quotes = quote_analysis(bond, issuer_bonds, yields)
     spreads = spread_analysis(bond, issuer_bonds)
+    credit_facility = credit_facility_analysis(bond)
+    rating_compliance = rating_compliance_analysis(code)
     relative = {
         "rating_curve_name": curve_name,
         "rating_curve_yield": _number(rating_curve_yield),
@@ -832,7 +883,8 @@ def build_bond_detail(
     }
     version = _detail_version(
         config.BOND_STATIC_JSON, config.BOND_PICKER_YIELDS_CACHE, config.SPREAD_JS,
-        config.STD_DEV_JS, config.STD_DEV_CURVES_CACHE,
+        config.STD_DEV_JS, config.STD_DEV_CURVES_CACHE, config.PORTAL_DATA_JSON,
+        config.RATING_FACTS_CACHE,
         extra=(f"{quotes.get('snapshot_at') or ''}|exclude_exchange_tech="
                f"{int(exclude_exchange_tech)}|horizon_months={horizon_months}"),
     )
@@ -856,6 +908,8 @@ def build_bond_detail(
         "riding_return": riding,
         "quotes": quotes,
         "spreads": spreads,
+        "credit_facility": credit_facility,
+        "rating_compliance": rating_compliance,
         "data_quality": {
             "issuer_curve_confidence": issuer_curve.get("confidence") or "不足",
             "issuer_curve_samples": issuer_curve.get("sample_count") or 0,
