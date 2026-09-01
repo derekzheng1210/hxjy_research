@@ -202,6 +202,13 @@ def _rating_curve_overlay(
         value = interpolate_points(raw, boundary, extrapolate=False)
         if value is not None:
             points.append((boundary, value))
+    # 整年补点：评级曲线在每个整数年都有可悬停的数据点（曲线范围外的年份跳过）
+    for year in range(1, math.floor(high) + 1):
+        if year < low:
+            continue
+        value = interpolate_points(raw, float(year), extrapolate=False)
+        if value is not None:
+            points.append((float(year), value))
     deduped = {round(term, 6): value for term, value in points}
     return [
         {"term": round(term, 4), "yield": round(value, 4)}

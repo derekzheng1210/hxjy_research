@@ -209,6 +209,17 @@ class BondDetailMathTests(unittest.TestCase):
         self.assertEqual(six_month["horizon_days"], 182)
 
 
+    def test_rating_curve_overlay_includes_whole_year_points(self):
+        # 曲线节点不在整年上时，整年也应补出可悬停的数据点
+        day = {"中短票AA": {"0.5": 2.0, "1.5": 2.1, "2.5": 2.2}}
+        points = bond_service._rating_curve_overlay(day, "中短票AA", [0.8, 2.3])
+        by_term = {point["term"]: point["yield"] for point in points}
+        self.assertIn(1.0, by_term)
+        self.assertAlmostEqual(by_term[1.0], 2.05, places=4)
+        self.assertIn(2.0, by_term)
+        self.assertAlmostEqual(by_term[2.0], 2.15, places=4)
+
+
 class CreditAndComplianceTests(unittest.TestCase):
     def test_credit_facility_reports_portal_limit(self):
         portal_payload = {
