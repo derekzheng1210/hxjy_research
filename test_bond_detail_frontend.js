@@ -32,4 +32,27 @@ assert(!script.includes("loadBond(current.bond.code)"), 'curve filter must not r
 assert(script.includes("color:'#d97706'"), 'issuer curve needs a distinct orange color');
 assert(script.includes("color:'#1d4ed8'"), 'rating curve needs a distinct blue color');
 
+// 摘要区仅保留“摘要”两个字
+assert(source.includes('summary-title">摘要</div>'), 'summary title must read 摘要');
+assert(!source.includes('规则诊断结论') && !source.includes('规则摘要'), 'old summary wordings must be removed');
+assert(!script.includes('summaryMeta'), 'summary meta element is retired');
+
+// 指标卡数值字号一致：标签用直接子选择器，数值内的 span 不再被压成 10px
+assert(source.includes('.metric>span'), 'metric label selector must be direct-child');
+
+// 主体关键日期利差表：期限列在中债估值列之前
+assert(script.includes('<th>债券</th><th>期限</th><th>中债估值</th>'), 'spread table must list term before valuation');
+
+// 经纪商报价：本券/主体视图切换，主体视图消费 issuer_latest
+assert(source.includes('data-quote-mode'), 'broker quotes panel needs bond/issuer toggle');
+assert(script.includes('renderIssuerQuotes'), 'issuer quotes renderer is missing');
+assert(script.includes('issuer_latest'), 'issuer quotes view must consume issuer_latest');
+assert(script.includes('bid_vs_valuation_bp') && script.includes('ofr_vs_valuation_bp'), 'issuer quotes must relate bid/ofr to valuation');
+
+// 主体曲线：样本点携带债券代码，点击可切换查询债券
+assert(script.includes('[x.term,x.yield,x.name,x.code]'), 'issuer curve points must carry bond codes');
+assert(script.includes("c.on('click'"), 'issuer curve chart must register a click handler');
+assert(script.includes('loadBond(code)'), 'clicking a curve point must load that bond');
+assert(script.includes('params.seriesName===\'隐含评级曲线\''), 'rating curve points must not be clickable');
+
 console.log('bond detail chart lifecycle: ok');

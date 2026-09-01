@@ -1018,8 +1018,5 @@ def build_bond_detail(
             "instrument_error": details.get("error") or "",
         },
     }
-    payload["summary"] = {
-        "text": deterministic_summary(payload),
-        "source": "规则摘要",
-    }
+    payload["summary"] = {"text": deterministic_summary(payload)}
     return payload
