@@ -99,7 +99,7 @@
     search: { query: '', reportType: 'all' },
     myReportFilters: { category: '', reportType: 'all', query: '', sort: 'date-desc' },
     reportView: 'list',
-    reportListDateSort: 'desc',
+    reportListSort: { key: 'date', dir: 'desc' },
     myReportType: 'all',
     reportType: 'internal',
     ratingTab: 'pending',
@@ -621,10 +621,20 @@
   function renderReportCollection(reports, emptyTitle, emptyDescription, options = {}) {
     if (!reports.length) return `<div class="empty-grid">${emptyState(emptyTitle, emptyDescription)}</div>`;
     if (state.reportView !== 'list') return reports.map(report => reportCard(report, options)).join('');
-    const listReports = options.preserveOrder ? reports : [...reports].sort((a, b) => state.reportListDateSort === 'asc' ? reportDateValue(a) - reportDateValue(b) : reportDateValue(b) - reportDateValue(a));
-    const dateHeader = options.preserveOrder ? '<span>日期（相关度优先）</span>' : `<button data-action="sort-report-date">日期 <b>${state.reportListDateSort === 'asc' ? '↑' : '↓'}</b></button>`;
+    // 列表排序：日期/收藏数/浏览数，同列再点切换升降序；并列时按日期补齐
+    const comparators = {
+      date: (a, b) => reportDateValue(a) - reportDateValue(b),
+      favorite: (a, b) => (a.favoriteCount || 0) - (b.favoriteCount || 0) || reportDateValue(a) - reportDateValue(b),
+      view: (a, b) => (a.viewCount || 0) - (b.viewCount || 0) || reportDateValue(a) - reportDateValue(b),
+    };
+    const sort = state.reportListSort;
+    const comparator = comparators[sort.key] || comparators.date;
+    const listReports = options.preserveOrder ? reports : [...reports].sort((a, b) => sort.dir === 'asc' ? comparator(a, b) : comparator(b, a));
+    const sortHeader = (key, label) => options.preserveOrder
+      ? (key === 'date' ? `<span>日期（相关度优先）</span>` : `<span>${label}</span>`)
+      : `<button data-action="sort-report-list" data-sort-key="${key}">${label}${sort.key === key ? ` <b>${sort.dir === 'asc' ? '↑' : '↓'}</b>` : ''}</button>`;
     return `<div class="report-list-header">
-      <span></span><span>报告</span>${dateHeader}<span>标签</span><span>评分</span><span>收藏</span><span>浏览</span><span>在线查看</span><span></span><span></span>
+      <span></span><span>报告</span>${sortHeader('date', '日期')}<span>标签</span><span>评分</span>${sortHeader('favorite', '收藏')}${sortHeader('view', '浏览')}<span>在线查看</span><span></span><span></span>
     </div>${listReports.map(report => reportListRow(report, options)).join('')}`;
   }
 
@@ -3166,7 +3176,7 @@
     else if (action === 'toggle-like') toggleExternalLike(reportId);
     else if (action === 'toggle-favorite') toggleFavorite(reportId);
     else if (action === 'set-report-view') { state.reportView = target.dataset.viewMode === 'card' ? 'card' : 'list'; renderView(); }
-    else if (action === 'sort-report-date') { state.reportListDateSort = state.reportListDateSort === 'desc' ? 'asc' : 'desc'; renderView(); }
+    else if (action === 'sort-report-list') { const key = ['date', 'favorite', 'view'].includes(target.dataset.sortKey) ? target.dataset.sortKey : 'date'; state.reportListSort = state.reportListSort.key === key ? { key, dir: state.reportListSort.dir === 'desc' ? 'asc' : 'desc' } : { key, dir: 'desc' }; renderView(); }
     else if (action === 'preview-report') previewReport(reportId);
     else if (action === 'toggle-preview-fullscreen') togglePreviewFullscreen();
     else if (action === 'exit-preview-fullscreen') exitPreviewFullscreen();
