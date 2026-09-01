@@ -1824,19 +1824,23 @@
                     return;
                 }
 
-                // 按 x 轴吸附最近的数据点（与 ECharts 悬停行为一致）
-                let best = null, bestDx = Infinity;
+                // 先按 x 轴吸附最近的数据点，再在同一 x 的点（季节图各年份曲线）
+                // 中取纵向离光标最近的一个：只显示一个数据点，避免多条数值混在一起
+                let anchor = null, bestDx = Infinity;
                 for (let i = 0; i < points.length; i++) {
                     const dx = Math.abs(points[i].x - mx);
-                    if (dx < bestDx) { bestDx = dx; best = points[i]; }
+                    if (dx < bestDx) { bestDx = dx; anchor = points[i]; }
                 }
-                if (!best) { tip.style.display = 'none'; restoreBase(); return; }
+                if (!anchor) { tip.style.display = 'none'; restoreBase(); return; }
+                let best = anchor, bestDy = Infinity;
+                for (let i = 0; i < points.length; i++) {
+                    const p = points[i];
+                    if (Math.abs(p.x - anchor.x) > 4) continue;
+                    const dy = Math.abs(p.y - my);
+                    if (dy < bestDy) { bestDy = dy; best = p; }
+                }
 
-                // 同一 x 附近的全部点（季节图各年份曲线）一起高亮
-                const hovered = points.filter(p => Math.abs(p.x - best.x) <= 4)
-                    .sort((a, b) => String(b.yearLabel || '').localeCompare(String(a.yearLabel || '')));
-
-                // 还原底图后叠加十字线与坐标点标记
+                // 还原底图后叠加十字线与坐标点标记（仅标记当前点）
                 restoreBase();
                 ctx.save();
                 ctx.strokeStyle = 'rgba(37, 99, 235, 0.5)';
@@ -1847,38 +1851,22 @@
                 ctx.lineTo(best.x, plot.bottom);
                 ctx.stroke();
                 ctx.setLineDash([]);
-                hovered.forEach(p => {
-                    ctx.beginPath();
-                    ctx.arc(p.x, p.y, 4.5, 0, Math.PI * 2);
-                    ctx.fillStyle = '#FFFFFF';
-                    ctx.fill();
-                    ctx.lineWidth = 2.5;
-                    ctx.strokeStyle = p.color || '#2563EB';
-                    ctx.stroke();
-                });
+                ctx.beginPath();
+                ctx.arc(best.x, best.y, 4.5, 0, Math.PI * 2);
+                ctx.fillStyle = '#FFFFFF';
+                ctx.fill();
+                ctx.lineWidth = 2.5;
+                ctx.strokeStyle = best.color || '#2563EB';
+                ctx.stroke();
                 ctx.restore();
 
-                const fmtVal = function(p) {
-                    const num = (p.value == null || isNaN(p.value))
-                        ? '—'
-                        : Number(p.value).toLocaleString('zh-CN', { maximumFractionDigits: 4 });
-                    return num + (p.unit ? ' ' + p.unit : '');
-                };
-                let html;
-                if (hovered.length === 1 && !hovered[0].yearLabel) {
-                    html = '<div style="font-weight:600;">' + hovered[0].label + '</div>'
-                         + '<div style="margin-top:2px;">' + fmtVal(hovered[0]) + '</div>';
-                } else {
-                    html = '<div style="font-weight:600;">' + best.label + '</div>';
-                    hovered.forEach(p => {
-                        const dot = '<span style="display:inline-block;width:8px;height:8px;'
-                                  + 'border-radius:50%;margin-right:6px;background:'
-                                  + (p.color || '#2563EB') + ';box-shadow:0 0 0 1px rgba(148,163,184,.9);"></span>';
-                        const who = p.yearLabel ? '<span style="display:inline-block;min-width:42px;">' + p.yearLabel + '</span>' : '';
-                        html += '<div style="margin-top:1px;display:flex;align-items:center;">' + dot + who + fmtVal(p) + '</div>';
-                    });
-                }
-                tip.innerHTML = html;
+                const num = (best.value == null || isNaN(best.value))
+                    ? '—'
+                    : Number(best.value).toLocaleString('zh-CN', { maximumFractionDigits: 4 });
+                const unitText = best.unit ? ' ' + best.unit : '';
+                const dateText = best.yearLabel ? best.yearLabel + ' ' + best.label : best.label;
+                tip.innerHTML = '<div style="font-weight:600;">' + dateText + '</div>'
+                              + '<div style="margin-top:2px;">' + num + unitText + '</div>';
 
                 // Position near cursor, flip if it would overflow the viewport
                 const tw = tip.offsetWidth, th = tip.offsetHeight;
