@@ -13,7 +13,7 @@
 ┌─────────────────────┐         ① preflight：问服务器数据到哪天
 │ 本机（有 Wind）      │ ──────► │
 │ scripts/push_ipm_wind.py      │         ② 连 Wind 拉增量（复用 ipm_tracker/updater.py）
-│ 每日 17:30 定时任务   │ ◄────── │
+│ 每日 09:00 定时任务   │ ◄────── │
 └─────────┬───────────┘         ③ POST 推送增量 JSON（令牌鉴权）
           │                     ④ 服务器合并进缓存并归档，服务立即生效
 ┌─────────▼───────────────────────────────┐
@@ -112,10 +112,10 @@ IPM_INGEST_TOKEN=<与服务端一致的令牌>
 双击运行 `scripts\register_wind_push_task.bat`，或手动执行：
 
 ```bat
-schtasks /Create /TN "juyuan_wind_push_daily" /TR "D:\信用债研究\完整网页内容\juyuan_credit_tools_portal\scripts\wind_push_daily.bat" /SC DAILY /ST 17:30 /F
+schtasks /Create /TN "juyuan_wind_push_daily" /TR "D:\信用债研究\完整网页内容\juyuan_credit_tools_portal\scripts\wind_push_daily.bat" /SC DAILY /ST 09:00 /F
 ```
 
-- 默认 17:30 执行（收盘后数据基本就绪），改 `/ST` 可调整时间。
+- 默认 09:00 执行（推送上一交易日已发布数据；如需收盘当天推送改 /ST 17:30），改 `/ST` 可调整时间。
 - 日志写入本机仓库 `logs\wind_push.log`。
 
 ### 4. 无人值守运行的前提
@@ -161,6 +161,6 @@ Wind 终端需要登录后才能取数，定时任务能稳定跑起来需满足
 | --- | --- | --- |
 | `scripts/push_ipm_wind.py` | 本机 | 定时推送脚本（拉 Wind + 推送） |
 | `scripts/wind_push_daily.bat` | 本机 | 任务计划程序入口（重定向日志） |
-| `scripts/register_wind_push_task.bat` | 本机 | 一键注册每日 17:30 定时任务 |
+| `scripts/register_wind_push_task.bat` | 本机 | 一键注册每日 09:00 定时任务 |
 | `ipm_tracker/ingest.py` | 服务器 | 令牌鉴权接收接口（preflight + 推送） |
 | `test_ipm_ingest.py` | 仓库 | 接口单元测试 |
