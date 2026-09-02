@@ -13,8 +13,10 @@ from paths import DATA_DIR
 DEFAULT_MODULES = [
     "bond_picker", "spread_monitor", "strategy_dashboard", "credit_std_dev",
     "institution_flow_rates", "primary_market_pricing", "rate_spread",
-    "rate_bond_switch", "rate_issuance", "ipm_tracker",
+    "rate_bond_switch", "rate_issuance",
 ]
+# 行业景气高频数据（ipm_tracker）不纳入一键更新：本机无 Wind 终端（WindPy），
+# 该数据由 Wind 远程推送通道（/api/ingest/ipm + IPM_INGEST_TOKEN）维护。
 VALID_MODULES = set(DEFAULT_MODULES)
 
 # 状态持久化：gunicorn 多 worker 下，启动更新的 worker 与轮询进度的 worker
