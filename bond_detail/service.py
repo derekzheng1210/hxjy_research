@@ -864,10 +864,15 @@ def deterministic_summary(payload: dict[str, Any]) -> str:
     ride = payload["riding_return"]
     quotes = payload["quotes"]
     spreads = payload["spreads"]
-    sentences = [
-        f"{bond['name']}（{bond['code']}）当前中债估值{bond['current_yield']:.4f}%"
-        f"，剩余期限{bond['term']:.2f}年，隐含评级{bond['implied_rating'] or '未提供'}。"
-    ]
+    if bond.get("current_yield") is not None:
+        sentences = [
+            f"{bond['name']}（{bond['code']}）当前中债估值{bond['current_yield']:.4f}%"
+            f"，剩余期限{bond['term']:.2f}年，隐含评级{bond['implied_rating'] or '未提供'}。"
+        ]
+    else:
+        sentences = [
+            f"{bond['name']}（{bond['code']}）剩余期限{bond['term']:.2f}年，当前暂无中债估值，估值相关诊断不可用。"
+        ]
     gap = relative.get("rating_curve_gap_bp")
     if gap is not None:
         sentences.append(f"相对同期限{relative['rating_curve_name']}高出{gap:.1f}BP。" if gap >= 0 else f"相对同期限{relative['rating_curve_name']}低{-gap:.1f}BP。")
@@ -924,8 +929,9 @@ def build_bond_detail(
     code = normalize_code(bond.get("code"))
     yields, yield_payload = _yield_indexes()
     current_yield = yields.get(code) or yields.get(bare_code(code))
-    if current_yield is None:
-        raise ValueError("该债券暂无最新中债估值")
+    # 中债估值缺失（如SPB等无估值券种）不再阻断整页：估值相关模块
+    # （估值位置/骑乘/主体曲线凸点）按各自"不可用"路径降级，
+    # 授信、630合规、经纪商报价与AI信用研究不受影响。
     term = finite_number(bond.get("term"))
     if term is None:
         raise ValueError("该债券缺少剩余期限")
@@ -961,7 +967,7 @@ def build_bond_detail(
     relative = {
         "rating_curve_name": curve_name,
         "rating_curve_yield": _number(rating_curve_yield),
-        "rating_curve_gap_bp": round((current_yield - rating_curve_yield) * 100, 2) if rating_curve_yield is not None else None,
+        "rating_curve_gap_bp": round((current_yield - rating_curve_yield) * 100, 2) if current_yield is not None and rating_curve_yield is not None else None,
         "government_curve_yield": _number(gov_curve_yield),
         "credit_spread_bp": round((rating_curve_yield - gov_curve_yield) * 100, 2) if rating_curve_yield is not None and gov_curve_yield is not None else None,
         "rating_curve_points": rating_curve_points,
@@ -974,7 +980,7 @@ def build_bond_detail(
         )},
         "code": code,
         "term": round(term, 4),
-        "current_yield": round(current_yield, 4),
+        "current_yield": round(current_yield, 4) if current_yield is not None else None,
         **{key: details.get(key) for key in (
             "coupon_rate", "maturity_date", "payment_mode", "payments_per_year", "payment_day_rules",
             "put_date", "redeem_date", "option_memo",

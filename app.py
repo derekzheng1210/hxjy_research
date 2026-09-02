@@ -54,8 +54,11 @@ from page_registry import PAGE_SECTIONS, load_page_visibility, save_page_visibil
 import institution_flow_config
 import institution_flow_data
 from bond_detail import build_bond_detail, search_bonds
+from bond_detail import credit_research
+from bond_detail import meso as credit_meso
 from broker_market import (
     MARKET_DIR,
+    calculate_ofr_movers,
     data_version as bond_picker_data_version,
     ensure_directories as ensure_broker_directories,
     load_emotion_history,
@@ -420,7 +423,7 @@ def portal_nav(active_endpoint: str):
     sections = visible_sections()
     items = ['<style id="portal-nav-style">']
     items.append(
-        ".portal-nav{position:sticky;top:0;z-index:10000;background:#fff;color:#1e293b;"
+        ".portal-nav{--portal-nav-height:44px;position:sticky;top:0;z-index:10000;background:#fff;color:#1e293b;"
         "height:44px;display:flex;align-items:center;gap:4px;padding:0 18px;"
         "border-bottom:1px solid #dbe3ee;white-space:nowrap;font-family:-apple-system,BlinkMacSystemFont,"
         '"Segoe UI","Microsoft YaHei",sans-serif;box-sizing:border-box}'
@@ -745,6 +748,13 @@ def admin_logout():
     return redirect(url_for("home"))
 
 
+# 服务启动即清理上一进程遗留的运行中任务（线程已随进程死亡，避免前端复用冻结进度）
+try:
+    credit_research.fail_orphan_jobs()
+except Exception as _exc:  # noqa: BLE001 - 清理失败不阻断服务启动
+    print(f"[credit-research] 孤儿任务清理失败: {_exc}")
+
+
 @app.route("/")
 @login_required
 def home():
@@ -798,6 +808,107 @@ def api_bond_detail(code):
     response.set_etag(payload["version"])
     response.headers["Cache-Control"] = "private, no-cache"
     return response
+
+
+@app.route("/api/bond-credit-research/<path:code>", methods=["GET"])
+@login_required
+def api_credit_research_get(code):
+    """读取发行人信用研究：命中缓存返回报告，否则返回空态。"""
+    try:
+        bond = credit_research.resolve_bond(code)
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"error": f"读取债券信息失败: {str(exc)[:160]}"}), 500
+    if not bond:
+        return jsonify({"error": "未找到该债券"}), 404
+    issuer = credit_research.issuer_key(bond)
+    running = credit_research.get_latest_job(issuer)
+    payload: dict[str, Any] = {
+        "bond_code": bond.get("code"),
+        "issuer_key": issuer,
+        "agent_configured": credit_research.agent_configured(),
+        "running": credit_research._job_view(running) if running else None,
+    }
+    try:
+        meso_data = credit_meso.meso_supplement(str(bond.get("issuer") or ""))
+        if meso_data:
+            payload["meso"] = meso_data
+    except Exception:  # noqa: BLE001 - 中观数据缺失不影响主流程
+        pass
+    cached = credit_research.get_cached_report(issuer)
+    if cached:
+        generated = str(cached.get("generated_at") or "")
+        try:
+            age_days = (datetime.now() - datetime.strptime(generated, "%Y-%m-%d %H:%M:%S")).days
+        except ValueError:
+            age_days = None
+        payload["report"] = cached.get("report")
+        payload["meta"] = {
+            "generated_at": generated,
+            "channel": cached.get("channel") or "",
+            "model": cached.get("model") or "",
+            "plugin_calls": cached.get("plugin_calls") or 0,
+            "age_days": age_days,
+            "stale": bool(age_days is not None and age_days >= credit_research.REPORT_TTL_DAYS),
+            "validation": cached.get("validation") or {},
+            "snapshot_gaps": cached.get("snapshot_gaps") or [],
+            "override_updated_at": cached.get("override_updated_at") or "",
+            "sections": cached.get("sections") or {},
+        }
+    return jsonify(payload)
+
+
+@app.route("/api/bond-credit-research/<path:code>", methods=["POST"])
+@login_required
+def api_credit_research_start(code):
+    """点击“生成发行人信用研究”：提交预设任务（后台执行，前端轮询进度）。"""
+    try:
+        bond = credit_research.resolve_bond(code)
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"error": f"读取债券信息失败: {str(exc)[:160]}"}), 500
+    if not bond:
+        return jsonify({"error": "未找到该债券"}), 404
+    payload = request.get_json(silent=True) or {}
+    force = bool(payload.get("force"))
+    mode = str(payload.get("mode") or "full")
+    if mode not in credit_research.SECTION_MODES:
+        return jsonify({"error": "不支持的研究模式"}), 400
+    if not credit_research.agent_configured() and not credit_research._local_llm_available():
+        return jsonify({"error": "尚未配置 AI Agent 或大模型，无法生成信用研究"}), 503
+    try:
+        job = credit_research.start_research(bond, force=force, mode=mode)
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"error": f"任务启动失败: {str(exc)[:160]}"}), 500
+    return jsonify(job)
+
+
+@app.route("/api/bond-credit-research/job/<job_id>", methods=["GET"])
+@login_required
+def api_credit_research_job(job_id):
+    job = credit_research.get_job_by_id(job_id)
+    if not job:
+        return jsonify({"error": "任务不存在或已清理"}), 404
+    return jsonify(credit_research._job_view(job))
+
+
+@app.route("/api/bond-credit-research/<path:code>/override", methods=["POST"])
+@login_required
+def api_credit_research_override(code):
+    """人工覆盖主体分类（保留自动分类与审计记录）。"""
+    payload = request.get_json(silent=True) or {}
+    new_type = str(payload.get("type") or "").strip()
+    note = str(payload.get("note") or "").strip()
+    if new_type not in credit_research.CLASSIFICATION_TYPES:
+        return jsonify({"error": "不支持的主体分类"}), 400
+    try:
+        bond = credit_research.resolve_bond(code)
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"error": f"读取债券信息失败: {str(exc)[:160]}"}), 500
+    if not bond:
+        return jsonify({"error": "未找到该债券"}), 404
+    updated = credit_research.override_classification(bond, new_type, note)
+    if not updated:
+        return jsonify({"error": "暂无已生成的研究结果，无法覆盖分类"}), 404
+    return jsonify({"report": updated.get("report"), "override_updated_at": updated.get("override_updated_at")})
 
 
 @app.route("/bond-picker")
@@ -881,6 +992,19 @@ def bond_picker_market_meta(include_emotion=True):
         payload["emotion"] = points[-1] if points else {"value": None, "count": 0, "breakdown": {}}
         payload["emotion_history"] = points
         payload["emotion_history_version"] = history.get("version") or ""
+    mover_settings = load_broker_preferences().get("ofr_mover_settings") or {}
+    movers = calculate_ofr_movers(
+        BONDS_CACHE, snapshot,
+        comparison_mode=str(mover_settings.get("comparison_mode") or "previous_snapshot"),
+        custom_baseline_at=str(mover_settings.get("custom_baseline_at") or ""),
+    )
+    payload["ofr_movers"] = movers["movers"]
+    payload["ofr_mover_baseline_at"] = movers["baseline_at"]
+    payload["ofr_mover_status"] = movers["status"]
+    payload["ofr_mover_current_at"] = movers["current_at"]
+    payload["ofr_mover_comparison_mode"] = movers["comparison_mode"]
+    payload["ofr_mover_comparison_label"] = movers["comparison_label"]
+    payload["ofr_mover_available_baselines"] = movers["available_baselines"]
     return payload
 
 
@@ -1080,6 +1204,7 @@ def credit_std_dev():
                 "border-bottom:1px solid #e2e8f0!important;"
                 "box-shadow:0 2px 10px rgba(15,23,42,.06)!important}"
                 ".header h1{color:#1e293b!important}"
+                ".header{position:sticky!important;top:var(--portal-nav-height,44px)!important;z-index:80!important}"
                 "</style>\n</head>"
             ),
             "</body>": f'<script src="{today_focus_js}"></script>\n</body>',
@@ -1186,6 +1311,21 @@ def admin_llm_overview():
 @admin_required
 def admin_llm_test():
     return {"results": llm_config.test_all_providers()}
+
+
+@app.route("/admin/api/ai-agent", methods=["GET"])
+@login_required
+@admin_required
+def admin_ai_agent_overview():
+    return credit_research.agent_connection_overview()
+
+
+@app.route("/admin/api/ai-agent/test", methods=["POST"])
+@login_required
+@admin_required
+def admin_ai_agent_test():
+    result = credit_research.test_agent_connection()
+    return result, (200 if result["ok"] else 503)
 
 
 @app.route("/admin/api/llm/priority", methods=["POST"])

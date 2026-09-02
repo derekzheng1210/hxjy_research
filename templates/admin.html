@@ -265,6 +265,14 @@ button.ghost{background:#eef2ff;color:#3730a3;font-weight:700;padding:0 10px;hei
     </section>
 
     <section class="card wide">
+      <h2>信用研究 AI Agent</h2>
+      <p>用于债券详查中的发行人信用研究。连通性测试仅验证登录、加密和凭证，不会发起研究任务或消耗对话请求。</p>
+      <table class="llm-table"><thead><tr><th>服务</th><th>接口地址</th><th>连通性</th></tr></thead>
+        <tbody id="agentTable"><tr><td colspan="3" style="color:#6b7280">加载中...</td></tr></tbody></table>
+      <div class="toolbar"><button id="agentTestButton" type="button">测试 AI Agent 连通性</button><span id="agentMessage"></span></div>
+    </section>
+
+    <section class="card wide">
       <h2>经纪商行情一键更新</h2>
       <p>网页运行期间，周一至周五按盘中时点抓取 DM 最优报价；关闭独立项目窗口后自动更新同时停止。失败会保留最近成功快照并自动重试。</p>
       {% set broker = status.broker_market.broker %}
@@ -457,6 +465,31 @@ llmTestButton.addEventListener('click', () => {
     });
 });
 loadLlm();
+
+/* ===== 信用研究 AI Agent ===== */
+const agentTable = document.getElementById('agentTable');
+const agentTestButton = document.getElementById('agentTestButton');
+const agentMessage = document.getElementById('agentMessage');
+let agentInfo = null;
+let agentResult = null;
+function renderAgent() {
+  if (!agentInfo) return;
+  let connection = '<span class="dot"></span>未检测';
+  if (!agentInfo.configured) connection = `<span class="dot bad"></span>未配置<span class="llm-err">请设置 ${llmEscape(agentInfo.key_hint || '')}</span>`;
+  if (agentResult) connection = agentResult.ok
+    ? `<span class="dot ok"></span>可用<span class="llm-latency">${agentResult.latency_ms || '-'}ms</span>`
+    : `<span class="dot bad"></span>不可用<span class="llm-err">${llmEscape(agentResult.error || '')}</span>`;
+  agentTable.innerHTML = `<tr><td>公司 AI Agent</td><td><div class="url" title="${llmEscape(agentInfo.base_url)}">${llmEscape(agentInfo.base_url)}</div></td><td>${connection}</td></tr>`;
+}
+fetch('{{ url_for("admin_ai_agent_overview") }}').then(r => r.json()).then(data => { agentInfo = data; renderAgent(); })
+  .catch(() => { agentTable.innerHTML = '<tr><td colspan="3" style="color:#b91c1c">AI Agent 状态加载失败</td></tr>'; });
+agentTestButton.addEventListener('click', () => {
+  agentTestButton.disabled = true; agentTestButton.textContent = '测试中...'; agentMessage.textContent = '';
+  fetch('{{ url_for("admin_ai_agent_test") }}', {method: 'POST'}).then(async r => ({ok: r.ok, data: await r.json()})).then(({ok, data}) => {
+    agentInfo = data; agentResult = data; renderAgent(); agentMessage.textContent = ok ? '测试完成：AI Agent 可用' : `测试失败：${data.error || '连接不可用'}`;
+  }).catch(() => { agentMessage.textContent = '测试失败：无法连接后台接口'; })
+    .finally(() => { agentTestButton.disabled = false; agentTestButton.textContent = '测试 AI Agent 连通性'; });
+});
 </script>
 </body>
 </html>

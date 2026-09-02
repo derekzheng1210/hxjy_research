@@ -610,7 +610,7 @@ def _strip_code_fences(text):
     return s.strip()
 
 
-def _call_llm(prompt, system=None, max_tokens=None, json_mode=True):
+def _call_llm(prompt, system=None, max_tokens=None, json_mode=True, thinking=False):
     """调用大模型（自部署优先，MiMo 兜底，DeepSeek 二层兜底），返回 message content。
 
     system：可选的系统消息，用于约束角色与回答风格。
@@ -626,7 +626,7 @@ def _call_llm(prompt, system=None, max_tokens=None, json_mode=True):
     last_error = None
     for provider in providers:
         try:
-            content = _complete_provider(provider, messages, max_tokens, json_mode)
+            content = _complete_provider(provider, messages, max_tokens, json_mode, thinking=thinking)
             return _strip_code_fences(content) if json_mode else content
         except Exception as exc:
             last_error = exc
@@ -634,7 +634,7 @@ def _call_llm(prompt, system=None, max_tokens=None, json_mode=True):
     raise RuntimeError(f"大模型调用失败：{last_error}")
 
 
-def _stream_llm(prompt, system=None, max_tokens=None, provider_sink=None):
+def _stream_llm(prompt, system=None, max_tokens=None, provider_sink=None, thinking=False):
     """流式调用大模型（自部署优先，MiMo 兜底，DeepSeek 二层兜底），逐段 yield 文本增量。
 
     流式模式不支持 response_format，输出格式由 system 提示词约束、
@@ -650,7 +650,7 @@ def _stream_llm(prompt, system=None, max_tokens=None, provider_sink=None):
     for provider in providers:
         try:
             produced = False
-            for delta in _stream_provider(provider, messages, max_tokens):
+            for delta in _stream_provider(provider, messages, max_tokens, thinking=thinking):
                 produced = True
                 if provider_sink is not None and not provider_sink:
                     provider_sink.append(provider["name"])
@@ -664,7 +664,7 @@ def _stream_llm(prompt, system=None, max_tokens=None, provider_sink=None):
     raise RuntimeError(f"大模型流式调用失败：{last_error}")
 
 
-def _provider_payload(provider, messages, max_tokens, json_mode, stream=False):
+def _provider_payload(provider, messages, max_tokens, json_mode, stream=False, thinking=False):
     """按 provider 能力构造 chat/completions 请求体。"""
     payload = {"model": provider["model"], "messages": messages, "temperature": 0.3}
     if json_mode and provider.get("json_mode"):
@@ -672,20 +672,25 @@ def _provider_payload(provider, messages, max_tokens, json_mode, stream=False):
     if max_tokens:
         payload["max_tokens"] = max_tokens
     if provider.get("disable_thinking"):
-        # MiMo 关闭深度思考，直接输出答案，大幅降低首响应延迟
-        payload["thinking"] = {"type": "disabled"}
+        # MiMo 支持显式启停思考；默认关闭以降低首响应延迟。
+        payload["thinking"] = {"type": "enabled" if thinking else "disabled"}
     if provider.get("chat_template_kwargs"):
-        # vLLM 部署的自部署 GLM：通过聊天模板参数关闭思考，
-        # 响应从约 7s 降至 1s，且不再输出 reasoning_content
-        payload["chat_template_kwargs"] = provider["chat_template_kwargs"]
+        # vLLM 部署通过聊天模板参数控制思考；兼容 enable_thinking 与 thinking 两种键名。
+        template_kwargs = dict(provider["chat_template_kwargs"])
+        if thinking:
+            if "enable_thinking" in template_kwargs:
+                template_kwargs["enable_thinking"] = True
+            if "thinking" in template_kwargs:
+                template_kwargs["thinking"] = True
+        payload["chat_template_kwargs"] = template_kwargs
     if stream:
         payload["stream"] = True
     return payload
 
 
-def _complete_provider(provider, messages, max_tokens, json_mode):
+def _complete_provider(provider, messages, max_tokens, json_mode, thinking=False):
     """非流式调用单个 provider：读取完整响应并返回 content 字符串。"""
-    payload = _provider_payload(provider, messages, max_tokens, json_mode)
+    payload = _provider_payload(provider, messages, max_tokens, json_mode, thinking=thinking)
     try:
         with _open_llm_raw(provider["base_url"], payload, provider["api_key"]) as resp:
             data = json.loads(resp.read().decode("utf-8"))
@@ -700,13 +705,15 @@ def _complete_provider(provider, messages, max_tokens, json_mode):
     return data["choices"][0]["message"]["content"]
 
 
-def _stream_provider(provider, messages, max_tokens):
+def _stream_provider(provider, messages, max_tokens, thinking=False):
     """流式调用单个 provider，逐段 yield 模型输出的文本增量。
 
     推理模型（MiMo、自部署 GLM 未关思考时）流中会先推送 reasoning_content
     增量（此处跳过），且可能出现空 choices 帧，需要防护。
     """
-    payload = _provider_payload(provider, messages, max_tokens, json_mode=False, stream=True)
+    payload = _provider_payload(
+        provider, messages, max_tokens, json_mode=False, stream=True, thinking=thinking,
+    )
     try:
         with _open_llm_raw(provider["base_url"], payload, provider["api_key"]) as resp:
             for raw_line in resp:
@@ -1282,50 +1289,93 @@ KNOWLEDGE_SOURCE_MARKER = "===SOURCE_IDS==="
 
 KNOWLEDGE_INTENT_RETRIEVAL = "report_retrieval"
 KNOWLEDGE_INTENT_GENERAL = "general_work"
-
-_KNOWLEDGE_GENERAL_INTENT_PATTERNS = (
-    # 数量、占比、分布等统计任务，需要跨报告汇总而不是逐篇摘要。
-    r"统计|计数|多少篇|数量|占比|比例|分布|频次|排名|排行|均值|平均|中位数",
-    # 多报告综合与观点关系分析。
-    r"比较|对比|异同|共同点|共识|分歧|一致性|交叉验证|观点演变|趋势演变|横向|纵向",
-    r"汇总|归纳|分类|聚类|矩阵|整体观点|综合观点|全部报告|所有报告|多份报告|各份报告|不同报告",
-    # 基于材料继续完成工作成果或发散任务。
-    r"撰写|起草|拟一份|写一份|生成.*(?:提纲|框架|清单|表格|方案)|制作.*(?:提纲|框架|清单|表格)",
-    r"头脑风暴|发散|启示|研究方向|下一步|情景推演|策略框架|行动建议|工作建议",
-)
+KNOWLEDGE_CONTEXT_MAX_MESSAGES = 16
+KNOWLEDGE_CONTEXT_MAX_CHARS = 24000
 
 
-def _knowledge_intent(question):
-    """本地判断知识问答意图，避免为路由提示词额外消耗一次模型调用。
-
-    统计、跨报告综合、成果撰写和发散任务进入通用框架；其余事实型问题、
-    报告查找和核心观点查询继续使用原有报告检索框架。无法明确判断时回退
-    到原有框架，以保持既有问答行为稳定。
-    """
-    text = re.sub(r"\s+", "", str(question or "")).lower()
-    # “归纳这篇报告的核心观点”仍属于原有核心观点查询；只有同时出现统计、
-    # 跨报告比较或成果制作等目标时，才进入通用工作框架。
-    if re.search(r"核心观点|主要观点|核心结论|主要结论", text):
-        advanced_core_task = re.search(
-            r"统计|计数|多少篇|数量|占比|分布|频次|排名|比较|对比|异同|共同点|共识|分歧|"
-            r"一致性|交叉验证|演变|全部报告|所有报告|多份报告|各份报告|不同报告|矩阵|聚类|"
-            r"撰写|起草|拟一份|写一份|生成|制作|头脑风暴|发散|推演|建议",
-            text,
-        )
-        if not advanced_core_task:
-            return KNOWLEDGE_INTENT_RETRIEVAL
-    if any(re.search(pattern, text) for pattern in _KNOWLEDGE_GENERAL_INTENT_PATTERNS):
-        return KNOWLEDGE_INTENT_GENERAL
-    return KNOWLEDGE_INTENT_RETRIEVAL
+def _knowledge_intent(value=None):
+    """解析前端手动选择的问题类型；未传时默认自由问答。"""
+    normalized = str(value or KNOWLEDGE_INTENT_GENERAL).strip().lower()
+    aliases = {
+        KNOWLEDGE_INTENT_GENERAL: KNOWLEDGE_INTENT_GENERAL,
+        "general": KNOWLEDGE_INTENT_GENERAL,
+        "free": KNOWLEDGE_INTENT_GENERAL,
+        KNOWLEDGE_INTENT_RETRIEVAL: KNOWLEDGE_INTENT_RETRIEVAL,
+        "retrieval": KNOWLEDGE_INTENT_RETRIEVAL,
+        "report": KNOWLEDGE_INTENT_RETRIEVAL,
+    }
+    if normalized not in aliases:
+        raise ValueError("问题类型无效，请选择自由问答或找报告")
+    return aliases[normalized]
 
 
-def _knowledge_qa_messages(question, candidates, intent=None):
+def _knowledge_context(payload):
+    """清洗自由问答上下文，限制消息数与总长度，避免客户端无限扩张提示词。"""
+    raw_messages = payload.get("context", []) if isinstance(payload, dict) else []
+    if not isinstance(raw_messages, list):
+        raise ValueError("对话上下文格式无效")
+    messages = []
+    total = 0
+    # 从最近一轮向前截取，避免较早的长消息挤掉真正有用的最新追问。
+    for item in reversed(raw_messages[-KNOWLEDGE_CONTEXT_MAX_MESSAGES:]):
+        if not isinstance(item, dict) or item.get("role") not in {"user", "assistant"}:
+            continue
+        content = str(item.get("content", item.get("text", ""))).strip()
+        if not content:
+            continue
+        content = content[:6000]
+        if total + len(content) > KNOWLEDGE_CONTEXT_MAX_CHARS:
+            content = content[:max(KNOWLEDGE_CONTEXT_MAX_CHARS - total, 0)]
+        if not content:
+            break
+        sources = []
+        for source in item.get("sources", []) if isinstance(item.get("sources"), list) else []:
+            if not isinstance(source, dict):
+                continue
+            source_id = str(source.get("id", "")).strip()[:128]
+            title = str(source.get("title", "")).strip()[:300]
+            if source_id and title:
+                sources.append({"id": source_id, "title": title})
+            if len(sources) >= 8:
+                break
+        message = {"role": item["role"], "content": content}
+        if sources:
+            message["sources"] = sources
+        messages.append(message)
+        total += len(content) + sum(len(source["title"]) for source in sources)
+        if total >= KNOWLEDGE_CONTEXT_MAX_CHARS:
+            break
+    return list(reversed(messages))
+
+
+def _knowledge_retrieval_query(question, context=None):
+    """自由问答追问过短时，用最近用户问题补足向量检索语义。"""
+    recent_questions = [
+        item["content"] for item in (context or []) if item.get("role") == "user"
+    ][-3:]
+    recent_source_titles = [
+        source["title"]
+        for item in (context or [])[-6:]
+        for source in item.get("sources", [])
+        if source.get("title")
+    ][-8:]
+    parts = []
+    for value in [*recent_questions, *recent_source_titles, question]:
+        value = str(value or "").strip()
+        if value and value not in parts:
+            parts.append(value)
+    return "\n".join(parts)[-1200:]
+
+
+def _knowledge_qa_messages(question, candidates, intent=KNOWLEDGE_INTENT_GENERAL, context=None,
+                           thinking=False):
     """构建知识问答的 system 与用户 prompt，供流式与非流式两条路径共用。
 
     输出格式为“答案正文 + 单独一行的标记 + JSON 数组”，使流式接口可以
     把标记之前的正文实时推送给前端，标记之后只留机器可读的引用 ID。
     """
-    intent = intent or _knowledge_intent(question)
+    intent = _knowledge_intent(intent)
+    context = context or []
     ordered_candidates = sorted(candidates, key=lambda item: item["published_at"], reverse=True)
     content_limit = 3200 if intent == KNOWLEDGE_INTENT_GENERAL else None
     material = "\n\n".join(
@@ -1339,34 +1389,51 @@ def _knowledge_qa_messages(question, candidates, intent=None):
     )
     if intent == KNOWLEDGE_INTENT_GENERAL:
         system = (
-            "你是一个专业的内部研究知识工作助手。你的任务不是机械罗列报告，而是仅依据给定的"
-            "【参考上下文】，完成用户要求的统计、归纳、比较、组织材料、形成框架或其他研究工作。\n\n"
+            "你是一个专业、自然、善于连续对话的内部研究知识助手。用户已手动选择“自由问答”。"
+            "你需要理解本轮问题与【对话历史】的关系，并仅依据本轮提供的【知识库检索结果】回答。\n\n"
             "严格规则：\n"
-            "1. 仅使用【参考上下文】中的事实和观点，禁止引入外部资料或编造；可以进行必要的归纳推理，"
+            "1. 事实、数据和报告观点仅可来自【知识库检索结果】，禁止引入外部资料或编造；可以进行必要的归纳推理，"
             "但必须明确区分“报告原文观点”和“基于多份报告的综合判断”。\n"
-            "2. 先识别用户真正要完成的工作，再选择最合适的结构；可使用小标题、项目符号、编号或表格，"
-            "不强制套用逐篇报告摘要模板。\n"
-            "3. 统计任务必须先说明统计口径、样本范围和样本数量，所有数字都须能由上下文逐项核验；"
+            "2. 结合对话历史解析“这个、第二点、继续、再比较”等指代，但不要重复已经回答过的内容。"
+            "若本轮检索结果不足以支撑追问，可使用历史回答中已经明确给出的内容，并说明信息边界。\n"
+            "3. 直接回应用户真正想完成的工作，优先使用简短段落、小标题和项目符号；"
+            "除非用户明确要求，否则不要使用表格，也不强制套用逐篇报告摘要模板。\n"
+            "4. 统计任务必须说明统计口径、样本范围和样本数量，所有数字都须能由材料逐项核验；"
             "本次上下文是相关报告样本时，不得声称统计覆盖整个报告库。\n"
-            "4. 比较或归纳任务应优先呈现共识、分歧、变化和证据，并注明支撑结论的报告标题或时间。\n"
-            "5. 提纲、框架、建议或发散任务可以在报告观点之上继续组织，但不得把延伸建议伪装成报告原文结论。\n"
-            "6. 合并重复信息，保持专业、简洁、可直接用于工作；上下文不足以完成任务时，明确指出缺口。\n"
-            "7. 只引用实际支持答案的报告 ID，不要引用仅关键词相似但没有提供证据的报告。\n\n"
-            "输出格式：先直接输出适合该任务的中文答案正文，不要添加无意义的开场白或结束语；"
+            "5. 比较或归纳任务优先呈现共识、分歧、变化和证据；提纲、框架或建议可在报告观点上继续组织，"
+            "但不得把延伸建议伪装成报告原文结论。\n"
+            "6. 正文引用报告时必须写真实完整标题并使用《报告标题》格式，禁止展示 report-upload-*、r001 等内部报告 ID。"
+            "每个关键结论至少标明一份直接支持它的真实报告名称；分别讨论多份报告时，优先使用"
+            "“### 《报告标题》”小标题逐篇对应观点。材料不足时明确指出缺口。\n"
+            "7. 控制视觉密度：每段只表达一个意思，段落之间留空行；不要把整句或整段全部加粗。\n\n"
+            "输出格式：先直接输出自然、完整的中文回答，不要添加无意义的开场白或结束语；"
             f"然后另起一行只输出 {KNOWLEDGE_SOURCE_MARKER}，"
             "紧接着再起一行输出一个 JSON 数组，数组内只包含实际支持答案的报告 ID，"
-            "例如 [\"r001\",\"r002\"]；没有引用任何报告时输出 []。除此之外不要输出任何内容。"
+            "例如 [\"r001\",\"r002\"]。只要正文使用了报告观点，该数组就不得为空；"
+            "报告 ID 只能出现在这个数组中，绝不能出现在正文。除此之外不要输出任何内容。"
         )
+        if thinking:
+            system += (
+                "\n\n深度思考已开启：回答前请在内部充分检查材料覆盖、证据链、相互矛盾的观点和"
+                "结论边界，再给出更严谨完整的最终答案；不要展示内部推理过程或思维链。"
+            )
+        dialogue = "\n".join(
+            f"{'用户' if item['role'] == 'user' else '助手'}：{item['content']}"
+            + ("\n该轮引用报告：" + "、".join(
+                f"《{source['title']}》" for source in item.get("sources", [])
+            ) if item.get("sources") else "")
+            for item in context
+        ) or "（这是本会话的第一轮）"
         task_hint = (
-            f"系统已将该问题识别为综合工作任务。本次提供 {len(ordered_candidates)} 篇相关报告样本，"
-            "请根据用户目标灵活组织答案。"
+            f"用户手动选择了自由问答。本轮检索到 {len(ordered_candidates)} 篇相关报告，"
+            "请结合对话历史理解追问并自由组织答案。"
         )
     else:
         system = (
             "你是一个专业的知识库报告检索与分析助手。你的核心任务是根据用户问题，"
-            "从给定的【参考上下文】中精准筛选相关报告，并按指定结构输出摘要。\n\n"
+            "从给定的【知识库检索结果】中精准筛选相关报告，并按指定结构输出摘要。\n\n"
             "严格规则：\n"
-            "1. 仅使用【参考上下文】回答，禁止使用外部知识、常识补全或编造；上下文没有实质相关报告时，answer 必须严格为“未找到相关报告”。\n"
+            "1. 仅使用【知识库检索结果】回答，禁止使用外部知识、常识补全或编造；检索结果没有实质相关报告时，answer 必须严格为“未找到相关报告”。\n"
             "2. 客观中立，忠实还原报告原文观点，不添加个人评价、推测或总结性升华。\n"
             "3. 每篇报告必须包含发布时间、主要方向、主要观点；上下文缺失时对应字段写“原文未提及”。\n"
             "4. 合并重复报告，按发布时间倒序排列；只引用实际入选且支持答案的报告 ID。\n"
@@ -1387,8 +1454,12 @@ def _knowledge_qa_messages(question, candidates, intent=None):
             "紧接着再起一行输出一个 JSON 数组，数组内只包含实际入选且支持答案的报告 ID，"
             "例如 [\"r001\",\"r002\"]；没有引用任何报告时输出 []。除此之外不要输出任何内容。"
         )
-        task_hint = "系统已将该问题识别为报告检索或核心观点查询，请严格筛选相关报告。"
-    prompt = f"{task_hint}\n\n用户问题：{question}\n\n【参考上下文】\n{material}"
+        dialogue = "（找报告模式不使用历史对话）"
+        task_hint = "用户手动选择了找报告，请严格筛选相关报告并按指定模板输出。"
+    prompt = (
+        f"{task_hint}\n\n【对话历史】\n{dialogue}\n\n【本轮用户问题】\n{question}"
+        f"\n\n【知识库检索结果】\n{material}"
+    )
     return system, prompt
 
 
@@ -1399,6 +1470,7 @@ def _parse_knowledge_answer(raw, candidates):
     输出的情况，保证非流式路径的旧行为不受影响。
     """
     text = str(raw or "").strip()
+    raw_text = text
     source_ids = []
     if KNOWLEDGE_SOURCE_MARKER in text:
         text, ids_raw = text.split(KNOWLEDGE_SOURCE_MARKER, 1)
@@ -1427,6 +1499,27 @@ def _parse_knowledge_answer(raw, candidates):
             source_ids = ids if isinstance(ids, list) else [ids]
             text = str(data.get("answer", "")).strip()
     source_map = {item["id"]: item for item in candidates}
+    # 模型偶尔漏掉尾部 ID 数组，或把内部 ID 错写进正文。结合正文中的 ID/真实标题
+    # 恢复引用；仍无引用时，为有实质回答的自由问答附上最相关的前三篇候选报告。
+    inferred_ids = []
+    for item in candidates:
+        if item["id"] in raw_text or (item["title"] and item["title"] in text):
+            inferred_ids.append(item["id"])
+    source_ids = list(dict.fromkeys(
+        [str(item).strip() for item in source_ids if str(item).strip()] + inferred_ids
+    ))
+    no_match_values = {"", "未找到相关报告", "报告库中暂无可用于回答的报告。"}
+    if not source_ids and text not in no_match_values and candidates:
+        source_ids = [item["id"] for item in candidates[:3]]
+
+    # 无论模型如何输出，都不向用户暴露内部报告 ID，统一替换为真实报告标题。
+    for item in sorted(candidates, key=lambda value: len(value["id"]), reverse=True):
+        title = f"《{item['title']}》"
+        text = re.sub(
+            rf"`?{re.escape(item['id'])}`?",
+            lambda _match, replacement=title: replacement,
+            text,
+        )
     sources = [
         {"id": rid, "title": source_map[rid]["title"], "author": source_map[rid]["author"],
          "publishedAt": source_map[rid]["published_at"]}
@@ -1438,18 +1531,42 @@ def _parse_knowledge_answer(raw, candidates):
         answer = "未找到相关报告"
     if answer == "未找到相关报告":
         sources = []
+    elif sources and not any(
+        source["title"] and source["title"] in answer for source in sources
+    ):
+        # 底部已有完整引用卡片，正文只补一句自然的来源说明，避免再生成一个
+        # “本轮参考报告”列表与引用卡片重复。最多列出最相关的三篇。
+        attribution = "本回答主要依据" + "、".join(
+            f"《{source['title']}》" for source in sources[:3]
+        ) + "。"
+        lines = answer.splitlines()
+        if lines and re.match(r"^#{1,3}\s+", lines[0].strip()):
+            answer = "\n".join([lines[0], "", attribution, *lines[1:]]).strip()
+        else:
+            answer = attribution + "\n\n" + answer
     return {"answer": answer, "sources": sources}
 
 
-def _answer_knowledge_question(question, filters=None):
-    intent = _knowledge_intent(question)
+def _answer_knowledge_question(question, filters=None, intent=KNOWLEDGE_INTENT_GENERAL,
+                               context=None, thinking=False):
+    intent = _knowledge_intent(intent)
     candidate_limit = 12 if intent == KNOWLEDGE_INTENT_GENERAL else 6
-    candidates = _knowledge_candidates(question, limit=candidate_limit, filters=filters)
-    if not candidates:
+    retrieval_query = _knowledge_retrieval_query(
+        question, context if intent == KNOWLEDGE_INTENT_GENERAL else None,
+    )
+    candidates = _knowledge_candidates(retrieval_query, limit=candidate_limit, filters=filters)
+    if not candidates and (intent == KNOWLEDGE_INTENT_RETRIEVAL or not context):
         return {"answer": _knowledge_no_match_answer(filters), "sources": []}
-    system, prompt = _knowledge_qa_messages(question, candidates, intent=intent)
+    system, prompt = _knowledge_qa_messages(
+        question, candidates, intent=intent,
+        context=context if intent == KNOWLEDGE_INTENT_GENERAL else None,
+        thinking=bool(thinking and intent == KNOWLEDGE_INTENT_GENERAL),
+    )
     max_tokens = 3600 if intent == KNOWLEDGE_INTENT_GENERAL else 2800
-    raw = _call_llm(prompt, system=system, max_tokens=max_tokens, json_mode=False)
+    raw = _call_llm(
+        prompt, system=system, max_tokens=max_tokens, json_mode=False,
+        thinking=bool(thinking and intent == KNOWLEDGE_INTENT_GENERAL),
+    )
     return _parse_knowledge_answer(raw, candidates)
 
 
@@ -2912,15 +3029,30 @@ def api_knowledge_search():
         return json_error("问题请控制在 300 字以内", 400)
     if not _llm_api_key():
         return json_error("知识搜索尚未配置大模型 API 密钥", 503)
+    try:
+        intent = _knowledge_intent(payload.get("questionType"))
+        context = _knowledge_context(payload) if intent == KNOWLEDGE_INTENT_GENERAL else []
+    except ValueError as exc:
+        return json_error(str(exc), 400)
+    conversation_id = re.sub(r"[^A-Za-z0-9_-]", "", str(payload.get("conversationId", "")))[:64]
+    conversation_id = conversation_id or uuid.uuid4().hex
+    thinking = bool(payload.get("thinking") is True and intent == KNOWLEDGE_INTENT_GENERAL)
     filters = _parse_knowledge_filters(payload)
     try:
-        result = _answer_knowledge_question(question, filters=filters)
+        result = _answer_knowledge_question(
+            question, filters=filters, intent=intent, context=context, thinking=thinking,
+        )
     except Exception as exc:
         # 不把底层 WinError/代理地址直接暴露给用户，便于定位并保持提示可读。
         return json_error(f"知识搜索暂时不可用：{exc}", 503)
     store.add_qa_usage(user["id"], day, question)
-    store.add_qa_history(user["id"], question, result.get("answer", ""), result.get("sources", []))
-    return jsonify({**result, "limit": limit, "used": used + 1, "remaining": max(limit - used - 1, 0)})
+    store.add_qa_history(
+        user["id"], question, result.get("answer", ""), result.get("sources", []),
+        conversation_id=conversation_id, question_type=intent, thinking_enabled=thinking,
+    )
+    return jsonify({**result, "conversationId": conversation_id, "questionType": intent,
+                    "thinking": thinking,
+                    "limit": limit, "used": used + 1, "remaining": max(limit - used - 1, 0)})
 
 
 @app.route("/api/knowledge-search/stream", methods=["POST"])
@@ -2948,6 +3080,14 @@ def api_knowledge_search_stream():
         return json_error("问题请控制在 300 字以内", 400)
     if not _llm_api_key():
         return json_error("知识搜索尚未配置大模型 API 密钥", 503)
+    try:
+        intent = _knowledge_intent(payload.get("questionType"))
+        context = _knowledge_context(payload) if intent == KNOWLEDGE_INTENT_GENERAL else []
+    except ValueError as exc:
+        return json_error(str(exc), 400)
+    conversation_id = re.sub(r"[^A-Za-z0-9_-]", "", str(payload.get("conversationId", "")))[:64]
+    conversation_id = conversation_id or uuid.uuid4().hex
+    thinking = bool(payload.get("thinking") is True and intent == KNOWLEDGE_INTENT_GENERAL)
     filters = _parse_knowledge_filters(payload)
 
     user_id = user["id"]
@@ -2958,10 +3098,12 @@ def api_knowledge_search_stream():
 
     def generate():
         # 阶段一：本地检索。全文抽取是本地主要耗时，逐份报告推送解析进度。
-        intent = _knowledge_intent(question)
         candidate_limit = 12 if intent == KNOWLEDGE_INTENT_GENERAL else 6
         candidates = []
-        retrieval = _iter_knowledge_candidates(question, limit=candidate_limit, filters=filters)
+        retrieval_query = _knowledge_retrieval_query(
+            question, context if intent == KNOWLEDGE_INTENT_GENERAL else None,
+        )
+        retrieval = _iter_knowledge_candidates(retrieval_query, limit=candidate_limit, filters=filters)
         while True:
             try:
                 done_count, total = next(retrieval)
@@ -2969,16 +3111,28 @@ def api_knowledge_search_stream():
                 candidates = stop.value or []
                 break
             yield event({"type": "stage", "text": f"正在检索向量索引（{done_count}/{total}）…"})
-        if not candidates:
+        if not candidates and (intent == KNOWLEDGE_INTENT_RETRIEVAL or not context):
             answer = _knowledge_no_match_answer(filters)
             store.add_qa_usage(user_id, day, question)
-            store.add_qa_history(user_id, question, answer, [])
+            store.add_qa_history(
+                user_id, question, answer, [], conversation_id=conversation_id,
+                question_type=intent, thinking_enabled=thinking,
+            )
             yield event({"type": "done", "answer": answer, "sources": [],
+                         "conversationId": conversation_id, "questionType": intent,
+                         "thinking": thinking,
                          "limit": limit, "used": used + 1, "remaining": remaining})
             return
-        task_name = "综合分析" if intent == KNOWLEDGE_INTENT_GENERAL else "报告检索"
-        yield event({"type": "stage", "text": f"已识别为{task_name}任务，正在基于 {len(candidates)} 篇相关报告生成回答…"})
-        system, prompt = _knowledge_qa_messages(question, candidates, intent=intent)
+        if intent == KNOWLEDGE_INTENT_GENERAL:
+            stage_text = f"已检索 {len(candidates)} 篇相关报告，正在结合对话上下文生成回答…"
+        else:
+            stage_text = f"已检索 {len(candidates)} 篇相关报告，正在按报告格式整理…"
+        yield event({"type": "stage", "text": stage_text})
+        system, prompt = _knowledge_qa_messages(
+            question, candidates, intent=intent,
+            context=context if intent == KNOWLEDGE_INTENT_GENERAL else None,
+            thinking=thinking,
+        )
         max_tokens = 3600 if intent == KNOWLEDGE_INTENT_GENERAL else 2800
         # 阶段二：流式生成。标记可能跨 chunk 分裂，扣留缓冲保证
         # ===SOURCE_IDS=== 之后的内容不会混入推送给前端的答案正文。
@@ -2986,7 +3140,9 @@ def api_knowledge_search_stream():
         emitted = 0
         got_delta = False
         try:
-            for delta in _stream_llm(prompt, system=system, max_tokens=max_tokens):
+            for delta in _stream_llm(
+                prompt, system=system, max_tokens=max_tokens, thinking=thinking,
+            ):
                 got_delta = True
                 raw += delta
                 if KNOWLEDGE_SOURCE_MARKER in raw:
@@ -2999,8 +3155,15 @@ def api_knowledge_search_stream():
             if KNOWLEDGE_SOURCE_MARKER not in raw and len(raw) > emitted:
                 yield event({"type": "delta", "text": raw[emitted:]})
             result = _parse_knowledge_answer(raw, candidates)
-            store.add_qa_history(user_id, question, result.get("answer", ""), result.get("sources", []))
-            yield event({"type": "done", **result, "limit": limit, "used": used + 1, "remaining": remaining})
+            store.add_qa_history(
+                user_id, question, result.get("answer", ""), result.get("sources", []),
+                conversation_id=conversation_id, question_type=intent,
+                thinking_enabled=thinking,
+            )
+            yield event({"type": "done", **result, "conversationId": conversation_id,
+                         "questionType": intent, "thinking": thinking,
+                         "limit": limit, "used": used + 1,
+                         "remaining": remaining})
         except Exception as exc:
             # 不把底层 WinError/代理地址直接暴露给用户，便于定位并保持提示可读。
             yield event({"type": "error", "message": f"知识搜索暂时不可用：{exc}"})

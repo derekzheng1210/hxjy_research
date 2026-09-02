@@ -577,15 +577,18 @@ function computeRecommendations(){RECOMMENDED=new Set(BONDS.filter(recommendatio
 async function loadRecommendationSettings(){try{const response=await fetch('/api/bond-picker/preferences',{cache:'no-store'});if(response.ok){const payload=await response.json();RECOMMENDATION_SETTINGS={...DEFAULT_RECOMMENDATION_SETTINGS,...(payload.recommendation_settings||{})}}}catch(_error){}computeRecommendations()}
 function rating630Dot(b){if(b.rating630==='ok')return'';const note=b.rating630Note?`：${b.rating630Note}`:'';return `<span class="rating-dot" title="可能不满足合规630评级要求，投前请务必确认${escAttr(note)}"></span>`}
 
+function ratingScore(v){const m=/^([A-Za-z]{1,4})\s*(\+|-|[(（](\d)[)）])?$/.exec(String(v).trim());if(!m)return null;const letters=m[1].toUpperCase(),order=['AAA','AA','A','BBB','BB','B','CCC','CC','C'],li=order.indexOf(letters);if(li<0)return null;let mod=0;if(m[2]==='+')mod=1;else if(m[2]==='-')mod=-1;else if(m[3])mod=-Number(m[3])*0.1;return(order.length-li)*10+mod}
+function ratingCompare(a,b){const x=ratingScore(a),y=ratingScore(b);if(x===null||y===null)return 0;return x-y}
+function ratingSort(a,b){return ratingCompare(a,b)||String(a).localeCompare(String(b),'zh')}
 function populateFilters(){
-  const u=(f)=>[...new Set(BONDS.map(b=>b[f]))].filter(Boolean).sort();
+  const u=(f)=>[...new Set(BONDS.map(b=>b[f]))].filter(Boolean).sort(ratingSort);
   initMS('msRating',u('rating'));
   initMS('msIR',u('ir'));
   fillSelect('fEntity',u('entity'));
 }
 
 function normalPopulateFilters(){
-  const u=(f)=>[...new Set(BONDS.map(b=>b[f]))].filter(Boolean).sort();
+  const u=(f)=>[...new Set(BONDS.map(b=>b[f]))].filter(Boolean).sort(ratingSort);
   initMS('nmsRating',u('rating'));
   initMS('nmsIR',u('ir'));
   fillSelect('nfEntity',u('entity'));
@@ -950,7 +953,7 @@ function sortValue(b,key){
 function compareNullable(a,b,dir){
   const aNull=a===null||a===undefined||a==='';const bNull=b===null||b===undefined||b==='';
   if(aNull||bNull)return aNull===bNull?0:(aNull?1:-1);
-  const value=(typeof a==='string'||typeof b==='string')?String(a).localeCompare(String(b),'zh'):a-b;
+  const value=(typeof a==='string'||typeof b==='string')?(ratingCompare(a,b)||String(a).localeCompare(String(b),'zh')):a-b;
   return dir==='desc'?-value:value;
 }
 function applyNormalFilters(){

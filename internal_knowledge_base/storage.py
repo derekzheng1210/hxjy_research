@@ -123,6 +123,9 @@ class SQLiteStore:
                     question TEXT NOT NULL,
                     answer TEXT NOT NULL,
                     sources TEXT NOT NULL,
+                    conversation_id TEXT NOT NULL DEFAULT '',
+                    question_type TEXT NOT NULL DEFAULT 'general_work',
+                    thinking_enabled INTEGER NOT NULL DEFAULT 0,
                     created_at TEXT NOT NULL
                 );
 
@@ -189,6 +192,7 @@ class SQLiteStore:
                 """
             )
             self._ensure_roadshow_columns(conn)
+            self._ensure_qa_history_columns(conn)
             self._set_default(conn, "reminder_config", self._reminder_default)
             self._set_default(conn, "knowledge_config", {"memberLimit": 10, "leaderLimit": 100})
             self._set_default(conn, "schema_version", 1)
@@ -611,21 +615,30 @@ class SQLiteStore:
                 (user_id, day, question[:300], now_iso()),
             )
 
-    def add_qa_history(self, user_id, question, answer, sources):
+    def add_qa_history(self, user_id, question, answer, sources,
+                       conversation_id="", question_type="general_work", thinking_enabled=False):
         with self.transaction() as conn:
             conn.execute(
-                "INSERT INTO qa_history(user_id,question,answer,sources,created_at) VALUES(?,?,?,?,?)",
-                (user_id, question[:300], answer, json.dumps(sources, ensure_ascii=False), now_iso()),
+                "INSERT INTO qa_history(user_id,question,answer,sources,conversation_id,question_type,"
+                "thinking_enabled,created_at) VALUES(?,?,?,?,?,?,?,?)",
+                (user_id, question[:300], answer, json.dumps(sources, ensure_ascii=False),
+                 str(conversation_id or "")[:64], str(question_type or "general_work")[:32],
+                 1 if thinking_enabled else 0, now_iso()),
             )
 
     def qa_history_for_user(self, user_id, limit=50):
         with self.connect() as conn:
             rows = conn.execute(
-                "SELECT question,answer,sources,created_at FROM qa_history WHERE user_id=? "
+                "SELECT id,question,answer,sources,conversation_id,question_type,thinking_enabled,created_at "
+                "FROM qa_history WHERE user_id=? "
                 "ORDER BY id DESC LIMIT ?", (user_id, limit),
             ).fetchall()
-        return [{"question": row["question"], "answer": row["answer"],
-                 "sources": json.loads(row["sources"]), "createdAt": row["created_at"]}
+        return [{"id": row["id"], "question": row["question"], "answer": row["answer"],
+                 "sources": json.loads(row["sources"]),
+                 "conversationId": row["conversation_id"] or f"legacy-{row['id']}",
+                 "questionType": row["question_type"] or "general_work",
+                 "thinking": bool(row["thinking_enabled"]),
+                 "createdAt": row["created_at"]}
                 for row in reversed(rows)]
 
     def clear_qa_history(self, user_id):
@@ -710,6 +723,23 @@ class SQLiteStore:
         for column in ("end_time", "institution", "organizer"):
             if column not in columns:
                 conn.execute(f"ALTER TABLE roadshow_schedule ADD COLUMN {column} TEXT NOT NULL DEFAULT ''")
+
+    @staticmethod
+    def _ensure_qa_history_columns(conn: sqlite3.Connection) -> None:
+        """为旧问答记录补充会话与手动问题类型字段（幂等）。"""
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(qa_history)")}
+        if not columns:
+            return
+        if "conversation_id" not in columns:
+            conn.execute("ALTER TABLE qa_history ADD COLUMN conversation_id TEXT NOT NULL DEFAULT ''")
+        if "question_type" not in columns:
+            conn.execute(
+                "ALTER TABLE qa_history ADD COLUMN question_type TEXT NOT NULL DEFAULT 'general_work'"
+            )
+        if "thinking_enabled" not in columns:
+            conn.execute(
+                "ALTER TABLE qa_history ADD COLUMN thinking_enabled INTEGER NOT NULL DEFAULT 0"
+            )
 
     # Roadshow schedule（路演安排表）
     def roadshow_items(self, date_from, date_to):

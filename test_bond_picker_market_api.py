@@ -45,6 +45,24 @@ class BondPickerMarketApiTests(unittest.TestCase):
         finally:
             target.unlink(missing_ok=True)
 
+    def test_preferences_persist_ofr_mover_settings(self):
+        self.authenticate()
+        target = Path.cwd() / ".test-bond-picker-mover-preferences.json"
+        try:
+            with patch.object(storage, "PREFERENCES_PATH", target):
+                response = self.client.put("/api/secondary-bond-picker/preferences", json={
+                    "favorites": [],
+                    "ofr_mover_settings": {"threshold_bp": 2, "direction": "down", "comparison_mode": "previous_day_close"},
+                })
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.get_json()["ofr_mover_settings"], {"threshold_bp": 2.0, "direction": "down", "comparison_mode": "previous_day_close", "custom_baseline_at": ""})
+                invalid = self.client.put("/api/secondary-bond-picker/preferences", json={
+                    "ofr_mover_settings": {"threshold_bp": 101, "direction": "both"},
+                })
+                self.assertEqual(invalid.status_code, 400)
+        finally:
+            target.unlink(missing_ok=True)
+
     def test_secondary_picker_is_separate_primary_tool(self):
         self.authenticate()
         with patch.object(portal, "BONDS_CACHE", []):
@@ -64,6 +82,9 @@ class BondPickerMarketApiTests(unittest.TestCase):
         response = self.client.get("/api/secondary-bond-picker/data")
         self.assertEqual(response.status_code, 200)
         self.assertIn("emotion_history", response.get_json()["meta"])
+        self.assertIn("ofr_movers", response.get_json()["meta"])
+        self.assertIn("ofr_mover_status", response.get_json()["meta"])
+        self.assertIn("ofr_mover_available_baselines", response.get_json()["meta"])
 
 
 if __name__ == "__main__":
