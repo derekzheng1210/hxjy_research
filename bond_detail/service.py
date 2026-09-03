@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import math
+import os
 import statistics
 import threading
+import time
 from bisect import bisect_right
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -12,6 +15,7 @@ from typing import Any, Iterable
 from broker_market.storage import (
     HISTORY_DIR,
     OUTLIER_THRESHOLD_BP,
+    SNAPSHOT_PATH,
     bare_code,
     finite_number,
     list_quote_history,
@@ -22,10 +26,12 @@ from broker_market.storage import (
 from juyuan_update import config
 from juyuan_update.db import connect
 from juyuan_update.generators import curve_for_bond, read_js_data
+from juyuan_update.neiping_portal_fetch import load_portal_data
 from juyuan_update.unified_excel import (
-    get_spread_monitor_bonds,
+    load_bond_static,
     load_bond_picker_yields_cache,
     load_json,
+    normalize_rating,
     load_spread_history_cache,
 )
 HOLDING_DAYS_BY_MONTHS = {3: 91, 6: 182}
@@ -49,6 +55,167 @@ CURVE_TO_STD_CATEGORY = {
 
 _instrument_cache: dict[str, dict[str, Any]] = {}
 _instrument_lock = threading.Lock()
+_logger = logging.getLogger(__name__)
+
+# 这些数据文件由每日更新和盘中报价任务原子替换。读模型只在文件版本变化时
+# 重建，避免每个详情/搜索请求都深拷贝约 10MB 的债券池并重建索引。
+_read_model_lock = threading.RLock()
+_read_model: dict[str, Any] | None = None
+_spread_model_lock = threading.RLock()
+_spread_model: dict[str, Any] | None = None
+_js_cache_lock = threading.RLock()
+_js_cache: dict[Path, tuple[tuple[int, int] | None, dict[str, Any]]] = {}
+_quote_cache_lock = threading.RLock()
+_quote_cache: dict[Path, tuple[tuple[int, int] | None, dict[str, Any], dict[str, dict[str, Any]]]] = {}
+
+DETAIL_CACHE_TTL_SECONDS = max(1, int(os.environ.get("BOND_DETAIL_CACHE_TTL_SECONDS", "300")))
+DETAIL_CACHE_MAX_ENTRIES = max(8, int(os.environ.get("BOND_DETAIL_CACHE_MAX_ENTRIES", "256")))
+_detail_cache_lock = threading.RLock()
+_detail_cache: dict[tuple[str, str, bool, int], tuple[float, dict[str, Any]]] = {}
+_detail_inflight: dict[tuple[str, str, bool, int], threading.Lock] = {}
+_detail_timings: list[float] = []
+
+# 默认查询 Oracle，确保骑乘收益可取得票息与现金流；未接入 Oracle 的部署可通过
+# 环境变量显式关闭并让该模块快速降级，页面其他确定性模块仍可正常返回。
+ORACLE_INSTRUMENT_ENABLED = os.environ.get("BOND_DETAIL_ORACLE_ENABLED", "1").lower() in {
+    "1", "true", "yes", "on",
+}
+ORACLE_INSTRUMENT_TIMEOUT_MS = max(100, int(os.environ.get("BOND_DETAIL_ORACLE_TIMEOUT_MS", "3000")))
+
+
+def _path_signature(path: Path) -> tuple[int, int] | None:
+    try:
+        stat = path.stat()
+        return stat.st_mtime_ns, stat.st_size
+    except OSError:
+        return None
+
+
+def _cached_js_data(path: Path) -> dict[str, Any]:
+    signature = _path_signature(path)
+    with _js_cache_lock:
+        cached = _js_cache.get(path)
+        if cached and cached[0] == signature:
+            return cached[1]
+    payload = read_js_data(path) or {}
+    with _js_cache_lock:
+        _js_cache[path] = (signature, payload)
+    return payload
+
+
+def _read_model_signature() -> tuple[tuple[int, int] | None, ...]:
+    return (
+        _path_signature(config.BOND_STATIC_JSON),
+        _path_signature(config.PORTAL_DATA_JSON),
+        _path_signature(config.BOND_PICKER_YIELDS_CACHE),
+    )
+
+
+def _build_read_model(signature: tuple[tuple[int, int] | None, ...]) -> dict[str, Any]:
+    # 详情计算不会修改债券原始嵌套字段，只复制最外层 dict 并叠加门户字段。
+    # 相比 get_spread_monitor_bonds 的 deepcopy，可避免每次数据版本更新复制整个 10MB+
+    # 数据树，同时维持调用方看到的字段与原逻辑一致。
+    portal = load_portal_data() or {}
+    ratings = portal.get("ratings") or {}
+    holdings = portal.get("holdings") or {}
+    bonds: list[dict[str, Any]] = []
+    for raw_bond in load_bond_static().get("bonds", []):
+        bond = dict(raw_bond)
+        issuer = str(bond.get("issuer") or "").strip()
+        rating = ratings.get(issuer)
+        if rating:
+            bond["internal_rating"] = normalize_rating(rating)
+        holding = holdings.get(bond.get("code"))
+        if holding is not None:
+            amount = float(holding.get("amount") or 0)
+            bond["is_holding"] = amount != 0
+            bond["holding_amount"] = round(amount, 6)
+            bond["holding_date"] = holding.get("holding_date") or ""
+        elif holdings:
+            bond["is_holding"] = False
+        bonds.append(bond)
+    by_code: dict[str, dict[str, Any]] = {}
+    by_issuer: dict[str, list[dict[str, Any]]] = {}
+    search_rows: list[tuple[str, str, str, dict[str, Any]]] = []
+    for bond in bonds:
+        code = normalize_code(bond.get("code"))
+        if not code:
+            continue
+        by_code[code] = bond
+        by_code.setdefault(bare_code(code), bond)
+        issuer = str(bond.get("issuer") or "").strip()
+        if issuer:
+            by_issuer.setdefault(issuer, []).append(bond)
+        search_rows.append((
+            code,
+            str(bond.get("name") or "").lower(),
+            issuer.lower(),
+            bond,
+        ))
+    yield_payload = load_bond_picker_yields_cache()
+    yields: dict[str, float] = {}
+    for raw_code, raw_value in (yield_payload.get("yields") or {}).items():
+        value = finite_number(raw_value)
+        code = normalize_code(raw_code)
+        if value is None or not code:
+            continue
+        yields[code] = value
+        yields.setdefault(bare_code(code), value)
+    return {
+        "signature": signature,
+        "bonds": bonds,
+        "by_code": by_code,
+        "by_issuer": by_issuer,
+        "search_rows": search_rows,
+        "yields": yields,
+        "yield_payload": yield_payload,
+    }
+
+
+def _get_read_model() -> dict[str, Any]:
+    signature = _read_model_signature()
+    with _read_model_lock:
+        global _read_model
+        if _read_model is None or _read_model["signature"] != signature:
+            _read_model = _build_read_model(signature)
+        return _read_model
+
+
+def _spread_model_signature() -> tuple[tuple[int, int] | None, tuple[int, int] | None]:
+    return _path_signature(config.SPREAD_JS), _path_signature(config.SPREAD_HISTORY_CACHE)
+
+
+def _build_spread_model(signature: tuple[tuple[int, int] | None, tuple[int, int] | None]) -> dict[str, Any]:
+    payload = _cached_js_data(config.SPREAD_JS)
+    row_index: dict[str, dict[str, Any]] = {}
+    for row in payload.get("data") or []:
+        code = normalize_code(row.get("code"))
+        if code:
+            row_index[code] = row
+            row_index.setdefault(bare_code(code), row)
+    dates = dict(payload.get("dates") or {})
+    history_cache = load_spread_history_cache().get("dates") or {}
+    current = str(dates.get("当前") or "").replace("-", "")[:8]
+    one_year = _one_year_reference(history_cache, current) if current else ""
+    if one_year:
+        dates["一年前"] = one_year
+    return {
+        "signature": signature,
+        "payload": payload,
+        "row_index": row_index,
+        "dates": dates,
+        "history_cache": history_cache,
+        "one_year": one_year,
+    }
+
+
+def _get_spread_model() -> dict[str, Any]:
+    signature = _spread_model_signature()
+    with _spread_model_lock:
+        global _spread_model
+        if _spread_model is None or _spread_model["signature"] != signature:
+            _spread_model = _build_spread_model(signature)
+        return _spread_model
 
 
 def _number(value: Any, digits: int = 4) -> float | None:
@@ -75,50 +242,27 @@ def _parse_date(value: Any) -> date | None:
 
 
 def _bond_indexes() -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]], dict[str, list[dict[str, Any]]]]:
-    bonds = get_spread_monitor_bonds()
-    by_code: dict[str, dict[str, Any]] = {}
-    by_issuer: dict[str, list[dict[str, Any]]] = {}
-    for bond in bonds:
-        code = normalize_code(bond.get("code"))
-        if not code:
-            continue
-        by_code[code] = bond
-        by_code.setdefault(bare_code(code), bond)
-        issuer = str(bond.get("issuer") or "").strip()
-        if issuer:
-            by_issuer.setdefault(issuer, []).append(bond)
-    return bonds, by_code, by_issuer
+    model = _get_read_model()
+    return model["bonds"], model["by_code"], model["by_issuer"]
 
 
 def _yield_indexes() -> tuple[dict[str, float], dict[str, Any]]:
-    payload = load_bond_picker_yields_cache()
-    values: dict[str, float] = {}
-    for raw_code, raw_value in (payload.get("yields") or {}).items():
-        value = finite_number(raw_value)
-        code = normalize_code(raw_code)
-        if value is None or not code:
-            continue
-        values[code] = value
-        values.setdefault(bare_code(code), value)
-    return values, payload
+    model = _get_read_model()
+    return model["yields"], model["yield_payload"]
 
 
 def search_bonds(query: str, limit: int = 20) -> list[dict[str, Any]]:
     query = str(query or "").strip().lower()
     if not query:
         return []
-    bonds, _, _ = _bond_indexes()
-    yields, _ = _yield_indexes()
+    model = _get_read_model()
+    yields = model["yields"]
     matches = []
-    for bond in bonds:
-        code = normalize_code(bond.get("code"))
-        haystack = " ".join(
-            [code, str(bond.get("name") or ""), str(bond.get("issuer") or "")]
-        ).lower()
-        if query not in haystack:
+    for code, name, issuer, bond in model["search_rows"]:
+        if query not in code.lower() and query not in name and query not in issuer:
             continue
         prefix = 0 if code.lower().startswith(query) else 1
-        name_prefix = 0 if str(bond.get("name") or "").lower().startswith(query) else 1
+        name_prefix = 0 if name.startswith(query) else 1
         matches.append((prefix, name_prefix, code, bond, yields.get(code) or yields.get(bare_code(code))))
     matches.sort(key=lambda item: item[:3])
     try:
@@ -473,9 +617,14 @@ def fetch_instrument_details(code: str) -> dict[str, Any]:
         cached = _instrument_cache.get(symbol)
     if cached is not None:
         return dict(cached)
+    if not ORACLE_INSTRUMENT_ENABLED:
+        return {"error": "Oracle单券静态信息未启用，骑乘收益暂不可算"}
     result: dict[str, Any] = {}
     try:
         with connect() as conn:
+            # call_timeout 覆盖本次 SQL 的网络往返；连接开关用于未接入 Oracle 的
+            # 环境快速降级，避免同步请求长时间阻塞 Web 工作线程。
+            conn.call_timeout = ORACLE_INSTRUMENT_TIMEOUT_MS
             cur = conn.cursor()
             cur.execute(
                 """
@@ -677,25 +826,49 @@ def _quote_index(snapshot: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return result
 
 
+def _cached_quote_snapshot(path: Path, *, current: bool = False) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
+    """按文件版本缓存报价 JSON 及其 code 索引，避免重复解析多 MB 快照。"""
+    signature = _path_signature(path)
+    with _quote_cache_lock:
+        cached = _quote_cache.get(path)
+        if cached and cached[0] == signature:
+            return cached[1], cached[2]
+    payload = load_snapshot() if current else load_market_json(path, {})
+    index = _quote_index(payload)
+    with _quote_cache_lock:
+        _quote_cache[path] = (signature, payload, index)
+        # 报价历史按天滚动；限制进程内旧快照数量，避免长期运行占用无界内存。
+        if len(_quote_cache) > 160:
+            for stale in list(_quote_cache)[:len(_quote_cache) - 160]:
+                _quote_cache.pop(stale, None)
+    return payload, index
+
+
+def _selected_quote_history_paths() -> list[Path]:
+    """每个交易日只取最后一个快照，保留近五日走势而避免解析全部盘中全量文件。"""
+    paths: list[Path] = []
+    keep_days: set[str] = set()
+    for name in reversed(list_quote_history()):
+        day = name[:8]
+        if day in keep_days:
+            continue
+        keep_days.add(day)
+        paths.append(HISTORY_DIR / name)
+        if len(keep_days) >= 5:
+            break
+    return paths
+
+
 def quote_analysis(
     target: dict[str, Any], issuer_bonds: list[dict[str, Any]], yields: dict[str, float]
 ) -> dict[str, Any]:
     target_code = normalize_code(target.get("code"))
-    current = load_snapshot()
-    current_index = _quote_index(current)
+    current, current_index = _cached_quote_snapshot(SNAPSHOT_PATH, current=True)
     target_yield = yields.get(target_code) or yields.get(bare_code(target_code))
     latest = _clean_quote(current_index.get(target_code) or current_index.get(bare_code(target_code)), target_yield, str(current.get("generated_at") or ""))
     history = []
-    files = list_quote_history()
-    keep_days = []
-    for name in reversed(files):
-        day = name[:8]
-        if day not in keep_days:
-            keep_days.append(day)
-        if len(keep_days) > 5:
-            break
-        snapshot = load_market_json(HISTORY_DIR / name, {})
-        index = _quote_index(snapshot)
+    for path in _selected_quote_history_paths():
+        snapshot, index = _cached_quote_snapshot(path)
         quote = _clean_quote(index.get(target_code) or index.get(bare_code(target_code)), target_yield, str(snapshot.get("generated_at") or ""))
         if quote:
             history.append(quote)
@@ -743,20 +916,12 @@ def _one_year_reference(cache_dates: dict[str, Any], current: str) -> str:
 def spread_analysis(
     target: dict[str, Any], issuer_bonds: list[dict[str, Any]], yields: dict[str, float] | None = None,
 ) -> dict[str, Any]:
-    payload = read_js_data(config.SPREAD_JS) or {}
-    rows = payload.get("data") or []
-    row_index = {}
-    for row in rows:
-        code = normalize_code(row.get("code"))
-        if code:
-            row_index[code] = row
-            row_index.setdefault(bare_code(code), row)
-    dates = dict(payload.get("dates") or {})
-    history_cache = load_spread_history_cache().get("dates") or {}
-    current = str(dates.get("当前") or "").replace("-", "")[:8]
-    one_year = _one_year_reference(history_cache, current) if current else ""
-    if one_year:
-        dates["一年前"] = one_year
+    model = _get_spread_model()
+    payload = model["payload"]
+    row_index = model["row_index"]
+    dates = model["dates"]
+    history_cache = model["history_cache"]
+    one_year = model["one_year"]
 
     def values_for(code: str, row: dict[str, Any] | None) -> dict[str, float | None]:
         bare = bare_code(code)
@@ -864,10 +1029,15 @@ def deterministic_summary(payload: dict[str, Any]) -> str:
     ride = payload["riding_return"]
     quotes = payload["quotes"]
     spreads = payload["spreads"]
-    sentences = [
-        f"{bond['name']}（{bond['code']}）当前中债估值{bond['current_yield']:.4f}%"
-        f"，剩余期限{bond['term']:.2f}年，隐含评级{bond['implied_rating'] or '未提供'}。"
-    ]
+    if bond.get("current_yield") is not None:
+        sentences = [
+            f"{bond['name']}（{bond['code']}）当前中债估值{bond['current_yield']:.4f}%"
+            f"，剩余期限{bond['term']:.2f}年，隐含评级{bond['implied_rating'] or '未提供'}。"
+        ]
+    else:
+        sentences = [
+            f"{bond['name']}（{bond['code']}）剩余期限{bond['term']:.2f}年，当前暂无中债估值，估值相关诊断不可用。"
+        ]
     gap = relative.get("rating_curve_gap_bp")
     if gap is not None:
         sentences.append(f"相对同期限{relative['rating_curve_name']}高出{gap:.1f}BP。" if gap >= 0 else f"相对同期限{relative['rating_curve_name']}低{-gap:.1f}BP。")
@@ -909,9 +1079,44 @@ def _detail_version(*paths: Path, extra: str = "") -> str:
     return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()[:20]
 
 
-def build_bond_detail(
+def _detail_source_paths() -> list[Path]:
+    return [
+        config.BOND_STATIC_JSON,
+        config.BOND_PICKER_YIELDS_CACHE,
+        config.SPREAD_JS,
+        config.STD_DEV_JS,
+        config.STD_DEV_CURVES_CACHE,
+        config.PORTAL_DATA_JSON,
+        config.RATING_FACTS_CACHE,
+        config.SPREAD_HISTORY_CACHE,
+        SNAPSHOT_PATH,
+        *_selected_quote_history_paths(),
+    ]
+
+
+def _detail_source_token() -> str:
+    return _detail_version(*_detail_source_paths())
+
+
+def _record_detail_timing(elapsed_ms: float, *, cache_hit: bool) -> None:
+    with _detail_cache_lock:
+        _detail_timings.append(elapsed_ms)
+        del _detail_timings[:-200]
+        samples = sorted(_detail_timings)
+    p50 = samples[len(samples) // 2]
+    p95 = samples[min(len(samples) - 1, max(0, math.ceil(len(samples) * 0.95) - 1))]
+    _logger.info(
+        "bond_detail timing cache_hit=%s elapsed_ms=%.1f p50_ms=%.1f p95_ms=%.1f samples=%d",
+        cache_hit, elapsed_ms, p50, p95, len(samples),
+    )
+
+
+def _build_bond_detail_uncached(
     code: str, *, exclude_exchange_tech: bool = True, horizon_months: int = 3,
 ) -> dict[str, Any]:
+    started = time.perf_counter()
+    stage_started = started
+    stages: dict[str, float] = {}
     horizon_months = int(horizon_months)
     if horizon_months not in HOLDING_DAYS_BY_MONTHS:
         raise ValueError("骑乘期限仅支持3个月或6个月")
@@ -923,9 +1128,12 @@ def build_bond_detail(
         raise KeyError("未找到该债券")
     code = normalize_code(bond.get("code"))
     yields, yield_payload = _yield_indexes()
+    stages["read_model"] = (time.perf_counter() - stage_started) * 1000
+    stage_started = time.perf_counter()
     current_yield = yields.get(code) or yields.get(bare_code(code))
-    if current_yield is None:
-        raise ValueError("该债券暂无最新中债估值")
+    # 中债估值缺失（如SPB等无估值券种）不再阻断整页：估值相关模块
+    # （估值位置/骑乘/主体曲线凸点）按各自"不可用"路径降级，
+    # 授信、630合规、经纪商报价与AI信用研究不受影响。
     term = finite_number(bond.get("term"))
     if term is None:
         raise ValueError("该债券缺少剩余期限")
@@ -938,10 +1146,12 @@ def build_bond_detail(
     gov_curve_yield = _curve_yield(curve_day, "国开债", term)
     horizon_term = max(term - horizon_days / 365.0, 0.08)
     rating_curve_horizon = _curve_yield(curve_day, curve_name, horizon_term)
-    std_data = read_js_data(config.STD_DEV_JS) or {}
+    std_data = _cached_js_data(config.STD_DEV_JS)
     rating_market = rating_band_metrics(std_data, std_category, term) if std_category else {
         "available": False, "reason": "该券种暂未映射至两倍标准差曲线"
     }
+    stages["curves"] = (time.perf_counter() - stage_started) * 1000
+    stage_started = time.perf_counter()
     issuer_curve = issuer_curve_analysis(
         bond, issuer_bonds, yields, exclude_exchange_tech=exclude_exchange_tech,
         rating_curve_yield=lambda tenor: _curve_yield(curve_day, curve_name, tenor),
@@ -954,14 +1164,23 @@ def build_bond_detail(
         bond, details, str(yield_payload.get("trade_date") or curve_date),
         current_yield, rating_curve_yield, rating_curve_horizon, horizon_months=horizon_months,
     )
+    stages["cashflow"] = (time.perf_counter() - stage_started) * 1000
+    stage_started = time.perf_counter()
     quotes = quote_analysis(bond, issuer_bonds, yields)
+    stages["quotes"] = (time.perf_counter() - stage_started) * 1000
+    stage_started = time.perf_counter()
     spreads = spread_analysis(bond, issuer_bonds, yields)
+    stages["spreads"] = (time.perf_counter() - stage_started) * 1000
+    stage_started = time.perf_counter()
     credit_facility = credit_facility_analysis(bond)
+    stages["credit_facility"] = (time.perf_counter() - stage_started) * 1000
+    stage_started = time.perf_counter()
     rating_compliance = rating_compliance_analysis(code)
+    stages["rating_compliance"] = (time.perf_counter() - stage_started) * 1000
     relative = {
         "rating_curve_name": curve_name,
         "rating_curve_yield": _number(rating_curve_yield),
-        "rating_curve_gap_bp": round((current_yield - rating_curve_yield) * 100, 2) if rating_curve_yield is not None else None,
+        "rating_curve_gap_bp": round((current_yield - rating_curve_yield) * 100, 2) if current_yield is not None and rating_curve_yield is not None else None,
         "government_curve_yield": _number(gov_curve_yield),
         "credit_spread_bp": round((rating_curve_yield - gov_curve_yield) * 100, 2) if rating_curve_yield is not None and gov_curve_yield is not None else None,
         "rating_curve_points": rating_curve_points,
@@ -974,16 +1193,14 @@ def build_bond_detail(
         )},
         "code": code,
         "term": round(term, 4),
-        "current_yield": round(current_yield, 4),
+        "current_yield": round(current_yield, 4) if current_yield is not None else None,
         **{key: details.get(key) for key in (
             "coupon_rate", "maturity_date", "payment_mode", "payments_per_year", "payment_day_rules",
             "put_date", "redeem_date", "option_memo",
         )},
     }
     version = _detail_version(
-        config.BOND_STATIC_JSON, config.BOND_PICKER_YIELDS_CACHE, config.SPREAD_JS,
-        config.STD_DEV_JS, config.STD_DEV_CURVES_CACHE, config.PORTAL_DATA_JSON,
-        config.RATING_FACTS_CACHE,
+        *_detail_source_paths(),
         extra=(f"{quotes.get('snapshot_at') or ''}|exclude_exchange_tech="
                f"{int(exclude_exchange_tech)}|horizon_months={horizon_months}"),
     )
@@ -1019,4 +1236,74 @@ def build_bond_detail(
         },
     }
     payload["summary"] = {"text": deterministic_summary(payload)}
+    _logger.info(
+        "bond_detail stages code=%s read_model_ms=%.1f curves_ms=%.1f cashflow_ms=%.1f quotes_ms=%.1f "
+        "spreads_ms=%.1f credit_facility_ms=%.1f rating_compliance_ms=%.1f total_ms=%.1f",
+        code,
+        stages["read_model"], stages["curves"], stages["cashflow"], stages["quotes"], stages["spreads"],
+        stages["credit_facility"], stages["rating_compliance"], (time.perf_counter() - started) * 1000,
+    )
     return payload
+
+
+def build_bond_detail(
+    code: str, *, exclude_exchange_tech: bool = True, horizon_months: int = 3,
+) -> dict[str, Any]:
+    """构建单券详情，并以数据版本为边界复用结果。
+
+    结果缓存不以固定 TTL 作为新鲜度判断：任何债券池、估值、行情、利差或门户
+    数据文件变化都会生成新 key；TTL 仅用于回收无人使用的旧版本结果。
+    """
+    horizon_months = int(horizon_months)
+    if horizon_months not in HOLDING_DAYS_BY_MONTHS:
+        raise ValueError("骑乘期限仅支持3个月或6个月")
+    normalized_code = normalize_code(code)
+    source_token = _detail_source_token()
+    key = (source_token, normalized_code, bool(exclude_exchange_tech), horizon_months)
+    started = time.perf_counter()
+    now = time.monotonic()
+    with _detail_cache_lock:
+        cached = _detail_cache.get(key)
+        if cached and now - cached[0] < DETAIL_CACHE_TTL_SECONDS:
+            _record_detail_timing((time.perf_counter() - started) * 1000, cache_hit=True)
+            return cached[1]
+        work_lock = _detail_inflight.setdefault(key, threading.Lock())
+    with work_lock:
+        try:
+            now = time.monotonic()
+            with _detail_cache_lock:
+                cached = _detail_cache.get(key)
+                if cached and now - cached[0] < DETAIL_CACHE_TTL_SECONDS:
+                    _record_detail_timing((time.perf_counter() - started) * 1000, cache_hit=True)
+                    return cached[1]
+            payload = _build_bond_detail_uncached(
+                normalized_code,
+                exclude_exchange_tech=exclude_exchange_tech,
+                horizon_months=horizon_months,
+            )
+            with _detail_cache_lock:
+                _detail_cache[key] = (time.monotonic(), payload)
+                while len(_detail_cache) > DETAIL_CACHE_MAX_ENTRIES:
+                    _detail_cache.pop(next(iter(_detail_cache)))
+            _record_detail_timing((time.perf_counter() - started) * 1000, cache_hit=False)
+            return payload
+        finally:
+            with _detail_cache_lock:
+                _detail_inflight.pop(key, None)
+
+
+def _reset_detail_caches_for_test() -> None:
+    """测试辅助：清空进程内性能缓存。"""
+    global _read_model, _spread_model
+    with _read_model_lock:
+        _read_model = None
+    with _spread_model_lock:
+        _spread_model = None
+    with _js_cache_lock:
+        _js_cache.clear()
+    with _quote_cache_lock:
+        _quote_cache.clear()
+    with _detail_cache_lock:
+        _detail_cache.clear()
+        _detail_inflight.clear()
+        _detail_timings.clear()

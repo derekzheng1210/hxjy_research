@@ -28,19 +28,19 @@
     reportAuthors: () => apiFetch('/api/report-authors', { credentials: 'same-origin' }).then(handleJson),
     reminders: () => apiFetch('/api/work-reminders', { credentials: 'same-origin' }).then(handleJson),
     knowledgeStatus: () => apiFetch('/api/knowledge-search', { credentials: 'same-origin' }).then(handleJson),
-    knowledgeAsk: (question, filters = {}) => apiFetch('/api/knowledge-search', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ question, ...filters }) }).then(handleJson),
+    knowledgeAsk: (question, options = {}) => apiFetch('/api/knowledge-search', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ question, ...options }) }).then(handleJson),
     // 流式问答：SSE 逐事件回调 onEvent({type:'stage'|'delta'|'done'|'error', ...})，
     // filters 携带范围筛选（时间/来源/种类/主题/人员），
     // 前置校验失败（额度/密钥等）时服务端返回 JSON 错误，此处统一抛出。
-    knowledgeAskStream: async (question, filters = {}, onEvent) => {
-      const response = await apiFetch('/api/knowledge-search/stream', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ question, ...filters }) });
+    knowledgeAskStream: async (question, options = {}, onEvent) => {
+      const response = await apiFetch('/api/knowledge-search/stream', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ question, ...options }) });
       if (!response.ok || !(response.headers.get('content-type') || '').includes('text/event-stream')) {
         const data = await response.json().catch(() => ({}));
         throw new Error(data.error || `知识搜索失败 (${response.status})`);
       }
       if (!response.body || typeof response.body.getReader !== 'function') {
         // 浏览器不支持流式读取时，回落到一次性返回的旧接口，保证功能可用。
-        const result = await API.knowledgeAsk(question, filters);
+        const result = await API.knowledgeAsk(question, options);
         onEvent({ type: 'done', ...result });
         return;
       }
@@ -146,7 +146,7 @@
     reportAuthors: [],
     roadshow: { weekOffset: 0, weekStart: '', weekEnd: '', items: [], wide: false },
     reminders: null,
-    knowledge: { limit: 10, used: 0, remaining: 10, available: true, messages: [], filters: { period: '1m', dateFrom: '', dateTo: '', reportTypes: [], categories: [], themes: [], authors: [] } }
+    knowledge: { limit: 10, used: 0, remaining: 10, available: true, history: [], messages: [], questionType: 'general_work', thinking: false, conversationId: '', activeConversationId: '', draft: '', filters: { period: '1m', dateFrom: '', dateTo: '', reportTypes: [], categories: [], themes: [], authors: [] } }
   };
 
   const els = {};
@@ -322,15 +322,10 @@
       state.reminders = reminders;
       if (knowledge) {
         // 每个人只能看到自己的历史问答：后端按当前用户过滤返回 history。
-        // 将历史问答展开为 user/assistant 交替的消息序列，供对话区渲染。
         const history = Array.isArray(knowledge.history) ? knowledge.history : [];
-        const messages = state.knowledge.messages && state.knowledge.messages.length
-          ? state.knowledge.messages
-          : history.flatMap(item => [
-              { role: 'user', text: item.question || '' },
-              { role: 'assistant', text: item.answer || '未找到相关报告', sources: item.sources || [] },
-            ]);
-        state.knowledge = { ...state.knowledge, ...knowledge, messages };
+        // 历史按 conversationId 分组；默认打开一段新的“自由问答”，避免把互不相关的旧问题
+        // 自动拼成模型上下文。用户可在左侧主动恢复任一旧会话。
+        state.knowledge = { ...state.knowledge, ...knowledge, history };
       }
     } catch (error) {
       notify(error.message || '数据加载失败', 'error');
@@ -1599,28 +1594,59 @@
     });
   }
 
+  function createKnowledgeConversationId() {
+    if (globalThis.crypto && typeof globalThis.crypto.randomUUID === 'function') return globalThis.crypto.randomUUID();
+    return `kb-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  }
+
+  function knowledgeConversations() {
+    const grouped = new Map();
+    (Array.isArray(state.knowledge.history) ? state.knowledge.history : []).forEach((item, idx) => {
+      const id = item.conversationId || `legacy-${item.id || idx}`;
+      if (!grouped.has(id)) grouped.set(id, { id, title: item.question || '未命名对话', updatedAt: item.createdAt || '', items: [] });
+      const conversation = grouped.get(id);
+      conversation.items.push(item);
+      if (item.createdAt && item.createdAt >= conversation.updatedAt) conversation.updatedAt = item.createdAt;
+    });
+    return [...grouped.values()].sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
+  }
+
   function renderKnowledgeSearch() {
     const knowledge = state.knowledge;
     const kf = knowledge.filters || {};
-    const history = Array.isArray(knowledge.history) ? knowledge.history : [];
-    const historyItems = history.map((item, idx) => {
-      const time = item.createdAt ? new Date(item.createdAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
-      const q = escapeHTML(item.question || '');
-      return `<li class="knowledge-history-item${knowledge.activeHistoryIdx === idx ? ' active' : ''}" data-action="focus-history" data-idx="${idx}"><p class="knowledge-history-q">${q}</p>${time ? `<span class="knowledge-history-time">${time}</span>` : ''}</li>`;
+    const conversations = knowledgeConversations();
+    const isFree = knowledge.questionType !== 'report_retrieval';
+    const historyItems = conversations.map(conversation => {
+      const time = conversation.updatedAt ? new Date(conversation.updatedAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
+      const latest = conversation.items[conversation.items.length - 1] || {};
+      const mode = latest.questionType === 'report_retrieval' ? '找报告' : (latest.thinking ? '自由问答 · 思考' : '自由问答');
+      return `<li class="knowledge-history-item${knowledge.activeConversationId === conversation.id ? ' active' : ''}" data-action="focus-history" data-conversation-id="${escapeHTML(conversation.id)}"><p class="knowledge-history-q">${escapeHTML(conversation.title)}</p><span class="knowledge-history-meta"><em>${mode}</em>${time ? `<time>${time}</time>` : ''}</span></li>`;
     }).join('');
-    els.viewRoot.innerHTML = `<section class="knowledge-hero"><h1>知识搜索</h1><div class="knowledge-quota"><strong>${knowledge.remaining}</strong><span>今日剩余次数<br><small>每日最多 ${knowledge.limit} 次</small></span></div></section>
+    const messages = Array.isArray(knowledge.messages) ? knowledge.messages : [];
+    els.viewRoot.innerHTML = `<section class="knowledge-hero"><div><h1>智能搜索</h1><p>自由问答可连续追问，找报告按固定格式整理结果</p></div><div class="knowledge-quota"><strong>${knowledge.remaining}</strong><span>今日剩余次数<br><small>每日最多 ${knowledge.limit} 次</small></span></div></section>
       <section class="knowledge-main">
         <aside class="knowledge-sidebar panel-card">
-          <header><div class="knowledge-history-head"><h3>我的历史提问</h3><span class="knowledge-history-count">${history.length}</span></div>${history.length ? `<button class="knowledge-clear-btn" data-action="clear-history" title="清空全部历史提问">清理历史</button>` : ''}</header>
-          <ul class="knowledge-history-list">${historyItems || '<li class="knowledge-history-empty">暂无历史提问</li>'}</ul>
+          <div class="knowledge-new-wrap"><button class="knowledge-new-btn" data-action="new-knowledge-conversation"><span>＋</span> 新对话</button></div>
+          <header><div class="knowledge-history-head"><h3>历史对话</h3><span class="knowledge-history-count">${conversations.length}</span></div>${conversations.length ? `<button class="knowledge-clear-btn" data-action="clear-history" title="清空全部历史对话">清理历史</button>` : ''}</header>
+          <ul class="knowledge-history-list">${historyItems || '<li class="knowledge-history-empty">暂无历史对话</li>'}</ul>
         </aside>
         <div class="knowledge-shell panel-card">
           <div class="knowledge-filters">${knowledgeFiltersHTML(kf)}</div>
-          <div class="knowledge-conversation" id="knowledgeConversation">${knowledge.messages.length ? knowledge.messages.map(message => `<article class="knowledge-message ${message.role}"><div>${message.role === 'user' ? '我' : 'AI'}</div><section>${message.role === 'assistant' && message.streaming ? `<div class="knowledge-status">${escapeHTML(message.stage || '正在检索知识库…')}</div>` : ''}<div class="knowledge-answer${message.role === 'assistant' && message.streaming ? ' streaming' : ''}">${message.role === 'assistant' ? (message.text ? renderKnowledgeAnswer(message.text) : '') : escapeHTML(message.text).replace(/\n/g, '<br>')}</div>${message.sources?.length ? `<aside><span>引用报告</span>${message.sources.map(source => `<button data-action="view-report" data-id="${source.id}">《${escapeHTML(source.title)}》 · ${escapeHTML(source.author)}${source.publishedAt ? ` · ${escapeHTML(source.publishedAt)}` : ''}</button>`).join('')}</aside>` : ''}</section></article>`).join('') : `<div class="knowledge-empty"><strong>向报告库提一个问题</strong><p>例如：“近期信用利差变化的主要驱动是什么？”</p></div>`}</div>
-          <form class="knowledge-form" id="knowledgeForm"><textarea id="knowledgeQuestion" maxlength="300" placeholder="输入你想从报告中了解的问题…" ${knowledge.remaining ? '' : 'disabled'}></textarea><button class="btn btn-primary" type="submit" ${knowledge.remaining && knowledge.available !== false ? '' : 'disabled'}>发送问题</button></form>${knowledge.available === false ? '<p class="knowledge-warning">服务端尚未配置大模型 API 密钥，暂时无法发起问答。</p>' : ''}
+          <div class="knowledge-conversation" id="knowledgeConversation">${messages.length ? messages.map(message => `<article class="knowledge-message ${message.role}"><div>${message.role === 'user' ? '我' : 'AI'}</div><section>${message.role === 'user' && message.questionType ? `<span class="knowledge-message-mode">${message.questionType === 'report_retrieval' ? '找报告' : `自由问答${message.thinking ? ' · 深度思考' : ''}`}</span>` : ''}${message.role === 'assistant' && message.streaming ? `<div class="knowledge-status">${escapeHTML(message.stage || '正在检索知识库…')}</div>` : ''}<div class="knowledge-answer${message.role === 'assistant' && message.streaming ? ' streaming' : ''}">${message.role === 'assistant' ? (message.text ? renderKnowledgeAnswer(message.text) : '') : escapeHTML(message.text).replace(/\n/g, '<br>')}</div>${message.sources?.length ? `<aside><span>本轮引用报告 · ${message.sources.length}篇</span>${message.sources.map(source => `<button data-action="view-report" data-id="${source.id}">《${escapeHTML(source.title)}》${source.author ? ` · ${escapeHTML(source.author)}` : ''}${source.publishedAt ? ` · ${escapeHTML(source.publishedAt)}` : ''}</button>`).join('')}</aside>` : ''}</section></article>`).join('') : `<div class="knowledge-empty"><div class="knowledge-empty-mark">AI</div><strong>${isFree ? '从知识库开始自由问答' : '告诉我你想找哪类报告'}</strong><p>${isFree ? '例如：“信用利差最近有哪些共识？”回答后可继续追问“展开第二点”。' : '例如：“找出近三个月讨论城投利差的报告”。'}</p></div>`}</div>
+          <form class="knowledge-form" id="knowledgeForm">
+            <textarea id="knowledgeQuestion" maxlength="300" placeholder="${isFree ? '基于知识库提问，可在回答后继续追问…' : '描述主题、时间或报告方向…'}" ${knowledge.remaining ? '' : 'disabled'}>${escapeHTML(knowledge.draft || '')}</textarea>
+            <div class="knowledge-composer-toolbar">
+              <label class="knowledge-mode-select"><span>回答模式</span><select id="knowledgeModeSelect" aria-label="回答模式"><option value="general_work" ${isFree ? 'selected' : ''}>自由问答</option><option value="report_retrieval" ${isFree ? '' : 'selected'}>找报告 · 按格式输出</option></select></label>
+              ${isFree ? `<button type="button" class="knowledge-thinking-compact${knowledge.thinking ? ' active' : ''}" data-action="toggle-knowledge-thinking" aria-pressed="${knowledge.thinking ? 'true' : 'false'}" title="${knowledge.thinking ? '关闭深度思考' : '开启深度思考'}"><span>✦</span> 深度思考</button>` : ''}
+              <span class="knowledge-composer-shortcut">Enter 发送 · Shift + Enter 换行</span>
+              <button class="btn btn-primary knowledge-send" type="submit" ${knowledge.remaining && knowledge.available !== false ? '' : 'disabled'}>发送</button>
+            </div>
+          </form>${knowledge.available === false ? '<p class="knowledge-warning">服务端尚未配置大模型 API 密钥，暂时无法发起问答。</p>' : ''}
         </div>
       </section>`;
     document.getElementById('knowledgeForm')?.addEventListener('submit', submitKnowledgeQuestion);
+    document.getElementById('knowledgeModeSelect')?.addEventListener('change', event => setKnowledgeQuestionType(event.target.value));
+    document.getElementById('knowledgeQuestion')?.addEventListener('input', event => { state.knowledge.draft = event.target.value; });
     document.getElementById('knowledgeQuestion')?.addEventListener('keydown', event => {
       // Enter 直接发送；Shift+Enter 保留换行能力。
       if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
@@ -1732,12 +1758,31 @@
     });
   }
 
-  function renderKnowledgeAnswer(value) {
-    let html = escapeHTML(value || '未找到相关报告').replace(/\r\n?/g, '\n');
-    html = html.replace(/^###\s+(.+)$/gm, '<h4>$1</h4>');
+  function renderKnowledgeInline(value) {
+    let html = escapeHTML(value || '');
     html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-    html = html.replace(/^\s*-\s+(.+)$/gm, '<div class="knowledge-bullet">$1</div>');
-    return html.replace(/\n/g, '<br>');
+    html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+    html = html.replace(/《([^》]+)》/g, '<span class="knowledge-citation">《$1》</span>');
+    return html;
+  }
+
+  function renderKnowledgeAnswer(value) {
+    const lines = String(value || '未找到相关报告').replace(/\r\n?/g, '\n').split('\n');
+    const blocks = [];
+    lines.forEach(rawLine => {
+      const line = rawLine.trim();
+      if (!line) return;
+      let match = line.match(/^#{3}\s+(.+)$/);
+      if (match) { blocks.push(`<h4>${renderKnowledgeInline(match[1])}</h4>`); return; }
+      match = line.match(/^#{1,2}\s+(.+)$/);
+      if (match) { blocks.push(`<h3>${renderKnowledgeInline(match[1])}</h3>`); return; }
+      match = line.match(/^[*\-•]\s+(.+)$/);
+      if (match) { blocks.push(`<div class="knowledge-bullet">${renderKnowledgeInline(match[1])}</div>`); return; }
+      match = line.match(/^(\d+)[.、]\s*(.+)$/);
+      if (match) { blocks.push(`<div class="knowledge-numbered"><span>${match[1]}.</span><p>${renderKnowledgeInline(match[2])}</p></div>`); return; }
+      blocks.push(`<p>${renderKnowledgeInline(line)}</p>`);
+    });
+    return blocks.join('');
   }
 
   async function submitKnowledgeQuestion(event) {
@@ -1745,9 +1790,23 @@
     const input = document.getElementById('knowledgeQuestion');
     const question = input?.value.trim();
     if (!question) return notify('请输入问题', 'error');
-    state.knowledge.messages.push({ role: 'user', text: question });
+    const questionType = state.knowledge.questionType === 'report_retrieval' ? 'report_retrieval' : 'general_work';
+    const thinking = questionType === 'general_work' && Boolean(state.knowledge.thinking);
+    const existingMessages = (state.knowledge.messages || []).filter(message => !message.streaming);
+    const context = questionType === 'general_work'
+      ? existingMessages.map(message => ({
+          role: message.role,
+          content: message.text || '',
+          sources: (message.sources || []).map(source => ({ id: source.id, title: source.title })),
+        }))
+      : [];
+    const conversationId = state.knowledge.conversationId || createKnowledgeConversationId();
+    state.knowledge.conversationId = conversationId;
+    state.knowledge.activeConversationId = conversationId;
+    state.knowledge.draft = '';
+    state.knowledge.messages.push({ role: 'user', text: question, questionType, thinking });
     // 追加一个流式占位气泡：状态行先显示检索进度，随后逐字填充 AI 回答。
-    const placeholder = { role: 'assistant', text: '', sources: [], streaming: true, stage: '正在检索知识库…' };
+    const placeholder = { role: 'assistant', text: '', sources: [], streaming: true, questionType, thinking, stage: questionType === 'general_work' ? (thinking ? '正在检索知识库并进行深度思考…' : '正在检索知识库并理解对话上下文…') : '正在检索相关报告…' };
     state.knowledge.messages.push(placeholder);
     renderKnowledgeSearch();
     const form = document.getElementById('knowledgeForm');
@@ -1755,10 +1814,16 @@
     const submitBtn = form?.querySelector('button[type=submit]');
     if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = '生成中…'; }
     let doneResult = null;
-    // 范围筛选随问题一起提交（拷贝快照，流式期间用户改筛选不影响本次请求）。
-    const filters = { ...(state.knowledge.filters || {}) };
+    // 两种模式都会检索知识库；自由问答额外携带当前会话上下文。
+    const options = {
+      ...(state.knowledge.filters || {}),
+      questionType,
+      thinking,
+      conversationId,
+      context,
+    };
     try {
-      await API.knowledgeAskStream(question, filters, evt => {
+      await API.knowledgeAskStream(question, options, evt => {
         if (evt.type === 'stage') {
           placeholder.stage = evt.text || '';
           scheduleKnowledgeStreamRefresh();
@@ -1776,10 +1841,11 @@
         placeholder.sources = doneResult.sources || [];
         placeholder.streaming = false;
         placeholder.stage = '';
-        // 新问答成功后追加到历史列表，并清除历史选中态，让对话区显示最新完整对话。
-        const newHistoryItem = { question, answer: placeholder.text, sources: placeholder.sources, createdAt: new Date().toISOString() };
+        const resolvedConversationId = doneResult.conversationId || conversationId;
+        state.knowledge.conversationId = resolvedConversationId;
+        state.knowledge.activeConversationId = resolvedConversationId;
+        const newHistoryItem = { question, answer: placeholder.text, sources: placeholder.sources, questionType, thinking, conversationId: resolvedConversationId, createdAt: new Date().toISOString() };
         state.knowledge.history = [...(state.knowledge.history || []), newHistoryItem];
-        state.knowledge.activeHistoryIdx = undefined;
         state.knowledge = { ...state.knowledge, limit: doneResult.limit ?? state.knowledge.limit, used: doneResult.used ?? state.knowledge.used, remaining: doneResult.remaining ?? state.knowledge.remaining };
       }
     } catch (error) {
@@ -1820,26 +1886,54 @@
     conversation.scrollTop = conversation.scrollHeight;
   }
 
-  function focusHistoryItem(idx) {
-    const history = Array.isArray(state.knowledge.history) ? state.knowledge.history : [];
-    if (!Number.isInteger(idx) || idx < 0 || idx >= history.length) return;
-    const item = history[idx];
-    // 点击历史提问时，对话区仅展示该条问答，并标记选中态。
-    state.knowledge.activeHistoryIdx = idx;
-    state.knowledge.messages = [
-      { role: 'user', text: item.question || '' },
-      { role: 'assistant', text: item.answer || '未找到相关报告', sources: item.sources || [] },
-    ];
+  function focusHistoryItem(conversationId) {
+    const conversation = knowledgeConversations().find(item => item.id === conversationId);
+    if (!conversation) return;
+    const latest = conversation.items[conversation.items.length - 1] || {};
+    state.knowledge.activeConversationId = conversation.id;
+    state.knowledge.conversationId = conversation.id;
+    state.knowledge.questionType = latest.questionType === 'report_retrieval' ? 'report_retrieval' : 'general_work';
+    state.knowledge.thinking = state.knowledge.questionType === 'general_work' && Boolean(latest.thinking);
+    state.knowledge.draft = '';
+    state.knowledge.messages = conversation.items.flatMap(item => [
+      { role: 'user', text: item.question || '', questionType: item.questionType || 'general_work', thinking: Boolean(item.thinking) },
+      { role: 'assistant', text: item.answer || '未找到相关报告', sources: item.sources || [], questionType: item.questionType || 'general_work', thinking: Boolean(item.thinking) },
+    ]);
     renderKnowledgeSearch();
+  }
+
+  function startNewKnowledgeConversation() {
+    state.knowledge.messages = [];
+    state.knowledge.conversationId = createKnowledgeConversationId();
+    state.knowledge.activeConversationId = '';
+    state.knowledge.questionType = 'general_work';
+    state.knowledge.thinking = false;
+    state.knowledge.draft = '';
+    renderKnowledgeSearch();
+    document.getElementById('knowledgeQuestion')?.focus();
+  }
+
+  function setKnowledgeQuestionType(questionType) {
+    state.knowledge.questionType = questionType === 'report_retrieval' ? 'report_retrieval' : 'general_work';
+    renderKnowledgeSearch();
+    const input = document.getElementById('knowledgeQuestion');
+    if (input) { input.focus(); input.setSelectionRange(input.value.length, input.value.length); }
+  }
+
+  function toggleKnowledgeThinking() {
+    if (state.knowledge.questionType !== 'general_work') return;
+    state.knowledge.thinking = !state.knowledge.thinking;
+    renderKnowledgeSearch();
+    document.getElementById('knowledgeQuestion')?.focus();
   }
 
   function showClearHistoryModal() {
     const history = Array.isArray(state.knowledge.history) ? state.knowledge.history : [];
-    if (!history.length) return notify('暂无历史提问可清理', 'error');
+    if (!history.length) return notify('暂无历史对话可清理', 'error');
     openModal(`<section class="modal-card">
       ${modalHeader('知识搜索', '清理历史提问')}
       <div class="modal-body">
-        <div class="detail-permission"><svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.8"/><path d="M12 8v4M12 16h.01" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg><div><strong style="font-size:18px">确认清空全部历史提问吗？</strong><p>共 <strong>${history.length}</strong> 条记录将被清除，对话区也会一并清空。此操作不可撤销。</p></div></div>
+        <div class="detail-permission"><svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.8"/><path d="M12 8v4M12 16h.01" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg><div><strong style="font-size:18px">确认清空全部历史对话吗？</strong><p>共 <strong>${knowledgeConversations().length}</strong> 段对话、${history.length} 轮问答将被清除。此操作不可撤销。</p></div></div>
       </div>
       <div class="modal-footer">
         <button type="button" class="btn btn-ghost" data-close="modal">取消</button>
@@ -1852,11 +1946,15 @@
     try {
       await API.knowledgeClearHistory();
       state.knowledge.history = [];
-      state.knowledge.activeHistoryIdx = undefined;
+      state.knowledge.activeConversationId = '';
+      state.knowledge.conversationId = createKnowledgeConversationId();
+      state.knowledge.questionType = 'general_work';
+      state.knowledge.thinking = false;
+      state.knowledge.draft = '';
       state.knowledge.messages = [];
       closeModal();
       renderKnowledgeSearch();
-      notify('历史提问已清空');
+      notify('历史对话已清空');
     } catch (error) {
       notify(error.message || '清空失败', 'error');
     }
@@ -3515,7 +3613,10 @@
     else if (action === 'go-my-reports') navigate('my-reports');
     else if (action === 'set-search-report-type') { state.search.reportType = target.dataset.reportType || 'all'; renderSearchResults(); }
     else if (action === 'clear-search') { state.search = { query: '', reportType: 'all' }; els.globalSearch.value = ''; renderSearchResults(); document.getElementById('searchResultInput')?.focus(); }
-    else if (action === 'focus-history') focusHistoryItem(parseInt(target.dataset.idx, 10));
+    else if (action === 'focus-history') focusHistoryItem(target.dataset.conversationId || '');
+    else if (action === 'new-knowledge-conversation') startNewKnowledgeConversation();
+    else if (action === 'set-knowledge-type') setKnowledgeQuestionType(target.dataset.questionType || 'general_work');
+    else if (action === 'toggle-knowledge-thinking') toggleKnowledgeThinking();
     else if (action === 'clear-history') showClearHistoryModal();
     else if (action === 'confirm-clear-history') confirmClearHistory();
     else if (action === 'filter-category' || action === 'set-report-category') { state.filters.category = target.dataset.category || ''; navigate('reports'); }

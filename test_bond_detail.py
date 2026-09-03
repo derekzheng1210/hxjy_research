@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import os
+import time
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta
 from pathlib import Path
 from unittest.mock import patch
@@ -313,6 +315,92 @@ class BondDetailRouteTests(unittest.TestCase):
         builder.assert_called_once_with(
             "T.IB", exclude_exchange_tech=False, horizon_months=6
         )
+
+
+class BondDetailPerformanceCacheTests(unittest.TestCase):
+    def setUp(self):
+        bond_service._reset_detail_caches_for_test()
+
+    def tearDown(self):
+        bond_service._reset_detail_caches_for_test()
+
+    def test_read_model_rebuilds_only_when_source_version_changes(self):
+        first = ((1, 1), (1, 1), (1, 1))
+        second = ((2, 1), (1, 1), (1, 1))
+        with patch.object(bond_service, "_read_model_signature", side_effect=[first, first, second]), patch.object(
+            bond_service,
+            "_build_read_model",
+            side_effect=lambda signature: {"signature": signature},
+        ) as builder:
+            self.assertIs(bond_service._get_read_model(), bond_service._get_read_model())
+            bond_service._get_read_model()
+        self.assertEqual(builder.call_count, 2)
+
+    def test_spread_index_rebuilds_when_spread_source_changes(self):
+        first = ((1, 1), (1, 1))
+        second = ((1, 2), (1, 1))
+        with patch.object(bond_service, "_spread_model_signature", side_effect=[first, first, second]), patch.object(
+            bond_service,
+            "_build_spread_model",
+            side_effect=lambda signature: {"signature": signature},
+        ) as builder:
+            bond_service._get_spread_model()
+            bond_service._get_spread_model()
+            bond_service._get_spread_model()
+        self.assertEqual(builder.call_count, 2)
+
+    def test_detail_cache_is_keyed_by_source_and_parameters(self):
+        payload = {"version": "v1", "bond": {"code": "T.IB"}}
+        with patch.object(bond_service, "_detail_source_token", return_value="source-v1"), patch.object(
+            bond_service, "_build_bond_detail_uncached", return_value=payload
+        ) as builder:
+            self.assertIs(bond_service.build_bond_detail("T.IB"), payload)
+            self.assertIs(bond_service.build_bond_detail("T.IB"), payload)
+            bond_service.build_bond_detail("T.IB", horizon_months=6)
+            bond_service.build_bond_detail("T.IB", exclude_exchange_tech=False)
+        self.assertEqual(builder.call_count, 3)
+
+    def test_detail_cache_invalidates_when_any_source_version_changes(self):
+        with patch.object(bond_service, "_detail_source_token", side_effect=["source-v1", "source-v2"]), patch.object(
+            bond_service,
+            "_build_bond_detail_uncached",
+            side_effect=[{"version": "v1"}, {"version": "v2"}],
+        ) as builder:
+            self.assertEqual(bond_service.build_bond_detail("T.IB")["version"], "v1")
+            self.assertEqual(bond_service.build_bond_detail("T.IB")["version"], "v2")
+        self.assertEqual(builder.call_count, 2)
+
+    def test_detail_cache_single_flight_prevents_duplicate_builds(self):
+        def slow_builder(*_args, **_kwargs):
+            time.sleep(0.04)
+            return {"version": "v1", "bond": {"code": "T.IB"}}
+
+        with patch.object(bond_service, "_detail_source_token", return_value="source-v1"), patch.object(
+            bond_service, "_build_bond_detail_uncached", side_effect=slow_builder
+        ) as builder, ThreadPoolExecutor(max_workers=5) as executor:
+            results = list(executor.map(lambda _: bond_service.build_bond_detail("T.IB"), range(5)))
+        self.assertEqual(builder.call_count, 1)
+        self.assertTrue(all(result["version"] == "v1" for result in results))
+
+    def test_oracle_disabled_degrades_without_connecting(self):
+        with patch.object(bond_service, "ORACLE_INSTRUMENT_ENABLED", False), patch.object(
+            bond_service, "connect"
+        ) as connect:
+            result = bond_service.fetch_instrument_details("NO_ORACLE_CACHE_TEST.IB")
+        connect.assert_not_called()
+        self.assertIn("未启用", result["error"])
+
+    def test_quote_history_uses_latest_snapshot_per_day(self):
+        names = [
+            "20260901_090000.json", "20260901_150000.json",
+            "20260902_093000.json", "20260902_153000.json",
+            "20260903_090000.json",
+        ]
+        with patch.object(bond_service, "list_quote_history", return_value=names):
+            paths = bond_service._selected_quote_history_paths()
+        self.assertEqual([path.name for path in paths], [
+            "20260903_090000.json", "20260902_153000.json", "20260901_150000.json",
+        ])
 
 
 if __name__ == "__main__":

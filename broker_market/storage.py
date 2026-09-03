@@ -67,6 +67,22 @@ DEFAULT_RECOMMENDATION_SETTINGS = {
     "bbb_minus_max_term": 3.0,
     "require_better_than_market": True,
 }
+DEFAULT_OFR_MOVER_SETTINGS = {
+    "threshold_bp": 2.0,
+    "direction": "both",
+    "comparison_mode": "previous_snapshot",
+    "custom_baseline_at": "",
+}
+OFR_MOVER_COMPARISON_MODES = {
+    "previous_snapshot", "today_open", "previous_day_close", "previous_day_open", "custom",
+}
+OFR_MOVER_COMPARISON_LABELS = {
+    "previous_snapshot": "上一期（不限当日）",
+    "today_open": "当日日初",
+    "previous_day_close": "上日日终",
+    "previous_day_open": "上日日初",
+    "custom": "自定义时点",
+}
 
 
 def ensure_directories() -> None:
@@ -293,6 +309,127 @@ def merge_bond_rows(base_rows: list[list[Any]], snapshot: dict[str, Any] | None 
     return merged
 
 
+def _clean_offer_yield(quote: dict[str, Any] | None, valuation_yield: float | None) -> float | None:
+    """Return an OFR that passes the same side-level validation as the picker."""
+    ofr = valid_yield((quote or {}).get("ofr_yield"))
+    if (
+        ofr is not None and valuation_yield is not None
+        and abs((ofr - valuation_yield) * 100) >= OUTLIER_THRESHOLD_BP
+    ):
+        return None
+    return ofr
+
+
+def _prior_quote_snapshots(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
+    """Complete snapshots before the current one, ordered by observation time."""
+    current_at = str(snapshot.get("generated_at") or "")
+    candidates: list[tuple[str, dict[str, Any]]] = []
+    if not current_at:
+        return []
+    for path in list_quote_history():
+        payload = load_json(HISTORY_DIR / path, {})
+        observed_at = str(payload.get("generated_at") or "")
+        if not observed_at or observed_at >= current_at:
+            continue
+        candidates.append((observed_at, payload))
+    return [payload for _observed_at, payload in sorted(candidates, key=lambda item: item[0])]
+
+
+def _select_ofr_baseline(
+    snapshot: dict[str, Any], comparison_mode: str, custom_baseline_at: str
+) -> tuple[dict[str, Any] | None, list[dict[str, str]]]:
+    prior = _prior_quote_snapshots(snapshot)
+    choices = [{"at": str(item.get("generated_at") or "")} for item in prior]
+    if not prior:
+        return None, choices
+    if comparison_mode == "previous_snapshot":
+        return prior[-1], choices
+    current_day = str(snapshot.get("generated_at") or "")[:10]
+    if comparison_mode == "today_open":
+        matches = [item for item in prior if str(item.get("generated_at") or "")[:10] == current_day]
+        return (matches[0] if matches else None), choices
+    previous_days = sorted({str(item.get("generated_at") or "")[:10] for item in prior if str(item.get("generated_at") or "")[:10] < current_day})
+    if comparison_mode in {"previous_day_close", "previous_day_open"}:
+        if not previous_days:
+            return None, choices
+        matches = [item for item in prior if str(item.get("generated_at") or "")[:10] == previous_days[-1]]
+        return (matches[-1] if comparison_mode == "previous_day_close" else matches[0]), choices
+    if comparison_mode == "custom":
+        return next((item for item in prior if str(item.get("generated_at") or "") == custom_baseline_at), None), choices
+    return None, choices
+
+
+def calculate_ofr_movers(
+    base_rows: list[list[Any]], snapshot: dict[str, Any] | None = None,
+    comparison_mode: str = "previous_snapshot", custom_baseline_at: str = "",
+) -> dict[str, Any]:
+    """Compare valid OFR quotes against a selected historical full snapshot.
+
+    This deliberately returns every comparable bond.  The viewer applies its
+    user-specific BP threshold and direction setting without having to refetch
+    or persist a derived result.
+    """
+    snapshot = snapshot or load_snapshot()
+    comparison_mode = comparison_mode if comparison_mode in OFR_MOVER_COMPARISON_MODES else "previous_snapshot"
+    previous, available_baselines = _select_ofr_baseline(snapshot, comparison_mode, custom_baseline_at)
+    current_at = str(snapshot.get("generated_at") or "")
+    if not previous:
+        return {
+            "status": "baseline_unavailable" if comparison_mode == "custom" and custom_baseline_at else "waiting",
+            "baseline_at": "",
+            "current_at": current_at,
+            "comparison_mode": comparison_mode,
+            "comparison_label": OFR_MOVER_COMPARISON_LABELS[comparison_mode],
+            "available_baselines": available_baselines,
+            "movers": [],
+        }
+
+    current_full, current_bare = quote_indexes(snapshot)
+    previous_full, previous_bare = quote_indexes(previous)
+    movers: list[dict[str, Any]] = []
+    for source in base_rows:
+        base = list(source[:BASE_FIELD_COUNT])
+        code = normalize_code(base[0] if base else "")
+        if not code:
+            continue
+        ytm = finite_number(base[5] if len(base) > 5 else None)
+        current_quote = current_full.get(code) or current_bare.get(bare_code(code))
+        previous_quote = previous_full.get(code) or previous_bare.get(bare_code(code))
+        current_ofr = _clean_offer_yield(current_quote, ytm)
+        previous_ofr = _clean_offer_yield(previous_quote, ytm)
+        if current_ofr is None or previous_ofr is None:
+            continue
+        delta_bp = round((current_ofr - previous_ofr) * 100, 2)
+        direction = "up" if delta_bp > 0 else "down" if delta_bp < 0 else "flat"
+        movers.append({
+            "code": code,
+            "name": str(base[1] if len(base) > 1 else ""),
+            "issuer": str(base[4] if len(base) > 4 else ""),
+            "previous_ofr": previous_ofr,
+            "current_ofr": current_ofr,
+            "delta_bp": delta_bp,
+            "direction": direction,
+            "direction_label": "转弱 / 更便宜" if direction == "up" else "转强 / 更贵" if direction == "down" else "未变动",
+            "baseline_at": str(previous.get("generated_at") or ""),
+            "observed_at": current_at,
+            "ofr_volume_text": str((current_quote or {}).get("ofr_volume_text") or ""),
+            "ofr_volume_value": finite_number((current_quote or {}).get("ofr_volume_value")),
+            "ofr_broker": str((current_quote or {}).get("ofr_broker") or ""),
+            "ofr_time": str((current_quote or {}).get("ofr_time") or (current_quote or {}).get("quote_time") or ""),
+            "ofr_vs_valuation_bp": round((current_ofr - ytm) * 100, 2) if ytm is not None else None,
+        })
+    movers.sort(key=lambda item: abs(float(item["delta_bp"])), reverse=True)
+    return {
+        "status": "ok",
+        "baseline_at": str(previous.get("generated_at") or ""),
+        "current_at": current_at,
+        "comparison_mode": comparison_mode,
+        "comparison_label": OFR_MOVER_COMPARISON_LABELS[comparison_mode],
+        "available_baselines": available_baselines,
+        "movers": movers,
+    }
+
+
 def _average(values: list[float]) -> float | None:
     return round(sum(values) / len(values), 2) if values else None
 
@@ -449,6 +586,7 @@ def data_version(*paths: Path) -> str:
         BOND_DIR / "rating_facts_cache.json",
         EMOTION_HISTORY_PATH,
         COUNTERPARTY_LIMITS_PATH,
+        PREFERENCES_PATH,
     ):
         try:
             stat = path.stat()
@@ -462,6 +600,7 @@ def default_preferences() -> dict[str, Any]:
     return {
         "favorites": [],
         "recommendation_settings": dict(DEFAULT_RECOMMENDATION_SETTINGS),
+        "ofr_mover_settings": dict(DEFAULT_OFR_MOVER_SETTINGS),
         "updated_at": "",
     }
 
@@ -498,9 +637,29 @@ def validate_preferences(payload: Any) -> dict[str, Any]:
     )
     if settings["min_yield"] > settings["max_yield"]:
         raise ValueError("重点关注收益率下限不能高于上限")
+    raw_mover_settings = payload.get("ofr_mover_settings") if isinstance(payload.get("ofr_mover_settings"), dict) else {}
+    mover_settings = dict(DEFAULT_OFR_MOVER_SETTINGS)
+    threshold = finite_number(raw_mover_settings.get("threshold_bp"))
+    if threshold is not None:
+        if not 0 <= threshold <= 100:
+            raise ValueError("OFR异动阈值须在0至100BP之间")
+        mover_settings["threshold_bp"] = threshold
+    direction = raw_mover_settings.get("direction", mover_settings["direction"])
+    if direction not in {"both", "up", "down"}:
+        raise ValueError("OFR异动方向无效")
+    mover_settings["direction"] = direction
+    comparison_mode = raw_mover_settings.get("comparison_mode", mover_settings["comparison_mode"])
+    if comparison_mode not in OFR_MOVER_COMPARISON_MODES:
+        raise ValueError("OFR异动比较时点无效")
+    mover_settings["comparison_mode"] = comparison_mode
+    custom_baseline_at = str(raw_mover_settings.get("custom_baseline_at") or "").strip()
+    if len(custom_baseline_at) > 32:
+        raise ValueError("OFR自定义比较时点无效")
+    mover_settings["custom_baseline_at"] = custom_baseline_at
     return {
         "favorites": favorites,
         "recommendation_settings": settings,
+        "ofr_mover_settings": mover_settings,
         "updated_at": str(payload.get("updated_at") or ""),
     }
 

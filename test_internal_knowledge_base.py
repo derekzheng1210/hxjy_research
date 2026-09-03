@@ -19,8 +19,20 @@ from internal_knowledge_base import routes  # noqa: E402
 from internal_knowledge_base.routes import (  # noqa: E402
     KNOWLEDGE_INTENT_GENERAL, KNOWLEDGE_INTENT_RETRIEVAL, KNOWLEDGE_SOURCE_MARKER,
     PREVIEW_CACHE_DIR, _index_knowledge_report, _knowledge_candidates, _knowledge_intent,
-    _knowledge_qa_messages, _parse_knowledge_filters, _report_matches_knowledge_filters, store,
+    _knowledge_context, _knowledge_qa_messages, _knowledge_retrieval_query,
+    _parse_knowledge_answer,
+    _parse_knowledge_filters, _provider_payload, _report_matches_knowledge_filters, store,
 )
+
+
+def assert_isolated_test_store():
+    """Fail closed before destructive fixture cleanup if app import order leaked production paths."""
+    test_runtime = (Path(__file__).resolve().parent / ".test_runtime").resolve()
+    store_path = Path(store.path).resolve()
+    try:
+        store_path.relative_to(test_runtime)
+    except ValueError as exc:
+        raise RuntimeError(f"拒绝清理非测试知识库：{store_path}") from exc
 
 
 def parse_sse(response):
@@ -36,6 +48,7 @@ def parse_sse(response):
 class InternalKnowledgeBaseTest(unittest.TestCase):
     def setUp(self):
         app.config.update(TESTING=True)
+        assert_isolated_test_store()
         with store.transaction() as conn:
             for table in ("audit_log", "pdf_cache", "report_summaries", "engagement", "ratings",
                           "reports", "roadshow_schedule", "qa_usage", "qa_history", "users"):
@@ -148,22 +161,28 @@ class InternalKnowledgeBaseTest(unittest.TestCase):
             {"reportType": "roadshow", "reportDate": "2026-08-20"}, filters
         ))
 
-    def test_knowledge_intent_routes_report_lookup_and_general_work(self):
-        retrieval_questions = (
-            "有哪些报告讨论了城投利差？",
-            "请归纳这篇报告的核心观点",
-            "信用利差近期有什么变化？",
-        )
-        general_questions = (
-            "统计最近一个月报告中看多债市的观点数量和占比",
-            "比较不同报告核心观点的共同点和分歧",
-            "基于这些报告拟一份路演提纲",
-            "汇总所有报告的观点并按主题分类",
-        )
-        for question in retrieval_questions:
-            self.assertEqual(_knowledge_intent(question), KNOWLEDGE_INTENT_RETRIEVAL)
-        for question in general_questions:
-            self.assertEqual(_knowledge_intent(question), KNOWLEDGE_INTENT_GENERAL)
+    def test_knowledge_intent_is_manual_and_defaults_to_free_qa(self):
+        self.assertEqual(_knowledge_intent(), KNOWLEDGE_INTENT_GENERAL)
+        self.assertEqual(_knowledge_intent("free"), KNOWLEDGE_INTENT_GENERAL)
+        self.assertEqual(_knowledge_intent("report_retrieval"), KNOWLEDGE_INTENT_RETRIEVAL)
+        # 问题正文不再参与类型判定，误把正文当类型会被拒绝。
+        with self.assertRaises(ValueError):
+            _knowledge_intent("有哪些报告讨论了城投利差？")
+
+    def test_free_qa_context_is_bounded_and_enriches_followup_retrieval(self):
+        context = _knowledge_context({"context": [
+            {"role": "user", "content": "比较城投债与产业债的信用利差"},
+            {"role": "assistant", "content": "两者驱动因素有所不同。", "sources": [
+                {"id": "report-1", "title": "城投与产业债利差比较"},
+            ]},
+            {"role": "tool", "content": "应被忽略"},
+        ]})
+        self.assertEqual([item["role"] for item in context], ["user", "assistant"])
+        self.assertEqual(context[1]["sources"][0]["title"], "城投与产业债利差比较")
+        query = _knowledge_retrieval_query("展开第二点", context)
+        self.assertIn("城投债与产业债", query)
+        self.assertIn("城投与产业债利差比较", query)
+        self.assertIn("展开第二点", query)
 
     def test_knowledge_prompt_switches_between_two_frameworks(self):
         candidates = [{
@@ -173,19 +192,52 @@ class InternalKnowledgeBaseTest(unittest.TestCase):
         }]
         retrieval_system, retrieval_prompt = _knowledge_qa_messages(
             "这篇报告的核心观点是什么？", candidates,
+            intent=KNOWLEDGE_INTENT_RETRIEVAL,
         )
         general_system, general_prompt = _knowledge_qa_messages(
-            "统计并比较这批报告的观点", candidates,
+            "展开第二点", candidates, intent=KNOWLEDGE_INTENT_GENERAL,
+            context=[
+                {"role": "user", "content": "比较这批报告的观点"},
+                {"role": "assistant", "content": "主要有两点共识。"},
+            ],
+            thinking=True,
         )
         self.assertIn("严格使用以下模板", retrieval_system)
         self.assertIn("不强制套用逐篇报告摘要模板", general_system)
-        self.assertIn("统计口径、样本范围和样本数量", general_system)
+        self.assertIn("善于连续对话", general_system)
+        self.assertIn("深度思考已开启", general_system)
+        self.assertIn("禁止展示 report-upload", general_system)
         self.assertIn(KNOWLEDGE_SOURCE_MARKER, retrieval_system)
         self.assertIn(KNOWLEDGE_SOURCE_MARKER, general_system)
-        self.assertIn("识别为报告检索或核心观点查询", retrieval_prompt)
-        self.assertIn("识别为综合工作任务", general_prompt)
+        self.assertIn("手动选择了找报告", retrieval_prompt)
+        self.assertIn("手动选择了自由问答", general_prompt)
+        self.assertIn("比较这批报告的观点", general_prompt)
+        self.assertIn("展开第二点", general_prompt)
         self.assertIn("[REPORT_ID:r001]", retrieval_prompt)
         self.assertIn("[REPORT_ID:r001]", general_prompt)
+
+    def test_knowledge_answer_uses_real_titles_and_recovers_missing_sources(self):
+        candidates = [{
+            "id": "report-upload-123-abc", "title": "AI产业趋势报告",
+            "author": "研究员甲", "published_at": "2026-08-20",
+        }, {
+            "id": "report-upload-456-def", "title": "半导体周期复盘",
+            "author": "研究员乙", "published_at": "2026-08-18",
+        }]
+        result = _parse_knowledge_answer(
+            "核心来源是报告 `report-upload-123-abc`，并据此判断景气回升。",
+            candidates,
+        )
+        self.assertNotIn("report-upload-123-abc", result["answer"])
+        self.assertIn("《AI产业趋势报告》", result["answer"])
+        self.assertEqual([item["id"] for item in result["sources"]], ["report-upload-123-abc"])
+
+        fallback = _parse_knowledge_answer("多份报告显示景气度正在改善。", candidates)
+        self.assertEqual(len(fallback["sources"]), 2)
+        self.assertNotIn("本轮参考报告", fallback["answer"])
+        self.assertTrue(fallback["answer"].startswith("本回答主要依据"))
+        self.assertIn("《AI产业趋势报告》", fallback["answer"])
+        self.assertIn("《半导体周期复盘》", fallback["answer"])
 
     def test_persistent_vector_index_recalls_relevant_external_report(self):
         relevant = {
@@ -216,6 +268,64 @@ class InternalKnowledgeBaseTest(unittest.TestCase):
         # Unchanged content uses the persisted vector rather than rebuilding.
         self.assertFalse(_index_knowledge_report(relevant))
 
+    @patch("internal_knowledge_base.routes._llm_api_key", return_value="test-key")
+    @patch("internal_knowledge_base.routes._answer_knowledge_question")
+    def test_knowledge_api_defaults_to_free_qa_and_persists_conversation(self, answer, _key):
+        answer.return_value = {"answer": "自由回答", "sources": []}
+        with self.client.session_transaction() as session:
+            session["authenticated"] = True
+            session["internal_knowledge_base_user_id"] = "member"
+            session["internal_knowledge_base_csrf"] = "test-csrf"
+        response = self.client.post("/internal-knowledge-base/api/knowledge-search", json={
+            "question": "继续展开第二点",
+            "conversationId": "conversation-001",
+            "thinking": True,
+            "context": [
+                {"role": "user", "content": "先比较两类报告"},
+                {"role": "assistant", "content": "主要有两点差异"},
+            ],
+        }, headers={"X-CSRF-Token": "test-csrf"})
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertEqual(data["questionType"], KNOWLEDGE_INTENT_GENERAL)
+        self.assertEqual(data["conversationId"], "conversation-001")
+        self.assertTrue(data["thinking"])
+        kwargs = answer.call_args.kwargs
+        self.assertEqual(kwargs["intent"], KNOWLEDGE_INTENT_GENERAL)
+        self.assertTrue(kwargs["thinking"])
+        self.assertEqual(len(kwargs["context"]), 2)
+        history = store.qa_history_for_user("member")
+        self.assertEqual(history[0]["conversationId"], "conversation-001")
+        self.assertEqual(history[0]["questionType"], KNOWLEDGE_INTENT_GENERAL)
+        self.assertTrue(history[0]["thinking"])
+
+    def test_provider_payload_can_enable_or_disable_model_thinking(self):
+        messages = [{"role": "user", "content": "问题"}]
+        self_provider = {"model": "glm", "chat_template_kwargs": {"enable_thinking": False}}
+        self.assertFalse(_provider_payload(
+            self_provider, messages, 100, False, thinking=False,
+        )["chat_template_kwargs"]["enable_thinking"])
+        self.assertTrue(_provider_payload(
+            self_provider, messages, 100, False, thinking=True,
+        )["chat_template_kwargs"]["enable_thinking"])
+        mimo_provider = {"model": "mimo", "disable_thinking": True}
+        self.assertEqual(
+            _provider_payload(mimo_provider, messages, 100, False, thinking=True)["thinking"],
+            {"type": "enabled"},
+        )
+
+    def test_knowledge_api_rejects_unknown_manual_type(self):
+        with self.client.session_transaction() as session:
+            session["authenticated"] = True
+            session["internal_knowledge_base_user_id"] = "member"
+            session["internal_knowledge_base_csrf"] = "test-csrf"
+        with patch("internal_knowledge_base.routes._llm_api_key", return_value="test-key"):
+            response = self.client.post("/internal-knowledge-base/api/knowledge-search", json={
+                "question": "查找城投报告", "questionType": "auto",
+            }, headers={"X-CSRF-Token": "test-csrf"})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("问题类型无效", response.get_json()["error"])
+
 
 class ReportAiSummaryTests(unittest.TestCase):
     """单篇报告 AI 摘要（三版本缓存 + 指纹失效）与就本文提问。"""
@@ -224,6 +334,7 @@ class ReportAiSummaryTests(unittest.TestCase):
 
     def setUp(self):
         app.config.update(TESTING=True)
+        assert_isolated_test_store()
         with store.transaction() as conn:
             for table in ("audit_log", "pdf_cache", "report_summaries", "engagement", "ratings",
                           "reports", "roadshow_schedule", "qa_usage", "qa_history", "users"):

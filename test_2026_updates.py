@@ -21,9 +21,20 @@ from app import app  # noqa: E402
 from internal_knowledge_base.routes import store, public_report  # noqa: E402
 
 
+def assert_isolated_test_store():
+    """Fail closed before destructive fixture cleanup if app import order leaked production paths."""
+    test_runtime = (Path(__file__).resolve().parent / ".test_runtime").resolve()
+    store_path = Path(store.path).resolve()
+    try:
+        store_path.relative_to(test_runtime)
+    except ValueError as exc:
+        raise RuntimeError(f"拒绝清理非测试知识库：{store_path}") from exc
+
+
 class Updates2026Test(unittest.TestCase):
     def setUp(self):
         app.config.update(TESTING=True)
+        assert_isolated_test_store()
         with store.transaction() as conn:
             for table in ("audit_log", "pdf_cache", "engagement", "ratings", "reports",
                           "roadshow_schedule", "qa_usage", "qa_history", "users"):

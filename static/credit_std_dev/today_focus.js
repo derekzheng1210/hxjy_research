@@ -71,6 +71,17 @@
     return { high: high, low: low, latestDate: latestDate };
   }
 
+  function latestDataDate() {
+    var source = window.SPREAD_DATA;
+    var latest = '';
+    if (!source || !source.data) return latest;
+    Object.keys(source.data).forEach(function (key) {
+      var dates = source.data[key] && source.data[key].dates;
+      if (dates && dates.length && dates[dates.length - 1] > latest) latest = dates[dates.length - 1];
+    });
+    return latest;
+  }
+
   function itemHTML(item, kind) {
     var boundary = kind === 'high' ? item.stats.upper : item.stats.lower;
     var direction = kind === 'high' ? '高于上轨' : '低于下轨';
@@ -117,6 +128,9 @@
     var windowSize = Math.max(5, parseInt(windowInput && windowInput.value, 10) || 30);
     var sigma = Math.max(.5, parseFloat(sigmaInput && sigmaInput.value) || 2);
     var focus = collectFocus(windowSize, sigma);
+    var updateTime = document.getElementById('updateTime');
+    var dataDate = latestDataDate();
+    if (updateTime && dataDate) updateTime.textContent = '数据日期: ' + dataDate;
     var total = focus.high.length + focus.low.length;
     node.innerHTML = '<div class="today-focus__head"><div class="today-focus__heading">' +
       '<h2>今日关注</h2><div class="today-focus__meta">数据：' + escapeHTML(focus.latestDate || '—') +

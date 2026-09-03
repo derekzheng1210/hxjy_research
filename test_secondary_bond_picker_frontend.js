@@ -13,7 +13,7 @@ function functionSource(name, nextName) {
 }
 
 const DEFAULT_SETTINGS = {min_yield:1.65,max_yield:3,min_offer_volume:1000,bbb_minus_max_term:3,require_better_than_market:true};
-const state = {settings:{...DEFAULT_SETTINGS}};
+const state = {settings:{...DEFAULT_SETTINGS},moverSettings:{threshold_bp:2,direction:'both'}};
 const META = {emotion:{value:-2}};
 const n = value => value === null || value === '' || value === undefined ? null : Number(value);
 eval(functionSource('marketStatusSummary', 'renderStatus'));
@@ -49,6 +49,12 @@ assert(!recommendationEligible({...base,rating630:'fail'}));
 assert(recommendationEligible({...base,rating630:'ok'}));
 assert(!recommendationEligible({...base,rating630:'unknown'}));
 assert(!recommendationEligible({...base,rating630:undefined}));
+
+eval(functionSource('moverEligible', 'moverRuleText'));
+assert(moverEligible({mover:{delta_bp:2,direction:'up'}}, {moverDirection:'both'}));
+assert(moverEligible({mover:{delta_bp:-2,direction:'down'}}, {moverDirection:'down'}));
+assert(!moverEligible({mover:{delta_bp:1.99,direction:'up'}}, {moverDirection:'both'}));
+assert(!moverEligible({mover:{delta_bp:2,direction:'up'}}, {moverDirection:'down'}));
 
 eval(functionSource('rating630Dot', 'computeRecommendations'));
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -86,10 +92,32 @@ assert(source.includes('中债-Ofr（BP）'));
 assert(!source.includes('Bid-Ofr'));
 assert(source.includes('id="viewAll"'));
 assert(source.includes('id="viewRecommended"'));
+assert(source.includes('id="viewMovers"'));
+assert(source.includes('id="moverDirection"'));
+assert(source.includes('id="msRating"'));
+assert(source.includes('id="msIR"'));
+assert(source.includes('id="msEntity"'));
+assert(source.includes("rating:getMSValues('msRating')"));
+assert(source.includes("ir:getMSValues('msIR')"));
+assert(source.includes("entity:getMSValues('msEntity')"));
+assert(source.includes('Ofr异动设置'));
+assert(source.includes('上一期（不限当日）'));
+assert(source.includes('当日日初'));
+assert(source.includes('上日日终'));
+assert(source.includes('上日日初'));
+assert(source.includes('id="setMoverCustomBaseline"'));
+assert(source.includes('DEFAULT_MOVER_SETTINGS={threshold_bp:2'));
+assert(source.includes('META.ofr_movers'));
+assert(source.includes('Ofr变动'));
+assert(source.includes('二级择券Ofr异动债券.csv'));
 assert(source.includes('id="tier2EmotionValue"'));
 assert(source.includes('e.tier2_capital||{}'));
 assert(source.includes('legend-line tier2'));
 assert(source.includes("value:p=>n((p.tier2_capital||{}).value)"));
+assert(source.includes('function drawEmotionDaySeparators'));
+assert(source.includes('if(state.range<=1)return'));
+assert(source.includes("c.setLineDash([3,3])"));
+assert(source.includes('day.slice(5)'));
 assert(source.includes('window.setInterval(checkUpdate,10000)'));
 assert(!source.includes('id="recommendList"'));
 assert(!source.includes('共享筛选预设'));

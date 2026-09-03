@@ -333,6 +333,8 @@ function sortBy(key) {
   render();
 }
 
+function ratingScore(v){const m=/^([A-Za-z]{1,4})\s*(\+|-|[(（](\d)[)）])?$/.exec(String(v).trim());if(!m)return null;const letters=m[1].toUpperCase(),order=['AAA','AA','A','BBB','BB','B','CCC','CC','C'],li=order.indexOf(letters);if(li<0)return null;let mod=0;if(m[2]==='+')mod=1;else if(m[2]==='-')mod=-1;else if(m[3])mod=-Number(m[3])*0.1;return(order.length-li)*10+mod}
+function ratingCompare(a,b){const x=ratingScore(a),y=ratingScore(b);if(x===null||y===null)return 0;return x-y}
 function doSort() {
   filteredData.sort((a, b) => {
     let va = a[sortKey], vb = b[sortKey];
@@ -344,9 +346,10 @@ function doSort() {
     if (typeof va === 'number' && typeof vb === 'number') {
       return sortAsc ? va - vb : vb - va;
     }
-    // 字符串
+    // 字符串（评级类按金融评级高低，其余按拼音）
     va = String(va); vb = String(vb);
-    return sortAsc ? va.localeCompare(vb, 'zh') : vb.localeCompare(va, 'zh');
+    const rc = ratingCompare(va, vb) || va.localeCompare(vb, 'zh');
+    return sortAsc ? rc : -rc;
   });
 }
 
