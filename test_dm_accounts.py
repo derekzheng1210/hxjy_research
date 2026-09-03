@@ -102,6 +102,18 @@ class DmAccountStoreTests(DmAccountSandbox):
             order = [item["username"] for item in dm_accounts.snapshot_attempt_order()]
         self.assertEqual(order, ["pooled", "envuser"])
 
+    def test_env_fallback_not_appended_when_pool_account_disabled(self) -> None:
+        # 环境变量账号录入池内后即使被停用/熔断，也不再作为兜底绕过池的管理
+        dm_accounts.add_account("pooled", "pw")
+        dm_accounts.add_account("envuser", "pw2")
+        dm_accounts.update_account("envuser", enabled=False)
+        with patch.dict(os.environ, {"DM_USERNAME": "envuser", "DM_PASSWORD": "envpw"}):
+            order = [item["username"] for item in dm_accounts.snapshot_attempt_order()]
+            view = dm_accounts.overview()
+        self.assertEqual(order, ["pooled"])
+        self.assertTrue(view["env_fallback"]["in_pool"])
+        self.assertFalse(view["env_fallback"]["active"])
+
     def test_circuit_breaker_disables_after_threshold(self) -> None:
         dm_accounts.add_account("ua", "pw")
         dm_accounts.mark_failure("ua", "e1")

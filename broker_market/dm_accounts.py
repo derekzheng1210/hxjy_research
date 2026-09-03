@@ -186,9 +186,13 @@ def snapshot_attempt_order(max_attempts: int = 3) -> list[dict[str, Any]]:
 
     池内可用账号按“最久未成功使用优先”排序（轮换摊薄单账号负载），
     环境变量兜底账号排在最后；最多取 max_attempts 个。
+    环境变量账号一旦录入池内（无论启停/熔断状态），就完全由池管理，
+    不再作为兜底重复参与，避免绕过启停与熔断控制。
     """
     with _lock:
-        candidates = [dict(item) for item in _load() if _usable(item)]
+        accounts = _load()
+        candidates = [dict(item) for item in accounts if _usable(item)]
+        pool_usernames = {item["username"] for item in accounts}
 
         def sort_key(item: dict[str, Any]) -> tuple:
             success = _parse(item.get("last_success"))
@@ -197,7 +201,7 @@ def snapshot_attempt_order(max_attempts: int = 3) -> list[dict[str, Any]]:
 
         candidates.sort(key=sort_key)
     fallback = env_fallback_account()
-    if fallback and not any(item["username"] == fallback["username"] for item in candidates):
+    if fallback and fallback["username"] not in pool_usernames:
         candidates.append(fallback)
     return candidates[:max(1, max_attempts)]
 
@@ -265,6 +269,13 @@ def overview() -> dict[str, Any]:
         accounts = _load()
     usable = [item for item in accounts if _usable(item)]
     fallback = env_fallback_account()
+    env_in_pool = bool(
+        fallback and any(item["username"] == fallback["username"] for item in accounts)
+    )
+    if fallback and env_in_pool:
+        env_note = "该账号已录入池内，与其他账号一同轮换，启停与熔断以池内设置为准"
+    else:
+        env_note = "未录入池内可用账号时，抓取回退到 .env 的 DM_USERNAME / DM_PASSWORD"
     return {
         "accounts": [_masked(item) for item in accounts],
         "usable_count": len(usable),
@@ -273,7 +284,8 @@ def overview() -> dict[str, Any]:
         "auto_recover_minutes": AUTO_RECOVER_MINUTES,
         "env_fallback": {
             "username": fallback["username"] if fallback else "",
-            "note": "未录入池内可用账号时，抓取回退到 .env 的 DM_USERNAME / DM_PASSWORD",
-            "active": bool(fallback and not usable),
+            "in_pool": env_in_pool,
+            "note": env_note,
+            "active": bool(fallback and not usable and not env_in_pool),
         } if fallback else None,
     }

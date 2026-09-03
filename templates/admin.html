@@ -575,9 +575,14 @@ function renderDmAccounts() {
     : '<tr><td colspan="8" style="color:#6b7280">尚未录入账号：抓取将回退到 .env 的 DM_USERNAME / DM_PASSWORD</td></tr>';
   if (dmData.env_fallback) {
     dmFallbackNote.style.display = '';
-    dmFallbackNote.textContent = dmData.env_fallback.active
-      ? `当前没有池内可用账号，抓取回退到环境变量账号：${dmData.env_fallback.username}`
-      : `环境变量兜底账号：${dmData.env_fallback.username}（仅当池内无可用账号时使用）`;
+    const envUser = dmData.env_fallback.username;
+    if (dmData.env_fallback.in_pool) {
+      dmFallbackNote.textContent = `环境变量账号 ${envUser} 已在账号池中，与其他账号一同轮换（启停与熔断以池内设置为准）`;
+    } else if (dmData.env_fallback.active) {
+      dmFallbackNote.textContent = `当前没有池内可用账号，抓取回退到环境变量账号：${envUser}`;
+    } else {
+      dmFallbackNote.textContent = `环境变量兜底账号：${envUser}（仅当池内无可用账号时使用）`;
+    }
   } else {
     dmFallbackNote.style.display = 'none';
   }
