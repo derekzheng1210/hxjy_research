@@ -1,15 +1,30 @@
 @echo off
-REM 启动隔离的测试版门户（端口 5090，独立数据目录 D:\hxjy_test_data）
-REM 正式服务（CreditToolsPortal，端口 5000，读 D:\hxjy_research）不受影响。
-REM 测试数据是正式库的快照副本：测试期间的上传/修改都只写测试库。
+REM Start the isolated test portal (port 5090, data root D:\hxjy_test_data).
+REM Production service (CreditToolsPortal, port 5000, runs from D:\hxjy_research
+REM against D:\juyuan_credit_data) is NOT affected.
+REM Test data is a mirror snapshot of production: uploads/edits during testing
+REM only touch the test data root.
+REM
+REM Run sync_test_data.bat first if you want to reset test data to the latest
+REM production snapshot (files + sqlite DBs, takes a few minutes).
+REM
+REM Background schedulers (broker quotes / interest bond monitors) are DISABLED
+REM in the test instance: pages read the static snapshot, and production keeps
+REM sole ownership of periodic Oracle/DM jobs.
 setlocal
-chcp 65001 >nul
 set "TEST_DIR=%~dp0"
 
-REM 与正式服务相同的解释器
 set "PYTHON=D:\Python312\python.exe"
 if not exist "%PYTHON%" (
-    echo [错误] 未找到 python：%PYTHON%
+    echo [ERROR] python not found: %PYTHON%
+    pause
+    exit /b 1
+)
+
+if not exist "%TEST_DIR%.env" (
+    echo [ERROR] %TEST_DIR%.env not found.
+    echo         Copy the production .env here and make sure its first line is
+    echo         PORTAL_DATA_ROOT=D:\hxjy_test_data
     pause
     exit /b 1
 )
@@ -17,21 +32,12 @@ if not exist "%PYTHON%" (
 set "PORT=5090"
 set "FLASK_DEBUG=0"
 set "PORTAL_DATA_ROOT=D:\hxjy_test_data"
-
-if not exist "%TEST_DIR%.env" (
-    > "%TEST_DIR%.env" (
-        echo PORTAL_DATA_ROOT=D:\hxjy_test_data
-        echo SITE_PASSWORD=test2026
-        echo SELF_LLM_API_KEY=sk-RM9HPWKHRXGmXS67qSBk3A
-        echo SELF_LLM_BASE_URL=http://10.9.50.201:3005/v1
-        echo SELF_LLM_MODEL=glm-5.2
-    )
-    echo [提示] 已生成测试 .env（站点密码 test2026），可按需编辑：%TEST_DIR%.env
-)
+set "BROKER_SCHEDULER_ENABLED=0"
+set "BOND_MONITOR_SCHEDULERS_ENABLED=0"
 
 cd /d "%TEST_DIR%"
-echo 测试实例启动中：http://localhost:5090/internal-knowledge-base/
-echo 站点密码：test2026（登录后用团队成员账号进入项目知识库）
-echo 按 Ctrl+C 停止。
+echo Test portal starting: http://localhost:5090/
+echo Site password: same as production (.env SITE_PASSWORD or the built-in default).
+echo Press Ctrl+C to stop.
 "%PYTHON%" run_production.py
 pause
