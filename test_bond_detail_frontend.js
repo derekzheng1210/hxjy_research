@@ -31,6 +31,10 @@ assert(script.includes("addEventListener('change',refreshCurveFilter)"), 'curve 
 assert(!script.includes("loadBond(current.bond.code)"), 'curve filter must not reload the whole page');
 assert(script.includes("color:'#d97706'"), 'issuer curve needs a distinct orange color');
 assert(script.includes("color:'#1d4ed8'"), 'rating curve needs a distinct blue color');
+assert(script.includes('new AbortController()'), 'search must cancel the prior request');
+assert(script.includes('searchAbort.abort()'), 'search must abort in-flight suggestions');
+assert(script.includes('setTimeout(search,250)'), 'search must debounce input for 250ms');
+assert(script.includes('searchRequestSeq'), 'stale search responses must be ignored');
 
 // 摘要区仅保留“摘要”两个字
 assert(source.includes('summary-title">摘要</div>'), 'summary title must read 摘要');
@@ -48,6 +52,13 @@ assert(source.includes('data-quote-mode'), 'broker quotes panel needs bond/issue
 assert(script.includes('renderIssuerQuotes'), 'issuer quotes renderer is missing');
 assert(script.includes('issuer_latest'), 'issuer quotes view must consume issuer_latest');
 assert(script.includes('bid_vs_valuation_bp') && script.includes('ofr_vs_valuation_bp'), 'issuer quotes must relate bid/ofr to valuation');
+const issuerQuoteRenderer = script.match(/function renderIssuerQuotes\(q\)\{([\s\S]*?)\nfunction spreadChangeTone/);
+assert(issuerQuoteRenderer, 'issuer quote renderer is missing');
+assert(issuerQuoteRenderer[1].includes("type:'scatter'"), 'issuer quote view must use a scatter plot');
+assert(issuerQuoteRenderer[1].includes("symbol:'diamond'"), 'Ofr points need a distinct marker');
+assert(issuerQuoteRenderer[1].includes("xAxis:{type:'category'"), 'bonds must be arranged on the horizontal axis');
+assert(issuerQuoteRenderer[1].includes("yAxis:{type:'value'"), 'quote deviation must be on the vertical BP axis');
+assert(issuerQuoteRenderer[1].includes("formatter:'0BP'"), 'the valuation baseline must be labeled 0BP');
 
 // 主体曲线：样本点携带债券代码，点击可切换查询债券
 assert(script.includes('[x.term,x.yield,x.name,x.code]'), 'issuer curve points must carry bond codes');
