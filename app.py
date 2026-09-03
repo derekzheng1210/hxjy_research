@@ -60,6 +60,7 @@ from broker_market import (
     MARKET_DIR,
     calculate_ofr_movers,
     data_version as bond_picker_data_version,
+    dm_accounts,
     ensure_directories as ensure_broker_directories,
     load_emotion_history,
     load_preferences as load_broker_preferences,
@@ -1326,6 +1327,86 @@ def admin_ai_agent_overview():
 def admin_ai_agent_test():
     result = credit_research.test_agent_connection()
     return result, (200 if result["ok"] else 503)
+
+
+@app.route("/admin/api/dm-accounts", methods=["GET"])
+@login_required
+@admin_required
+def admin_dm_accounts_overview():
+    """DM 经纪商行情账号池：列表（密码脱敏）与可用性摘要。"""
+    return dm_accounts.overview()
+
+
+@app.route("/admin/api/dm-accounts", methods=["POST"])
+@login_required
+@admin_required
+def admin_dm_accounts_add():
+    payload = request.get_json(silent=True) or {}
+    try:
+        dm_accounts.add_account(
+            payload.get("username"), payload.get("password"), payload.get("note") or "",
+        )
+    except ValueError as exc:
+        return {"ok": False, "message": str(exc)}, 400
+    return {"ok": True, "message": "账号已添加", "data": dm_accounts.overview()}
+
+
+@app.route("/admin/api/dm-accounts/update", methods=["POST"])
+@login_required
+@admin_required
+def admin_dm_accounts_update():
+    """更新账号：enabled / note / password / reset_failures。"""
+    payload = request.get_json(silent=True) or {}
+    username = str(payload.get("username") or "").strip()
+    fields: dict[str, Any] = {}
+    if "enabled" in payload:
+        fields["enabled"] = bool(payload.get("enabled"))
+    if "note" in payload:
+        fields["note"] = payload.get("note")
+    if "password" in payload:
+        fields["password"] = payload.get("password")
+    if payload.get("reset_failures"):
+        fields["reset_failures"] = True
+    try:
+        dm_accounts.update_account(username, **fields)
+    except ValueError as exc:
+        return {"ok": False, "message": str(exc)}, 400
+    return {"ok": True, "message": "账号已更新", "data": dm_accounts.overview()}
+
+
+@app.route("/admin/api/dm-accounts/delete", methods=["POST"])
+@login_required
+@admin_required
+def admin_dm_accounts_delete():
+    payload = request.get_json(silent=True) or {}
+    try:
+        dm_accounts.delete_account(str(payload.get("username") or "").strip())
+    except ValueError as exc:
+        return {"ok": False, "message": str(exc)}, 400
+    return {"ok": True, "message": "账号已删除", "data": dm_accounts.overview()}
+
+
+@app.route("/admin/api/dm-accounts/test", methods=["POST"])
+@login_required
+@admin_required
+def admin_dm_accounts_test():
+    """连通性测试：登录 + 读取权限资源（只读）。username 为空时测试全部启用账号。"""
+    payload = request.get_json(silent=True) or {}
+    username = str(payload.get("username") or "").strip() or None
+    try:
+        from broker_market.fetcher import test_connectivity
+        results = test_connectivity(username)
+    except ValueError as exc:
+        return {"ok": False, "message": str(exc), "results": []}, 400
+    except Exception as exc:  # dm_client_local 缺失等环境问题
+        return {"ok": False, "message": f"{type(exc).__name__}: {exc}"[:200], "results": []}, 500
+    ok_count = sum(1 for item in results if item.get("ok"))
+    return {
+        "ok": ok_count == len(results),
+        "message": f"测试完成：{ok_count}/{len(results)} 个账号可用",
+        "results": results,
+        "data": dm_accounts.overview(),
+    }
 
 
 @app.route("/admin/api/llm/priority", methods=["POST"])

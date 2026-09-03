@@ -8,9 +8,12 @@ REM
 REM Run sync_test_data.bat first if you want to reset test data to the latest
 REM production snapshot (files + sqlite DBs, takes a few minutes).
 REM
-REM Background schedulers (broker quotes / interest bond monitors) are DISABLED
-REM in the test instance: pages read the static snapshot, and production keeps
-REM sole ownership of periodic Oracle/DM jobs.
+REM Background schedulers:
+REM - Broker quotes scheduler is ENABLED in the test instance so the DM account
+REM   pool / rotation / anti-detection stack can be verified end to end. It only
+REM   writes snapshots into the TEST data root (D:\hxjy_test_data).
+REM - Interest bond monitors stay DISABLED (Oracle jobs): production keeps sole
+REM   ownership of those; test pages read the snapshot.
 setlocal
 set "TEST_DIR=%~dp0"
 
@@ -32,7 +35,7 @@ if not exist "%TEST_DIR%.env" (
 set "PORT=5090"
 set "FLASK_DEBUG=0"
 set "PORTAL_DATA_ROOT=D:\hxjy_test_data"
-set "BROKER_SCHEDULER_ENABLED=0"
+set "BROKER_SCHEDULER_ENABLED=1"
 set "BOND_MONITOR_SCHEDULERS_ENABLED=0"
 
 cd /d "%TEST_DIR%"

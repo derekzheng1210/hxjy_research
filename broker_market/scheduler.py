@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import random
 import threading
 import time as time_module
 from datetime import datetime, time, timedelta
@@ -28,6 +29,9 @@ BROKER_TIMES = (
 DAILY_TIME = time(8, 30)
 STALE_GRACE = timedelta(minutes=15)
 RETRY_DELAYS = (300, 300)
+# 计划内经纪商抓取的随机错峰区间（秒）：真人不会每次都在整点/半点准点刷新，
+# 随机延后启动让请求时间分布更自然。手动触发不受影响；测试可传 (0, 0) 关闭。
+SCHEDULED_JITTER_RANGE = (10, 75)
 
 _scheduler = None
 
@@ -162,8 +166,13 @@ class SchedulerLock:
 
 
 class BondTradingScheduler:
-    def __init__(self, now_fn: Callable[[], datetime] = datetime.now):
+    def __init__(
+        self,
+        now_fn: Callable[[], datetime] = datetime.now,
+        jitter_range: tuple[float, float] = SCHEDULED_JITTER_RANGE,
+    ):
         self.now_fn = now_fn
+        self._jitter_range = jitter_range
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._job_lock = threading.Lock()
@@ -202,6 +211,9 @@ class BondTradingScheduler:
             attempted_for = _parse_datetime(status[kind].get("scheduled_for", ""))
             if (last_for and last_for >= due) or (attempted_for and attempted_for >= due and status[kind].get("state") in {"running", "retrying"}):
                 continue
+            if kind == "broker" and self._jitter_range[1] > 0:
+                # 计划内抓取随机错峰启动，避免固定整点/半点节奏被识别
+                time_module.sleep(random.uniform(*self._jitter_range))
             self._run_locked(kind, due)
             status = load_status()
 

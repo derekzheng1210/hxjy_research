@@ -59,6 +59,14 @@ button.ghost{background:#eef2ff;color:#3730a3;font-weight:700;padding:0 10px;hei
 .prio-btn{display:inline-flex;gap:4px}
 .toolbar{display:flex;gap:10px;align-items:center;margin-top:12px;flex-wrap:wrap}
 #llmMessage{font-size:12px}
+.dm-add-row{display:flex;gap:8px;align-items:center;margin-top:12px;flex-wrap:wrap}
+.dm-add-row input{font-size:13px;border:1px solid #d1d5db;border-radius:6px;padding:7px 10px;background:#fff}
+.dm-add-row #dmAddUsername{width:150px}
+.dm-add-row #dmAddPassword{width:150px}
+.dm-add-row #dmAddNote{width:220px}
+.dm-ops{display:inline-flex;gap:4px;flex-wrap:wrap}
+.dm-ops button{font-size:11px;padding:3px 8px}
+#dmMessage{font-size:12px}
 .actions{display:flex;gap:10px;margin-top:12px;flex-wrap:wrap}
 .visibility-sections{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px;margin-top:14px}
 .visibility-section{background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px}
@@ -289,6 +297,24 @@ button.ghost{background:#eef2ff;color:#3730a3;font-weight:700;padding:0 10px;hei
       </form>
     </section>
 
+    <section class="card wide">
+      <h2>DM 经纪商行情账号</h2>
+      <p>抓取 DM 最优报价的账号池：按“最久未成功使用”轮换，摊薄单账号请求量；单个账号失败自动切换下一个，连续失败 3 次自动熔断，冷却 6 小时后恢复试运行。连通性测试只做登录和读取权限资源，不产生行情抓取。</p>
+      <table class="llm-table"><thead><tr><th>账号</th><th>状态</th><th>最近抓取成功</th><th>最近失败</th><th>连续失败</th><th>连通性</th><th>备注</th><th>操作</th></tr></thead>
+        <tbody id="dmAccountTable"><tr><td colspan="8" style="color:#6b7280">加载中...</td></tr></tbody></table>
+      <div class="dm-add-row">
+        <input type="text" id="dmAddUsername" placeholder="账号" autocomplete="off">
+        <input type="password" id="dmAddPassword" placeholder="密码" autocomplete="new-password">
+        <input type="text" id="dmAddNote" placeholder="备注（可选）">
+        <button type="button" id="dmAddButton">添加账号</button>
+      </div>
+      <div class="toolbar">
+        <button id="dmTestAllButton" type="button">测试全部连通性</button>
+        <span id="dmMessage"></span>
+      </div>
+      <div class="meta" id="dmFallbackNote" style="display:none"></div>
+    </section>
+
     <form class="card" method="post" enctype="multipart/form-data"><h2>行业景气度 HTML</h2><p>上传行业景气度跟踪静态 HTML，访问时由 Flask 注入统一顶部导航。</p><input type="hidden" name="target" value="industry_prosperity"><input type="file" name="file" accept=".html,.htm" required><button type="submit">上传 HTML</button><div class="meta">当前：{{ status.industry_prosperity.updated }} / {{ status.industry_prosperity.size }}</div></form>
   </div>
   <div class="note">数据库更新依赖公司内网 Oracle。线上部署请设置 SITE_PASSWORD、ADMIN_PASSWORD、SECRET_KEY、JUYUAN_DB_USER、JUYUAN_DB_PASSWORD、JUYUAN_DB_DSN 和 JUYUAN_ORACLE_CLIENT 环境变量。信评门户同步依赖 IAM_USERNAME / IAM_PASSWORD，经纪商行情依赖 DM 凭证。大模型配置：SELF_LLM_*、DEEPSEEK_INTERNAL_BASE_URL / DEEPSEEK_INTERNAL_API_KEY / DEEPSEEK_INTERNAL_MODEL、MIMO_*、DEEPSEEK_*。</div>
@@ -489,6 +515,168 @@ agentTestButton.addEventListener('click', () => {
   }).catch(() => { agentMessage.textContent = '测试失败：无法连接后台接口'; })
     .finally(() => { agentTestButton.disabled = false; agentTestButton.textContent = '测试 AI Agent 连通性'; });
 });
+
+/* ===== DM 经纪商行情账号 ===== */
+const dmAccountTable = document.getElementById('dmAccountTable');
+const dmAddUsername = document.getElementById('dmAddUsername');
+const dmAddPassword = document.getElementById('dmAddPassword');
+const dmAddNote = document.getElementById('dmAddNote');
+const dmAddButton = document.getElementById('dmAddButton');
+const dmTestAllButton = document.getElementById('dmTestAllButton');
+const dmMessage = document.getElementById('dmMessage');
+const dmFallbackNote = document.getElementById('dmFallbackNote');
+let dmData = null;
+let dmTesting = new Set();
+
+function dmTime(value) { return value ? String(value) : '-'; }
+
+function dmConnCell(item) {
+  if (dmTesting.has(item.username)) return '<span class="dot"></span>测试中...';
+  if (!item.last_tested) return '<span class="dot"></span>未检测';
+  if (item.last_test_ok === true) {
+    let extra = item.permission_count == null ? '' : `<span class="llm-latency">${item.permission_count} 项权限</span>`;
+    return `<span class="dot ok"></span>可用<span class="llm-latency">${dmTime(item.last_test_latency_ms)}ms</span>${extra}`;
+  }
+  return `<span class="dot bad"></span>不可用<span class="llm-err">${llmEscape(item.last_test_error || '')}</span>`;
+}
+
+function dmStatusCell(item) {
+  if (!item.enabled) return '<span class="dot bad"></span>已停用';
+  if (item.auto_disabled) {
+    const at = item.auto_disabled_at ? `（${item.auto_disabled_at}）` : '';
+    return `<span class="dot bad"></span>熔断中${at}<span class="llm-err">连续失败 ${item.consecutive_failures} 次，冷却后自动恢复</span>`;
+  }
+  if (!item.usable) return '<span class="dot"></span>待恢复';
+  return '<span class="dot ok"></span>启用';
+}
+
+function renderDmAccounts() {
+  if (!dmData) return;
+  const rows = dmData.accounts.map(item => {
+    const ops = [
+      `<button type="button" data-act="test" data-u="${llmEscape(item.username)}">测试</button>`,
+      `<button type="button" data-act="toggle" data-u="${llmEscape(item.username)}">${item.enabled ? '停用' : '启用'}</button>`,
+      item.consecutive_failures || item.auto_disabled
+        ? `<button type="button" data-act="reset" data-u="${llmEscape(item.username)}">重置计数</button>` : '',
+      `<button type="button" data-act="delete" data-u="${llmEscape(item.username)}">删除</button>`,
+    ].join('');
+    return `<tr>
+      <td>${llmEscape(item.username)}</td>
+      <td>${dmStatusCell(item)}</td>
+      <td>${dmTime(item.last_success)}</td>
+      <td>${dmTime(item.last_failure)}${item.last_error ? `<span class="llm-err">${llmEscape(item.last_error)}</span>` : ''}</td>
+      <td>${item.consecutive_failures || 0}</td>
+      <td>${dmConnCell(item)}</td>
+      <td>${llmEscape(item.note || '')}</td>
+      <td><span class="dm-ops">${ops}</span></td>
+    </tr>`;
+  });
+  dmAccountTable.innerHTML = rows.length ? rows.join('')
+    : '<tr><td colspan="8" style="color:#6b7280">尚未录入账号：抓取将回退到 .env 的 DM_USERNAME / DM_PASSWORD</td></tr>';
+  if (dmData.env_fallback) {
+    dmFallbackNote.style.display = '';
+    dmFallbackNote.textContent = dmData.env_fallback.active
+      ? `当前没有池内可用账号，抓取回退到环境变量账号：${dmData.env_fallback.username}`
+      : `环境变量兜底账号：${dmData.env_fallback.username}（仅当池内无可用账号时使用）`;
+  } else {
+    dmFallbackNote.style.display = 'none';
+  }
+}
+
+function dmLoad() {
+  fetch('{{ url_for("admin_dm_accounts_overview") }}').then(r => r.json()).then(data => {
+    dmData = data; renderDmAccounts();
+  }).catch(() => { dmAccountTable.innerHTML = '<tr><td colspan="8" style="color:#b91c1c">账号池状态加载失败</td></tr>'; });
+}
+
+function dmPost(url, body, button, pendingText) {
+  const original = button ? button.textContent : '';
+  if (button) { button.disabled = true; button.textContent = pendingText; }
+  dmMessage.textContent = '';
+  return fetch(url, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(body || {}),
+  }).then(async r => ({ok: r.ok, data: await r.json()})).finally(() => {
+    if (button) { button.disabled = false; button.textContent = original; }
+  });
+}
+
+dmAddButton.addEventListener('click', () => {
+  const username = dmAddUsername.value.trim();
+  const password = dmAddPassword.value;
+  if (!username || !password) { dmMessage.textContent = '请填写账号和密码'; return; }
+  dmPost('{{ url_for("admin_dm_accounts_add") }}', {
+    username, password, note: dmAddNote.value.trim(),
+  }, dmAddButton, '添加中...').then(({ok, data}) => {
+    if (ok && data.ok) {
+      dmData = data.data; renderDmAccounts();
+      dmAddUsername.value = ''; dmAddPassword.value = ''; dmAddNote.value = '';
+      dmMessage.textContent = '账号已添加';
+    } else {
+      dmMessage.textContent = data.message || '添加失败';
+    }
+  }).catch(() => { dmMessage.textContent = '添加失败：无法连接后台接口'; });
+});
+
+dmTestAllButton.addEventListener('click', () => {
+  if (!dmData || !dmData.accounts.length) { dmMessage.textContent = '没有可测试的账号'; return; }
+  dmData.accounts.forEach(item => dmTesting.add(item.username));
+  renderDmAccounts();
+  dmPost('{{ url_for("admin_dm_accounts_test") }}', {}, dmTestAllButton, '测试中...').then(({ok, data}) => {
+    dmTesting.clear();
+    if (data.data) { dmData = data.data; }
+    renderDmAccounts();
+    dmMessage.textContent = data.message || (ok ? '测试完成' : '测试失败');
+  }).catch(() => {
+    dmTesting.clear(); renderDmAccounts();
+    dmMessage.textContent = '测试失败：无法连接后台接口';
+  });
+});
+
+dmAccountTable.addEventListener('click', event => {
+  const button = event.target.closest('button[data-act]');
+  if (!button) return;
+  const username = button.dataset.u;
+  const act = button.dataset.act;
+  if (act === 'test') {
+    dmTesting.add(username); renderDmAccounts();
+    dmPost('{{ url_for("admin_dm_accounts_test") }}', {username}, button, '测试中...').then(({data}) => {
+      dmTesting.delete(username);
+      if (data.data) { dmData = data.data; }
+      renderDmAccounts();
+      const result = (data.results || []).find(item => item.username === username);
+      dmMessage.textContent = result
+        ? (result.ok ? `账号 ${username} 可用（${result.latency_ms}ms）` : `账号 ${username} 不可用：${result.error || '未知错误'}`)
+        : (data.message || '测试失败');
+    }).catch(() => {
+      dmTesting.delete(username); renderDmAccounts();
+      dmMessage.textContent = '测试失败：无法连接后台接口';
+    });
+  } else if (act === 'toggle') {
+    const current = (dmData.accounts || []).find(item => item.username === username);
+    dmPost('{{ url_for("admin_dm_accounts_update") }}', {
+      username, enabled: !(current && current.enabled),
+    }, button, '处理中...').then(({data}) => {
+      if (data.ok) { dmData = data.data; renderDmAccounts(); dmMessage.textContent = data.message; }
+      else dmMessage.textContent = data.message || '操作失败';
+    }).catch(() => { dmMessage.textContent = '操作失败：无法连接后台接口'; });
+  } else if (act === 'reset') {
+    dmPost('{{ url_for("admin_dm_accounts_update") }}', {
+      username, reset_failures: true,
+    }, button, '处理中...').then(({data}) => {
+      if (data.ok) { dmData = data.data; renderDmAccounts(); dmMessage.textContent = data.message; }
+      else dmMessage.textContent = data.message || '操作失败';
+    }).catch(() => { dmMessage.textContent = '操作失败：无法连接后台接口'; });
+  } else if (act === 'delete') {
+    if (!confirm(`确定删除账号 ${username} 吗？`)) return;
+    dmPost('{{ url_for("admin_dm_accounts_delete") }}', {username}, button, '处理中...').then(({data}) => {
+      if (data.ok) { dmData = data.data; renderDmAccounts(); dmMessage.textContent = data.message; }
+      else dmMessage.textContent = data.message || '删除失败';
+    }).catch(() => { dmMessage.textContent = '删除失败：无法连接后台接口'; });
+  }
+});
+dmLoad();
 </script>
 </body>
 </html>

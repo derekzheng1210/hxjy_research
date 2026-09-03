@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+import os
 import shutil
 import unittest
 from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
+
+# 先于 broker_market.paths 解析：默认沙箱，避免与其他测试同进程组合时
+# 落到生产数据目录（本文件曾是无沙箱根设置的测试）。
+os.environ.setdefault("PORTAL_DATA_ROOT", str(Path(__file__).resolve().parent / ".test_runtime" / "broker_market"))
 
 from broker_market import storage
 from broker_market.scheduler import BROKER_TIMES, effective_success_for, latest_due, next_due
