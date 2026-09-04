@@ -26,7 +26,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable
 
@@ -46,6 +46,8 @@ REQUEST_TIMEOUT = (15, 120)  # 连接、单次读块超时
 STREAM_MAX_SECONDS = 600  # 单次流式调用总时长看门狗：上游 keepalive 会让读超时失效
 JOB_STALE_SECONDS = 15 * 60  # 任务文件超过该时长无更新视为僵死，可被接管
 REPORT_TTL_DAYS = 7  # 经营边际变化/主要风险建议有效期；过期仍展示但标记 stale
+MIN_METRICS_FULL = 12  # 需求文档§13：完整研究的juyuan_metrics条数下限
+REPAIR_MAX_ROUNDS = 2  # 本地大模型JSON修复轮数（每轮解析失败回传新错误再修）
 
 RESEARCH_DIR = DATA_DIR / "credit_research"
 JOBS_DIR = RESEARCH_DIR / "jobs"
@@ -261,6 +263,12 @@ def _run_agent_stream(prompt: str, on_event: Callable[[str, dict], None]) -> tup
     completed_message_ids: set[str] = set()
     text_by_msg: dict[str, str] = {}
     stream_started = time.time()
+    # 看门狗定时器：上游只发SSE心跳不发数据时，socket读超时会被心跳不断重置、
+    # 循环体内的时间检查也不会执行（没有payload到达）——流会永久挂起、任务卡死。
+    # 到点强关连接，让迭代抛错走出循环。
+    watchdog = threading.Timer(STREAM_MAX_SECONDS, resp.close)
+    watchdog.daemon = True
+    watchdog.start()
     try:
         for payload in _iter_sse_data(resp):
             if time.time() - stream_started > STREAM_MAX_SECONDS:
@@ -289,6 +297,19 @@ def _run_agent_stream(prompt: str, on_event: Callable[[str, dict], None]) -> tup
                         message_order.append(inner["id"])
                     if status == "completed":
                         completed_message_ids.add(inner["id"])
+                        # 部分会话的最终答案只在 completed 消息事件的 content 里下发，
+                        # 不再伴随 text 增量：无增量文本时收录其全文。
+                        # 注意中间消息的 content 常为纯空白"\n\n"，必须跳过，否则会
+                        # 挤掉真答案触发"Agent未返回正文"误判（曾致整次Agent白跑重试）
+                        mid = str(inner["id"])
+                        if not text_by_msg.get(mid, "").strip():
+                            parts = [
+                                part.get("text") for part in inner.get("content") or []
+                                if isinstance(part, dict) and part.get("type") == "text" and part.get("text")
+                            ]
+                            full = "".join(part for part in parts if part) or str(inner.get("text") or "")
+                            if full.strip():
+                                text_by_msg[mid] = full
             elif kind == "plugin_call" and status == "completed":
                 plugin_calls += 1
                 on_event("plugin", {"count": plugin_calls, "name": last_plugin})
@@ -296,20 +317,32 @@ def _run_agent_stream(prompt: str, on_event: Callable[[str, dict], None]) -> tup
                 last_plugin = str(inner["data"]["name"])
             elif kind == "turn_usage":
                 usage = inner.get("usage") or {}
-            elif kind == "text" and inner.get("delta") and inner.get("text") and inner.get("msg_id"):
+            elif kind == "text" and inner.get("text") and inner.get("msg_id"):
                 msg_id = str(inner["msg_id"])
-                text_by_msg[msg_id] = text_by_msg.get(msg_id, "") + inner["text"]
-                if msg_id not in reasoning_ids:
-                    answer_chars += len(inner["text"])
-                    on_event("answer_delta", {"chars": answer_chars})
+                if inner.get("delta"):
+                    text_by_msg[msg_id] = text_by_msg.get(msg_id, "") + inner["text"]
+                    if msg_id not in reasoning_ids:
+                        answer_chars += len(inner["text"])
+                        on_event("answer_delta", {"chars": answer_chars})
+                elif not text_by_msg.get(msg_id, "").strip() and inner["text"].strip():
+                    # 非增量全文事件：同样兜底收录（纯空白跳过）
+                    text_by_msg[msg_id] = inner["text"]
+    except Exception:
+        # 看门狗定时器到点强关连接会在这里抛出连接类异常：统一转换成明确的超时错误
+        if time.time() - stream_started > STREAM_MAX_SECONDS:
+            raise RuntimeError(
+                f"Agent流式响应超过{STREAM_MAX_SECONDS}秒未完成（看门狗已切断连接）")
+        raise
     finally:
+        watchdog.cancel()
         resp.close()
 
-    # 正文 = 最后一条 assistant message；优先采用已 completed 的，其次流式累计文本
+    # 正文 = 最后一条 assistant message；优先采用已 completed 的，其次流式累计文本。
+    # 空白文本（如中间消息的"\n\n"content）一律视为无正文，不得抢占真答案。
     answer = ""
     for msg_id in reversed(message_order):
         candidate = text_by_msg.get(msg_id, "")
-        if not candidate:
+        if not candidate.strip():
             continue
         if msg_id in completed_message_ids or len(message_order) == 1:
             answer = candidate
@@ -317,10 +350,17 @@ def _run_agent_stream(prompt: str, on_event: Callable[[str, dict], None]) -> tup
         # 未 completed 的中间消息可能是过程稿：仅在没有更优候选时采用
         if not answer:
             answer = candidate
-    if not answer:  # 兜底：拼接全部非 reasoning 文本
+    if not answer.strip():  # 兜底：拼接全部非 reasoning 文本
         answer = "\n".join(
             text for msg_id, text in text_by_msg.items() if msg_id not in reasoning_ids
         ).strip()
+    if not answer.strip():
+        # 最后兜底：个别会话把最终答案的消息标记成了reasoning类型（正文实际已完整流式
+        # 输出，message事件只剩空白）。按插入顺序取最后一个含"{"的文本块交给
+        # extract_json_text提取；提取不到合法JSON会走重试链，不会比直接判空更差。
+        brace_texts = [text for text in text_by_msg.values() if "{" in text]
+        if brace_texts:
+            answer = brace_texts[-1]
     meta = {
         "plugin_calls": plugin_calls,
         "model": usage.get("model_name") or "",
@@ -329,7 +369,10 @@ def _run_agent_stream(prompt: str, on_event: Callable[[str, dict], None]) -> tup
         "channel": "company_agent",
     }
     if not answer.strip():
-        raise RuntimeError("Agent未返回正文")
+        # 附带流式统计便于定位上游消息形态变化（曾发生"正文已流式输出却判空"）
+        raise RuntimeError(
+            f"Agent未返回正文（messages={len(message_order)} completed={len(completed_message_ids)}"
+            f" text_msgs={len(text_by_msg)} reasoning={len(reasoning_ids)}）")
     return answer, meta
 
 
@@ -383,16 +426,32 @@ def _run_local_llm(prompt: str, on_event: Callable[[str, dict], None]) -> tuple[
     raise RuntimeError(f"本地大模型调用失败：{last_error}")
 
 
-def run_research_prompt(prompt: str, on_event: Callable[[str, dict], None]) -> tuple[str, dict]:
-    """优先公司 Agent（带检索），未配置或失败时回退本地大模型链。"""
+# 流式消息形态偶发异常（正文已输出但最终消息未按常规形态下发、流被上游静默挂起）：
+# 值得原样重试一次，避免直接落到无检索能力的本地链导致整份数据表为空
+_RETRYABLE_AGENT_ERRORS = ("Agent未返回正文", "Agent流式响应超过")
+
+
+def run_research_prompt(prompt: str, on_event: Callable[[str, dict], None],
+                        fallback_prompt: str | None = None) -> tuple[str, dict]:
+    """优先公司 Agent（带检索），未配置或失败时回退本地大模型链。
+
+    回退链没有查询与检索工具：Agent 失败时改用 fallback_prompt（无工具版提示词），
+    避免本地模型带着“必查清单”虚构查询过程、编造数据缺口理由。
+    """
     if agent_configured():
-        try:
-            return _run_agent_stream(prompt, on_event)
-        except Exception as exc:  # noqa: BLE001
-            on_event("agent_error", {"message": str(exc)[:200]})
-            if not _local_llm_available():
-                raise
-    return _run_local_llm(prompt, on_event)
+        last_error: Exception | None = None
+        for attempt in range(2):
+            try:
+                return _run_agent_stream(prompt, on_event)
+            except Exception as exc:  # noqa: BLE001
+                last_error = exc
+                on_event("agent_error", {"message": str(exc)[:200]})
+                if attempt == 0 and any(token in str(exc) for token in _RETRYABLE_AGENT_ERRORS):
+                    continue
+                break
+        if not _local_llm_available():
+            raise last_error
+    return _run_local_llm(fallback_prompt or prompt, on_event)
 
 
 # --------------------------------------------------------------------------- #
@@ -401,16 +460,18 @@ def run_research_prompt(prompt: str, on_event: Callable[[str, dict], None]) -> t
 SYSTEM_INSTRUCTIONS = """你是一名资深信用债发行人研究员。目标：生成短、准、可追溯的发行人信用研究，供投资经理快速掌握主体信用状况。不是长篇公司介绍，不是股票报告，不是通用风险清单。
 
 一、聚源数据优先，快照只是起点
-1. 系统已在任务末尾提供"聚源数据快照"（含查询日期），它是主体识别与债券事实的起点与校验基准。你必须继续使用可用的聚源数据查询工具，按下方"必查清单"补齐财务、存续债、评级与区域数据，不能因为快照里没有就把字段写进data_gaps了事。
-2. 每个关键数值都必须有报告期和单位；预测值不得写成实际值。
-3. 快照与查询结果冲突时，核对报告期、单位、合并范围后说明采用口径。
-4. 严禁张冠李戴：所有公司、区域、集团名称必须与发行人严格一致，不得混入其他主体的事实。
+1. 系统已在任务末尾提供"聚源数据快照"（含查询日期），它是主体识别与债券事实的起点与校验基准。快照只包含债券要素、发行人存续债与门户诊断，不含财务报表与区域财政数据。你必须继续使用可用的聚源数据查询工具，按下方"必查清单"逐年查询补齐财务、存续债、评级与区域数据，不能因为快照里没有就把字段写进data_gaps了事，也不得跳过数据查询工具、仅凭检索公告和评级报告作数。
+2. 数据获取优先级：财务、区域财政、行业景气、评级等结构化数据必须先用数据查询工具直接查询，并以工具结果为准；工具确实查不到的，再用检索工具查公告、评级报告与新闻补充；两者都未获得的才写入data_gaps并注明已尝试的渠道。
+3. 每个关键数值都必须有报告期和单位；预测值不得写成实际值。
+4. 所有数值必须来自本次任务的工具查询或检索结果，并逐一核对报告期：禁止凭模型记忆或训练知识填充数值；禁止把较早年度的数据当作最新一期；检索资料必须核对其报告期，报告期早于"报告期基准"最新期间的过期资料只能作历史背景，不得顶替最新数据。最新报告期数据确实尚未披露时，明确写"截至查询日尚未披露"，不得用旧数顶替。
+5. 快照与查询结果冲突时，核对报告期、单位、合并范围后说明采用口径。
+6. 严禁张冠李戴：所有公司、区域、集团名称必须与发行人严格一致，不得混入其他主体的事实。
 
 二、必查清单（用数据查询工具逐项完成，查不到的才写入data_gaps）
-1. 财务（所有主体）：最近三年年报+最新一期（如最新半年报）的营业收入、净利润、货币资金、有息债务、短期有息债务、经营活动现金流净额、资产负债率、对外担保；计算同比与趋势方向。
+1. 财务（所有主体）：最近三个完整年度年报+最新一期（报告期见下方"报告期基准"）的营业收入、净利润、货币资金、有息债务、短期有息债务、经营活动现金流净额、资产负债率、对外担保。每个指标都必须覆盖基准内全部报告期，一期不落：优先使用能一次返回多期财务数据的查询，一次查不全时逐年补查，不得只给最新一期或个别年度。有息债务=短期借款+一年内到期的非流动负债+应付票据+长期借款+应付债券等，短期有息债务=短期借款+一年内到期的非流动负债+应付票据，按构成逐期取数；确需估算的须注明构成与依据，且仍须给出可得各期的数值，不得以单期估算替代多期实际数。各期计算同比与趋势方向。
 2. 债务（所有主体）：存续债券明细（余额、票面利率、到期/行权日）与未来1年、1—3年到期分布；最新主体评级、债项评级、中债隐含评级及调整记录。
-3. 城投及城投属性主体加查：所在区域GDP、一般公共预算收入、政府性基金收入、地方政府债务余额与债务率、土地出让收入。逐年分别查询最近三个完整年度（例如2023、2024、2025，当前已进入2026年时最新完整年度为2025年）并全部列出，不得只给一两个年度；一次查询只返回单年数据时逐年重复查询。另查：发行人在当地平台体系中的层级与地位；政府应收款、财政补贴与资产注入情况。
-4. 产业类主体加查：行业供需与价格趋势、公司竞争地位与市场占有率、资本开支与投资回收。行业属性鲜明的主体（如白酒、地产、煤炭、钢铁、水泥、航空、化工等）必须查询该行业的关键景气数据——例如产品批价/价格指数、行业产量或销量、库存、龙头业绩对比等——取最近三年或可得的最近三期，逐期写入juyuan_metrics（category="行业数据"）。
+3. 城投及城投属性主体加查：所在区域GDP、一般公共预算收入、政府性基金收入、地方政府债务余额与债务率、土地出让收入。逐年分别查询"报告期基准"给出的最近三个完整年度并全部列出，不得只给一两个年度；一次查询只返回单年数据时逐年重复查询。另查：发行人在当地平台体系中的层级与地位；政府应收款、财政补贴与资产注入情况。
+4. 产业类主体加查：行业供需与价格趋势、公司竞争地位与市场占有率、资本开支与投资回收。行业属性鲜明的主体（如白酒、地产、煤炭、钢铁、水泥、航空、化工等）必须查询该行业的关键景气数据——例如产品批价/价格指数、行业产量或销量、库存、龙头业绩对比等——取"报告期基准"内的最近三年或可得的最近三期，逐期写入juyuan_metrics（category="行业数据"）。
 5. 舆情（检索工具）：按"发行人及核心子公司 → 同城/同集团其他平台 → 区域与行业"三个层次核查。
 
 三、先分类，再选择分析框架
@@ -444,7 +505,7 @@ details中的数据表是交付物的一部分：juyuan_metrics少于12条、城
 3. city_analysis：区域经济财政数据表（键值对注明年份，如"政府性基金收入(2024)：105.8亿元，同比-48.5%"）、平台层级与地位、存续债与到期结构、政府支持情况。
 4. hybrid_analysis：政府线与市场线分块，并回答四个问题：信用基础更依赖哪侧、市场化转型是否真改善现金流、政府支持弱化时自身能否担债、市场化波动是否反噬平台信用。
 5. industry_analysis：行业供需、价格、竞争格局与公司位置。
-6. juyuan_metrics：每条含category、metric、value、unit、period。category四选一："主体财务"（营收、净利润、货币资金、有息债务、短期有息债务、经营现金流净额、资产负债率、对外担保等）、"区域财政"（城投及城投属性主体必填：GDP、一般公共预算收入、政府性基金收入、地方政府债务余额、债务率、土地出让收入等，至少最近三个年度，以可得的最新完整年度为终点）、"行业数据"（产业类主体必填：该行业关键景气指标，如产品价格/批价、行业产量销量、库存、价格指数等，取最近三年或最近三期）、"债务与评级"（存续债余额、到期分布、主体/债项评级、中债隐含评级）。同一指标多期各占一行（如2023/2024/2026H1三行），总条数不少于12条。
+6. juyuan_metrics：每条含category、metric、value、unit、period。category四选一："主体财务"（营收、净利润、货币资金、有息债务、短期有息债务、经营现金流净额、资产负债率、对外担保等）、"区域财政"（城投及城投属性主体必填：GDP、一般公共预算收入、政府性基金收入、地方政府债务余额、债务率、土地出让收入等，覆盖"报告期基准"的最近三个完整年度）、"行业数据"（产业类主体必填：该行业关键景气指标，如产品价格/批价、行业产量销量、库存、价格指数等，取"报告期基准"内最近三年或最近三期）、"债务与评级"（存续债余额、到期分布、主体/债项评级、中债隐含评级）。行与列的规则：同一指标各期各占一行，主体财务必须是完整的"指标×报告期"矩形——每个必查财务指标在基准内每个报告期各一行；某期确实未披露或未查得时，该期单独一行、value写"—"、unit留空，并把该缺口写入data_gaps，不得省略整期或只报单期。同一指标各期的metric名称必须完全一致（如各期都写"净利润"，不得某期写成"净利润（归母）"），口径差异在结论文字中说明。行业数据与经营类指标在可得范围内尽量多期覆盖，能查到几期就列几期，至少给到基准内最新可得期。period写法按"报告期基准"第3条执行。总条数不少于12条。
 7. data_gaps：只写确实查询过但未获得的数据，并注明已尝试的渠道；不得把"没去查"写成数据缺口。
 
 八、表述要求
@@ -452,7 +513,7 @@ details中的数据表是交付物的一部分：juyuan_metrics少于12条、城
 2. 不得出现"快照""S1快照"等技术性表述；来源引用只在evidence_refs中写S编号。
 3. 默认摘要（brief）合计不超过1500个汉字：公司简介不超过120字（只写实控人/股权性质、核心业务、区域定位）；一句话信用判断不超过60字；核心变化与核心风险各最多3条、每条不超过120字；不足3条如实少输出。
 4. 控制总体积：输出JSON全文不超过约8000字符（优先保证必填数据完整，压缩文字表述而非删减数据行）；juyuan_metrics 12—20条；operating_changes、all_risks各不超过6条；public_opinion_events不超过8条；每条summary、credit_impact、conclusion不超过100个汉字。
-5. 严格只输出约定的JSON：不要Markdown围栏、不要解释、不要思考过程、不要任何JSON之外的文字。"""
+5. 严格只输出约定的JSON：不要Markdown围栏、不要解释、不要思考过程、不要任何JSON之外的文字。禁止生成文件、附件或链接，完整JSON必须直接写在最终回复的正文中（不接受"见附件/见文件"形式的输出）。"""
 
 TASK_TEMPLATE = """===任务===
 
@@ -477,12 +538,49 @@ bond_code={bond_code}
 {snapshot}"""
 
 
+def _report_periods(today: date | None = None) -> tuple[list[int], str]:
+    """研究基准报告期：最近三个完整年度年报 + 最新一期（按法定披露节奏推断）。
+
+    年报于次年4月30日前披露完毕，一季报/半年报/三季报分别于当年4/8/10月末前
+    披露完毕；未到披露截止期的下一期不作为基准，避免模型空跑或拿旧数据顶替。
+    """
+    today = today or date.today()
+    year, month = today.year, today.month
+    years = [year - 3, year - 2, year - 1]
+    if month >= 11:
+        interim = f"{year}Q3"
+    elif month >= 9:
+        interim = f"{year}H1"
+    elif month >= 5:
+        interim = f"{year}Q1"
+    else:  # 1—4月：当年一季报未到披露截止期，最新一期退回上年三季报
+        interim = f"{year - 1}Q3"
+    return years, interim
+
+
+def _period_guidance() -> str:
+    years, interim = _report_periods()
+    latest_year = years[-1]
+    interim_year = interim[:4]
+    return (
+        f"九、报告期基准（今日{datetime.now().strftime('%Y-%m-%d')}）\n"
+        f"1. 最近三个完整年度为{years[0]}、{years[1]}、{years[2]}年年报；最新一期为{interim}。"
+        f"财务、区域财政与行业数据必须按此基准逐年查询并输出到最新期间，不得止步于{latest_year - 1}年及更早年度。\n"
+        f"2. {latest_year}年年报与{interim}均已过正常披露期：确实查询不到时须在data_gaps注明"
+        "\"已查询但未获得\"，严禁用更早年度数据顶替，严禁凭记忆或训练知识估算。\n"
+        f"3. juyuan_metrics的period必须用统一写法：年报期直接写年份（{years[0]}、{years[1]}、{years[2]}），"
+        f"最新一期写{interim}；禁止\"{interim_year}年\"\"{interim_year}年6月末\"\"{interim_year}-06-30\"等变体"
+        "（系统按报告期归并展示，变体写法会拆出无法对比的列）。"
+    )
+
+
 def build_prompt(bond_code: str, snapshot: dict, *, allow_search: bool = True, mode: str = "full") -> str:
     research_date = datetime.now().strftime("%Y-%m-%d")
-    body = SYSTEM_INSTRUCTIONS
+    body = SYSTEM_INSTRUCTIONS + "\n\n" + _period_guidance()
     if not allow_search:
         body += ("\n\n注意：本次运行没有数据查询与检索工具，上述“必查清单”无法执行："
-                 "只能基于聚源数据快照分析，快照未覆盖的信息一律写入data_gaps并注明“未接入查询工具”，不得编造。")
+                 "只能基于聚源数据快照分析，快照未覆盖的信息一律写入data_gaps并注明“未接入查询工具”，"
+                 "不得编造数值、不得凭记忆估算、不得声称已查询或检索。")
     task = SECTION_TASKS.get(mode, TASK_TEMPLATE).format(
         bond_code=bond_code, research_date=research_date,
         snapshot=json.dumps(snapshot, ensure_ascii=False, indent=1),
@@ -707,7 +805,10 @@ def build_snapshot(bond: dict[str, Any]) -> tuple[dict, list[str]]:
 
     if not bond.get("internal_rating"):
         gaps.append("内部评级缺失")
-    financial_note = "聚源财务指标表尚未接入，请通过检索公告/评级报告补充，未获取到的写入data_gaps"
+    financial_note = (
+        "本快照不含发行人财务报表与区域财政数据；请用数据查询工具逐年查询（以此为准），"
+        "查不到的再用公告/评级报告检索补充，仍未获得的写入data_gaps"
+    )
 
     snapshot = {
         "query_date": datetime.now().strftime("%Y-%m-%d"),
@@ -784,6 +885,127 @@ def extract_json_text(text: str) -> str:
     return s
 
 
+_STRUCT_CHARS = set('"{}[]:,')
+
+
+def _scan_json_depth(text: str) -> tuple[list[str], int]:
+    """扫描JSON文本（跳过字符串）返回 (未闭合开括号栈, 深度首次归零位置；未归零返回-1)。"""
+    stack: list[str] = []
+    in_str = False
+    i = 0
+    first_zero = -1
+    n = len(text)
+    while i < n:
+        c = text[i]
+        if in_str:
+            if c == "\\":
+                i += 2
+                continue
+            if c == '"':
+                in_str = False
+        else:
+            if c == '"':
+                in_str = True
+            elif c in "{[":
+                stack.append(c)
+            elif c in "}]":
+                if stack:
+                    stack.pop()
+                if not stack and first_zero < 0:
+                    first_zero = i
+        i += 1
+    return stack, first_zero
+
+
+def _reattach_extra_data(text: str) -> str:
+    """"Extra data"修复：根对象被提前闭合、后续内容掉在对象外。
+
+    成因通常是正文里多了一个闭括号（或少了一个开括号），使层级整体变浅、根对象
+    提前收尾。做法：去掉让深度首次归零的那个闭括号；若去掉后不再中途归零则接受
+    （末尾未闭合时按开括号栈补齐收尾），否则说明问题不止一个括号，交回修复链。
+    掉错层级的键（details子键掉到根级）由 validate_and_normalize 按schema归位，
+    全程不改内容文本，数据零丢失。
+    """
+    _stack, first_zero = _scan_json_depth(text)
+    if first_zero < 0 or not text[first_zero + 1:].strip():
+        return text  # 没有提前闭合，或闭合后无多余内容
+    fixed = text[:first_zero] + text[first_zero + 1:]
+    stack, fixed_zero = _scan_json_depth(fixed)
+    if fixed_zero >= 0 and fixed[fixed_zero + 1:].strip():
+        return text  # 去掉后仍中途归零，问题不止一个闭括号，不乱改
+    if stack:
+        fixed += "".join("}" if c == "{" else "]" for c in reversed(stack))
+    return fixed
+
+
+def _salvage_json_text(json_text: str, max_rounds: int = 24) -> str:
+    """确定性修复LLM输出JSON的常见语法噪声，返回修复后的文本（可能仍不合法）。
+
+    高发错误与修法（每轮以json.loads校验，修不好原样返回，交给Agent重试/本地修复链）：
+    1. 字符串值内未转义引号（如 长鑫存储"相关）：json报"Expecting ','/' :' delimiter"，
+       错误位置是内容字符且其前紧邻一个未转义引号 → 把该引号改为\\"；
+    2. 数组/对象元素间缺逗号（}{ / ]{ / ""直接相连）：在错误位置插入逗号；
+    3. 尾随逗号（,} / ,]）：删除；
+    4. 根对象提前闭合（Extra data）：去掉提前的闭括号并按开括号栈补齐收尾。
+    """
+    text = json_text
+    for _ in range(max_rounds):
+        try:
+            json.loads(text)
+            return text
+        except ValueError as exc:
+            message = str(exc)
+            match = re.search(r"char (\d+)", message)
+            if not match:
+                return text
+            pos = int(match.group(1))
+            if pos >= len(text):
+                return text
+            if "Extra data" in message:
+                fixed = _reattach_extra_data(text)
+                if fixed != text:
+                    text = fixed
+                    continue
+                return text
+            ch = text[pos]
+            prev_pos = pos - 1
+            while prev_pos >= 0 and text[prev_pos] in " \t\r\n":
+                prev_pos -= 1
+            prev = text[prev_pos] if prev_pos >= 0 else ""
+            # 2) 元素间缺逗号：新元素紧跟上一元素收尾
+            if (ch == "{" and prev in "}]") or (ch in '{"' and prev == '"'):
+                text = text[:pos] + "," + text[pos:]
+                continue
+            # 1) 字符串被内部未转义引号提前截断：错误位置是内容字符且紧邻引号
+            if ch not in _STRUCT_CHARS and not ch.isdigit():
+                qpos = text.rfind('"', 0, pos)
+                if qpos > 0 and text[qpos - 1] != "\\" and not text[qpos + 1:pos].strip():
+                    text = text[:qpos] + "\\" + text[qpos:]
+                    continue
+            # 3) 尾随逗号
+            stripped = re.sub(r",(\s*[}\]])", r"\1", text)
+            if stripped != text:
+                text = stripped
+                continue
+            return text
+    return text
+
+
+def parse_report_json(text: str) -> dict:
+    """解析研究输出JSON：直接解析失败时先做一次确定性语法修复再试。"""
+    json_text = extract_json_text(text)
+    try:
+        return json.loads(json_text)
+    except ValueError as first_error:
+        repaired = _salvage_json_text(json_text)
+        if repaired != json_text:
+            try:
+                return json.loads(repaired)
+            except ValueError:
+                pass
+        raise first_error
+
+
 def _valid_date(value: Any) -> bool:
     text = str(value or "")
     if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
@@ -809,7 +1031,10 @@ _PERIOD_MARKS = ("H1", "H2", "Q1", "Q2", "Q3", "Q4", "中报", "半年", "三季
 def _norm_period(value: Any) -> str:
     """报告期归一化：提取年份并保留半年/季度标记。
 
-    "邯郸市2025年"→"2025"，"2024末"→"2024"，"2026H1"/"2026中报"→"2026H1"。
+    "邯郸市2025年"→"2025"，"2024末"→"2024"，"2026H1"/"2026中报"→"2026H1"，
+    "2026-06-30"/"2026年6月末"→"2026H1"，"2026-09-30"→"2026Q3"，"2023-12-31"→"2023"
+    （按报表日月归期：6月末=H1、9月末=Q3、3月末=Q1、12月末=年报；非季末日期与
+    年中快照月归入所在年份，避免拆出无法对比的列）。
     """
     s = str(value or "").strip()
     if not s:
@@ -828,6 +1053,15 @@ def _norm_period(value: Any) -> str:
             return year + mark
     if "三季" in s:
         return year + "Q3"
+    month_match = re.search(r"(\d{1,2})\s*月", s) or re.search(r"[-/.](\d{1,2})[-/.]", s)
+    if month_match:
+        month = int(month_match.group(1))
+        if month == 6:
+            return year + "H1"
+        if month == 9:
+            return year + "Q3"
+        if month == 3:
+            return year + "Q1"
     return year
 
 
@@ -864,6 +1098,20 @@ def validate_and_normalize(report: dict, bond: dict[str, Any], *, mode: str = "f
     warnings: list[str] = []
     if not isinstance(report, dict):
         return None, ["输出不是JSON对象"]
+    # 键位归位：括号修复/模型输出常见details子键掉到根级、sources掉进details，
+    # 按schema归位后再做缺失判断，避免整块数据被判丢
+    details_box = report.get("details") if isinstance(report.get("details"), dict) else {}
+    for key in ("company_profile", "bond_profile", "city_analysis", "hybrid_analysis",
+                "industry_analysis", "operating_changes", "all_risks",
+                "public_opinion_events", "juyuan_metrics", "data_gaps"):
+        if key in report and key not in details_box:
+            details_box[key] = report.pop(key)
+            warnings.append(f"{key}出现在根级，已归位到details")
+    if "sources" in details_box and "sources" not in report:
+        report["sources"] = details_box.pop("sources")
+        warnings.append("sources出现在details内，已归位到根级")
+    if details_box:
+        report["details"] = details_box
     missing = [key for key in ("meta", "classification", "brief", "details", "sources") if key not in report]
     if missing:
         if mode == "full":
@@ -991,6 +1239,19 @@ def validate_and_normalize(report: dict, bond: dict[str, Any], *, mode: str = "f
         "data_gaps": _clean_text_list(details.get("data_gaps"), limit=12),
     }
 
+    # 主体财务矩形完整性：必查指标应覆盖基准报告期，缺期记警告（落盘于
+    # payload.validation.warnings，供排查"数据不可比"问题；不阻断出报告）
+    _years, _interim = _report_periods()
+    _baseline = [str(y) for y in _years] + [_interim]
+    _fin_periods: dict[str, set[str]] = {}
+    for _row in normalized_details["juyuan_metrics"]:
+        if _row.get("category") == "主体财务":
+            _fin_periods.setdefault(str(_row.get("metric") or ""), set()).add(str(_row.get("period") or ""))
+    for _metric, _periods in sorted(_fin_periods.items()):
+        _missing = [p for p in _baseline if p not in _periods]
+        if _missing:
+            warnings.append(f"主体财务「{_metric}」缺{('、'.join(_missing))}期数据")
+
     summary_text = " ".join([
         str(brief.get("company_intro") or ""), str(brief.get("one_sentence_conclusion") or ""),
         *[item["conclusion"] for item in key_changes], *[item["conclusion"] for item in top_risks],
@@ -1074,8 +1335,12 @@ def validate_and_normalize(report: dict, bond: dict[str, Any], *, mode: str = "f
     return normalized, warnings
 
 
-def repair_json_with_local_llm(raw_text: str) -> str | None:
-    """结构不合格时的一次格式修复：仅允许修复格式/压缩内容/保留引用，不得新增事实。"""
+def repair_json_with_local_llm(raw_text: str, error_hint: str = "") -> str | None:
+    """结构不合格时的一次格式修复：只修JSON语法，逐行保留数据，不得新增事实。
+
+    大JSON的修复生成较慢（万字符级实测约4-5分钟），读超时放宽到7分钟；
+    输入截断上限同步放大，避免截断后JSON不完整导致修复必然失败。
+    """
     try:
         from llm_config import available_providers
 
@@ -1083,14 +1348,19 @@ def repair_json_with_local_llm(raw_text: str) -> str | None:
         if not providers:
             return None
         provider = providers[0]
+        hint = f"原文JSON解析错误：{error_hint}\n\n" if error_hint else ""
         payload = {
             "model": provider["model"],
             "temperature": 0,
             "messages": [
                 {"role": "system", "content":
-                    "你是JSON修复器。把用户给的研究结果整理为合法JSON：只修复格式、压缩超限内容、"
-                    "补齐已有引用编号，严禁新增任何事实、数据或观点。只输出JSON本身。"},
-                {"role": "user", "content": raw_text[:24000]},
+                    "你是JSON修复器。把用户给的研究结果整理为合法JSON：只修复JSON语法错误"
+                    "（括号/引号/逗号/收尾符号不匹配、字符串内多余符号、对象或数组缺开括号/多闭括号等）。"
+                    "括号不配平时按字段层级关系补齐或移除括号，宁可调整括号也不得删除内容。"
+                    "必须逐字保留全部字段与数组元素——特别是juyuan_metrics的每一条数据行、"
+                    "sources、public_opinion_events、data_gaps，"
+                    "不得删减、不得概括、不得改写任何数值，严禁新增事实、数据或观点。只输出JSON本身。"},
+                {"role": "user", "content": hint + raw_text[:40000]},
             ],
         }
         if provider.get("disable_thinking"):
@@ -1103,7 +1373,7 @@ def repair_json_with_local_llm(raw_text: str) -> str | None:
             headers={"Content-Type": "application/json", "Authorization": f"Bearer {provider['api_key']}"},
         )
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-        with opener.open(req, timeout=180) as resp:
+        with opener.open(req, timeout=420) as resp:
             data = json.loads(resp.read().decode("utf-8"))
         return (data["choices"][0]["message"] or {}).get("content") or None
     except Exception:  # noqa: BLE001
@@ -1137,7 +1407,16 @@ def _write_json(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-    os.replace(tmp, path)
+    # Windows 下前端轮询读取任务文件与 os.replace 存在竞态：目标文件被读取句柄打开时
+    # replace 报“拒绝访问”。短重试即可成功；曾因此误杀运行中的 Agent 流式调用。
+    for attempt in range(6):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:
+            if attempt == 5:
+                raise
+            time.sleep(0.05 * (attempt + 1))
 
 
 def _read_json(path: Path) -> dict | None:
@@ -1305,20 +1584,26 @@ def _update_job(job: dict, *, state: str | None = None, stage: str | None = None
 
 def _on_agent_event(job: dict):
     def handler(kind: str, payload: dict) -> None:
-        if kind == "plugin":
-            job["plugin_calls"] = payload.get("count") or job.get("plugin_calls")
-            _update_job(job, detail=f"检索补充资料：已完成{job['plugin_calls']}次查询")
-        elif kind == "answer_delta":
-            job["answer_chars"] = payload.get("chars") or 0
-            # 累计输出超过300字才视为进入“生成结论”：Agent 检索期会先吐出
-            # 较短的过程性消息，避免阶段标签来回跳
-            first = job.get("stage") != STAGE_CONCLUDE and (job["answer_chars"] or 0) >= 300
-            progress = max(job.get("progress") or 0, min(94.0, 62 + min(30.0, (job["answer_chars"] or 0) / 220.0)))
-            if first or (job.get("stage") == STAGE_CONCLUDE and (job["answer_chars"] or 0) % 400 < 40):
-                _update_job(job, stage=STAGE_CONCLUDE if first else None,
-                            detail=f"生成结论中（已输出约{job['answer_chars']}字）", progress=progress)
-        elif kind == "agent_error":
-            job["agent_fallback"] = payload.get("message") or ""
+        # 进度落盘失败（如 Windows 文件占用竞态）绝不能打断 Agent 流式调用：
+        # 异常会沿事件回调穿透到流式循环，把运行中的研究误杀成回退本地模型。
+        try:
+            if kind == "plugin":
+                job["plugin_calls"] = payload.get("count") or job.get("plugin_calls")
+                _update_job(job, detail=f"检索补充资料：已完成{job['plugin_calls']}次查询")
+            elif kind == "answer_delta":
+                job["answer_chars"] = payload.get("chars") or 0
+                # 累计输出超过300字才视为进入“生成结论”：Agent 检索期会先吐出
+                # 较短的过程性消息，避免阶段标签来回跳
+                first = job.get("stage") != STAGE_CONCLUDE and (job["answer_chars"] or 0) >= 300
+                progress = max(job.get("progress") or 0, min(94.0, 62 + min(30.0, (job["answer_chars"] or 0) / 220.0)))
+                if first or (job.get("stage") == STAGE_CONCLUDE and (job["answer_chars"] or 0) % 400 < 40):
+                    _update_job(job, stage=STAGE_CONCLUDE if first else None,
+                                detail=f"生成结论中（已输出约{job['answer_chars']}字）", progress=progress)
+            elif kind == "agent_error":
+                job["agent_fallback"] = payload.get("message") or ""
+                _update_job(job, detail="Agent调用异常，自动重试中")
+        except Exception:  # noqa: BLE001 - 进度上报失败仅损失一次界面刷新
+            pass
     return handler
 
 
@@ -1429,43 +1714,89 @@ def _run_job(job: dict) -> None:
         base_payload = get_cached_report(job["issuer_key"])
         allow_search = agent_configured()
         prompt = build_prompt(bond["code"], snapshot, allow_search=allow_search, mode=mode)
-        _update_job(job, stage=STAGE_AGENT, state="running",
-                    detail="已提交公司Agent，等待检索与生成", progress=10)
-        raw_text, meta = run_research_prompt(prompt, _on_agent_event(job))
-        if "{" not in raw_text:
-            # Agent偶发提前结束（只输出过程性文字没有最终JSON）：同一任务重试一次
-            _update_job(job, stage=STAGE_AGENT, detail="Agent提前结束，自动重试一次",
-                        progress=max(job.get("progress") or 0, 20))
-            job["answer_chars"] = 0
-            raw_text, meta = run_research_prompt(prompt, _on_agent_event(job))
-        _update_job(job, stage=STAGE_VALIDATE, state="running", detail="结构校验与归一化", progress=96)
-
+        # Agent 失败回退本地模型时改用无工具版提示词，防止本地模型虚构查询过程与数据
+        fallback_prompt = (
+            build_prompt(bond["code"], snapshot, allow_search=False, mode=mode)
+            if allow_search else prompt
+        )
         base_for_validate = {"report": base_payload.get("report")} if base_payload and isinstance(base_payload.get("report"), dict) else None
-        parsed = None
-        warnings: list[str] = []
-        json_text = extract_json_text(raw_text)
-        try:
-            (REPORTS_DIR / f"{job['issuer_key']}.lastraw.txt").write_text(raw_text[:30000], encoding="utf-8")
-        except OSError:
-            pass
-        try:
-            parsed, warnings = validate_and_normalize(json.loads(json_text), bond, mode=mode, base=base_for_validate)
-        except ValueError:
-            parsed = None
-        if parsed is None:
-            repaired = repair_json_with_local_llm(raw_text)
-            if repaired:
-                try:
-                    parsed, warnings = validate_and_normalize(
-                        json.loads(extract_json_text(repaired)), bond, mode=mode, base=base_for_validate)
-                    warnings.append("输出已经一次格式修复")
-                except ValueError:
-                    parsed = None
-        if parsed is None:
+
+        def _save_raw() -> None:
             try:
                 (REPORTS_DIR / f"{job['issuer_key']}.lastraw.txt").write_text(raw_text[:30000], encoding="utf-8")
             except OSError:
                 pass
+
+        def _parse_text(text: str) -> tuple[dict | None, list[str], str]:
+            try:
+                parsed, warns = validate_and_normalize(
+                    parse_report_json(text), bond, mode=mode, base=base_for_validate)
+                return parsed, warns, ""
+            except ValueError as exc:
+                return None, [], str(exc)[:200]
+
+        def _metrics_short(report: dict | None) -> bool:
+            # 需求文档§13：完整研究的必填数据表 juyuan_metrics 不少于12条
+            if report is None or mode != "full":
+                return False
+            return len((report.get("details") or {}).get("juyuan_metrics") or []) < MIN_METRICS_FULL
+
+        _update_job(job, stage=STAGE_AGENT, state="running",
+                    detail="已提交公司Agent，等待检索与生成", progress=10)
+        raw_text, meta = run_research_prompt(prompt, _on_agent_event(job), fallback_prompt=fallback_prompt)
+        _save_raw()
+        _update_job(job, stage=STAGE_VALIDATE, state="running", detail="结构校验与归一化", progress=96)
+
+        parsed, warnings, parse_error = _parse_text(raw_text)
+        if _metrics_short(parsed):
+            parsed = None
+        if parsed is None:
+            # 输出无JSON/语法损坏/必填数据表不达标（含Agent把结果写成文件、正文只有
+            # 一句"见附件"的情形）：先原样重试一次Agent（重新生成通常即合法且完整），
+            # 避免直接走本地修复——修复模型压缩内容时可能丢掉整张数据表
+            _update_job(job, stage=STAGE_AGENT, detail="输出JSON或必填数据表不合格，自动重试一次",
+                        progress=max(job.get("progress") or 0, 30))
+            job["answer_chars"] = 0
+            raw_text, meta = run_research_prompt(prompt, _on_agent_event(job), fallback_prompt=fallback_prompt)
+            _save_raw()
+            _update_job(job, stage=STAGE_VALIDATE, state="running", detail="结构校验与归一化", progress=96)
+            parsed, warnings, parse_error = _parse_text(raw_text)
+            if _metrics_short(parsed):
+                warnings.append(
+                    f"juyuan_metrics仅{len(parsed['details']['juyuan_metrics'])}条，少于要求的{MIN_METRICS_FULL}条")
+        if parsed is None:
+            # 本地大模型检查-修复层：规则救活覆盖不了的结构性噪声交给本地模型。
+            # 最多两轮闭环（检查→修复→再检查）：解析失败回传新错误；解析成功但
+            # 数据表丢失/不足时也带明确反馈重修一轮（仍用原始救活文本，避免丢的
+            # 数据永久丢失）。规则层已把引号/逗号/括号类噪声修掉，模型只需处理
+            # 剩余结构问题，保真度更高。
+            repair_source = _salvage_json_text(extract_json_text(raw_text))
+            metrics_feedback = ""
+            for attempt in range(1, REPAIR_MAX_ROUNDS + 1):
+                _update_job(job, stage=STAGE_VALIDATE, state="running",
+                            detail=f"本地大模型修复JSON（第{attempt}次）", progress=97)
+                repaired = repair_json_with_local_llm(
+                    repair_source, error_hint=metrics_feedback or parse_error)
+                if not repaired:
+                    break
+                parsed, warnings, parse_error = _parse_text(repaired)
+                if parsed is not None:
+                    metrics_count = len(parsed["details"].get("juyuan_metrics") or [])
+                    if _metrics_short(parsed):
+                        if attempt < REPAIR_MAX_ROUNDS:
+                            # 修复模型丢了数据表：不采用本轮结果，带反馈基于原始文本再修一轮
+                            metrics_feedback = (
+                                f"上一轮修复丢失了juyuan_metrics数据表（仅剩{metrics_count}条，"
+                                f"要求不少于{MIN_METRICS_FULL}条）。必须从原文逐字恢复全部数据行，"
+                                "不得删减、不得概括。")
+                            parsed = None
+                            continue
+                        warnings.append(
+                            f"juyuan_metrics仅{metrics_count}条，少于要求的{MIN_METRICS_FULL}条")
+                    warnings.append(f"输出已经本地模型格式修复（第{attempt}次）")
+                    break
+                repair_source = repaired  # 下一轮基于本轮修复结果继续修
+        if parsed is None:
             raise RuntimeError("Agent输出未通过结构校验，已保留上一版结果")
 
         if mode != "full":
