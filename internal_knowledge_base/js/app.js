@@ -267,6 +267,11 @@
     return date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth();
   }
 
+  function isUploadOver15DaysAgo(report) {
+    const uploaded = new Date(report?.uploadedAt || 0);
+    return Boolean(uploaded.getTime()) && Date.now() - uploaded.getTime() > 15 * 24 * 60 * 60 * 1000;
+  }
+
   function scoreOf(rating) {
     return Number(((Number(rating.inspiration) + Number(rating.depth) + Number(rating.utility)) / 3).toFixed(1));
   }
@@ -393,7 +398,7 @@
   }
 
   function updateChrome() {
-    const pending = canRate() ? scoredReports().filter(report => canRateReport(report) && isCurrentMonthReport(report) && !userRating(report.id)).length : 0;
+    const pending = canRate() ? scoredReports().filter(report => canRateReport(report) && !isUploadOver15DaysAgo(report) && !userRating(report.id)).length : 0;
     els.pendingNavBadge.textContent = pending;
     els.pendingNavBadge.hidden = !pending;
     els.topbarDate.textContent = dateFormatter.format(new Date());
@@ -668,7 +673,7 @@
       const matchesTheme = !state.filters.theme || report.theme === state.filters.theme;
       const matchesOrg = !state.filters.org || report.org === state.filters.org;
       const rating = userRating(report.id);
-      const matchesScore = !state.filters.score || (state.filters.score === 'rated' ? Boolean(rating) : categories[report.category]?.scored && isCurrentMonthReport(report) && !rating);
+      const matchesScore = !state.filters.score || (state.filters.score === 'rated' ? Boolean(rating) : categories[report.category]?.scored && !isUploadOver15DaysAgo(report) && !rating);
       const haystack = [report.title, report.author, report.org, report.summary, ...(report.tags || [])].join(' ').toLowerCase();
       return matchesCategory && matchesTheme && matchesOrg && matchesScore && (!query || haystack.includes(query));
     }).sort((a, b) => new Date(b.uploadedAt) - new Date(a.uploadedAt));
@@ -769,7 +774,7 @@
     const typed = ['research_visit', 'roadshow'].includes(report.reportType);
     const stats = reportRatingStats(report.id);
     const mine = userRating(report.id);
-    const isCurrent = isCurrentMonthReport(report);
+    const isCurrent = !isUploadOver15DaysAgo(report);
     return `<article class="report-card ${external ? 'external-report-card' : ''}">
       <div class="report-card-top">
         ${searchResult ? searchResultTypeBadge(report) : (external || typed ? `<span class="external-badge">${reportTypeLabel(report.reportType)}</span>` : categoryPill(report.category))}
@@ -1974,8 +1979,8 @@
     }
 
     const eligible = scoredReports().filter(canRateReport);
-    const pending = eligible.filter(report => isCurrentMonthReport(report) && !userRating(report.id));
-    const historical = eligible.filter(report => !isCurrentMonthReport(report) && !userRating(report.id));
+    const pending = eligible.filter(report => !isUploadOver15DaysAgo(report) && !userRating(report.id));
+    const historical = eligible.filter(report => isUploadOver15DaysAgo(report) && !userRating(report.id));
     const completed = eligible.filter(report => userRating(report.id));
     const source = state.ratingTab === 'completed' ? completed : state.ratingTab === 'history' ? historical : pending;
     const filters = state.ratingFilters;
@@ -1994,7 +1999,7 @@
       </div>
       ${renderListControls('rating', filters, months, people)}
       <section class="rating-list">
-        ${list.map(report => ratingListItem(report)).join('') || emptyState(state.ratingTab === 'pending' ? '本月评分已完成' : state.ratingTab === 'history' ? '没有历史未评分报告' : '还没有已完成的评分', state.ratingTab === 'pending' ? '本月暂无待评分报告，可以前往评分结果查看团队反馈。' : state.ratingTab === 'history' ? '过往报告均已留下评分。' : '完成第一份深度报告评分后会显示在这里。')}
+        ${list.map(report => ratingListItem(report)).join('') || emptyState(state.ratingTab === 'pending' ? '近15天评分已完成' : state.ratingTab === 'history' ? '没有历史未评分报告' : '还没有已完成的评分', state.ratingTab === 'pending' ? '近15天内暂无待评分报告，可以前往评分结果查看团队反馈。' : state.ratingTab === 'history' ? '上传超过15天且未评分的报告会显示在这里。' : '完成第一份深度报告评分后会显示在这里。')}
       </section>`;
   }
 
