@@ -172,5 +172,68 @@ class InstitutionFlowTests(unittest.TestCase):
             self.assertEqual(result["end_date"], "2026-08-03")
 
 
+class FeatureVisibilityTests(unittest.TestCase):
+    """页内功能显隐：后台“发行人信用研究”开关（隐藏债券详查页AI面板并封禁相关API）。"""
+
+    def setUp(self):
+        self.client = portal_app.app.test_client()
+
+    def test_feature_visibility_round_trip(self):
+        import page_registry
+
+        with tempfile.TemporaryDirectory() as directory:
+            visibility_file = Path(directory) / "page_visibility.json"
+            with patch.object(page_registry, "PAGE_VISIBILITY_FILE", visibility_file):
+                self.assertTrue(page_registry.feature_visible("credit_research"))
+                page_registry.save_page_visibility(["bond_detail"], ["credit_research"])
+                self.assertTrue(page_registry.feature_visible("credit_research"))
+                # 仅保存页面显隐（旧调用路径）不得改动功能显隐
+                page_registry.save_page_visibility(["bond_detail", "ipm_tracker"])
+                self.assertTrue(page_registry.feature_visible("credit_research"))
+                self.assertTrue(page_registry.load_page_visibility()["ipm_tracker"])
+                # 后台取消勾选后功能隐藏，页面显隐不受影响
+                page_registry.save_page_visibility(["bond_detail"], [])
+                self.assertFalse(page_registry.feature_visible("credit_research"))
+                self.assertTrue(page_registry.load_page_visibility()["bond_detail"])
+
+    def test_hidden_credit_research_blocks_panel_and_api(self):
+        import page_registry
+
+        with tempfile.TemporaryDirectory() as directory:
+            visibility_file = Path(directory) / "page_visibility.json"
+            with patch.object(page_registry, "PAGE_VISIBILITY_FILE", visibility_file):
+                with self.client.session_transaction() as session:
+                    session["authenticated"] = True
+                    session["admin_authenticated"] = True
+                # 后台取消勾选“发行人信用研究”（页内功能），页面保持可见
+                response = self.client.post("/admin", data={
+                    "target": "page_visibility",
+                    "visible_pages": [page["key"] for page in page_registry.all_pages()],
+                    "visible_features": [],
+                })
+                self.assertEqual(response.status_code, 200)
+                self.assertFalse(page_registry.feature_visible("credit_research"))
+                # 债券详查页不再渲染AI研究面板
+                page = self.client.get("/bond-detail?code=102400738.IB")
+                self.assertEqual(page.status_code, 200)
+                self.assertNotIn(b'id="aiPanel"', page.data)
+                # 信用研究API被隐藏守卫拦截（防绕过前端直接调用）
+                api = self.client.get("/api/bond-credit-research/102400738.IB")
+                self.assertEqual(api.status_code, 404)
+                self.assertIn("已在后台隐藏", (api.get_json() or {}).get("error", ""))
+                start = self.client.post("/api/bond-credit-research/102400738.IB", json={"mode": "full"})
+                self.assertEqual(start.status_code, 404)
+                # 重新勾选后面板与API恢复
+                self.client.post("/admin", data={
+                    "target": "page_visibility",
+                    "visible_pages": [page["key"] for page in page_registry.all_pages()],
+                    "visible_features": ["credit_research"],
+                })
+                page2 = self.client.get("/bond-detail?code=102400738.IB")
+                self.assertIn(b'id="aiPanel"', page2.data)
+                api2 = self.client.get("/api/bond-credit-research/102400738.IB")
+                self.assertEqual(api2.status_code, 200)
+
+
 if __name__ == "__main__":
     unittest.main()

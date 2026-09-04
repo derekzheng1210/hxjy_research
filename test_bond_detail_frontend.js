@@ -1,7 +1,8 @@
 const assert = require('assert');
 const fs = require('fs');
 
-const source = fs.readFileSync('templates/bond_detail.html', 'utf8');
+// Windows 检出为 CRLF 行尾时正则里的 \n 边界会失配，统一归一为 LF
+const source = fs.readFileSync('templates/bond_detail.html', 'utf8').replace(/\r\n/g, '\n');
 const scripts = [...source.matchAll(/<script>([\s\S]*?)<\/script>/g)];
 assert(scripts.length, 'bond detail inline script is missing');
 
@@ -60,10 +61,39 @@ assert(issuerQuoteRenderer[1].includes("xAxis:{type:'category'"), 'bonds must be
 assert(issuerQuoteRenderer[1].includes("yAxis:{type:'value'"), 'quote deviation must be on the vertical BP axis');
 assert(issuerQuoteRenderer[1].includes("formatter:'0BP'"), 'the valuation baseline must be labeled 0BP');
 
+// 经纪商报价图例颜色必须与图一致：ECharts图例取series级itemStyle颜色，
+// 只设lineStyle或数据点级颜色时图例会退回默认调色板
+const bondQuoteRenderer = script.match(/function renderBondQuotes\(q,b\)\{([\s\S]*?)\nfunction renderIssuerQuotes/);
+assert(bondQuoteRenderer, 'bond quote renderer is missing');
+assert(
+  bondQuoteRenderer[1].includes("itemStyle:{color:'#d9485f'}") && bondQuoteRenderer[1].includes("lineStyle:{color:'#d9485f'}"),
+  'Bid legend marker must match the red line color',
+);
+assert(
+  bondQuoteRenderer[1].includes("itemStyle:{color:'#0f8f67'}") && bondQuoteRenderer[1].includes("lineStyle:{color:'#0f8f67'}"),
+  'Ofr legend marker must match the green line color',
+);
+assert(bondQuoteRenderer[1].includes("itemStyle:{color:'#64748b'}"), 'valuation legend marker must match the gray line color');
+assert(issuerQuoteRenderer[1].includes("itemStyle:{color:'#d9485f'}"), 'issuer Bid legend must match the red scatter color');
+assert(issuerQuoteRenderer[1].includes("itemStyle:{color:'#0f8f67'}"), 'issuer Ofr legend must match the green scatter color');
+
+// 主体财务透视表：日期式报告期须折叠为标准期（2026-06-30→2026H1），
+// 期间列按时间先后排序（年报按年末、H1/Q3按对应月），避免拆出不可比的孤立列
+const pivotRenderer = script.match(/function aiPivotMetrics\(rows,category,title\)\{([\s\S]*?)\nfunction aiEventItem/);
+assert(pivotRenderer, 'pivot metrics renderer is missing');
+assert(pivotRenderer[1].includes("mo===6") && pivotRenderer[1].includes("mo===9") && pivotRenderer[1].includes("mo===3"),
+  'date-form periods must fold into interim labels');
+assert(pivotRenderer[1].includes('Q1:3,Q2:6,H1:6,Q3:9'), 'pivot periods must sort chronologically');
+assert(pivotRenderer[1].includes("value写'—'") === false, 'placeholder rows come from data, not renderer');
+
 // 主体曲线：样本点携带债券代码，点击可切换查询债券
 assert(script.includes('[x.term,x.yield,x.name,x.code]'), 'issuer curve points must carry bond codes');
 assert(script.includes("c.on('click'"), 'issuer curve chart must register a click handler');
 assert(script.includes('loadBond(code)'), 'clicking a curve point must load that bond');
 assert(script.includes('params.seriesName===\'隐含评级曲线\''), 'rating curve points must not be clickable');
+
+// 发行人信用研究支持后台隐藏：AI面板条件渲染，aiOnBondLoaded对面板缺失做守卫
+assert(source.includes('{% if credit_research_visible %}'), 'AI research panel must be conditionally rendered');
+assert(script.includes("if(!document.getElementById('aiPanel'))return"), 'aiOnBondLoaded must no-op when panel is hidden');
 
 console.log('bond detail chart lifecycle: ok');

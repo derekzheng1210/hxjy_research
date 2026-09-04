@@ -58,8 +58,24 @@ PAGE_SECTIONS = (
 )
 
 
+# 页内功能：嵌在页面内的子模块（无独立首页入口），由后台单独控制显隐；
+# 与页面显隐共用一个配置文件，各自的键互不干扰
+PAGE_FEATURES = (
+    {
+        "key": "credit_research",
+        "title": "发行人信用研究",
+        "description": "债券详查页内的AI Agent信用研究面板",
+        "page_key": "bond_detail",
+    },
+)
+
+
 def all_pages() -> list[dict]:
     return [dict(page, section=section["title"]) for section in PAGE_SECTIONS for page in section["pages"]]
+
+
+def all_features() -> list[dict]:
+    return [dict(feature) for feature in PAGE_FEATURES]
 
 
 def load_page_visibility() -> dict[str, bool]:
@@ -76,9 +92,33 @@ def load_page_visibility() -> dict[str, bool]:
     return defaults
 
 
-def save_page_visibility(visible_keys) -> dict[str, bool]:
+def load_feature_visibility() -> dict[str, bool]:
+    defaults = {feature["key"]: True for feature in PAGE_FEATURES}
+    try:
+        raw = json.loads(PAGE_VISIBILITY_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return defaults
+    if not isinstance(raw, dict):
+        return defaults
+    for key in defaults:
+        if key in raw:
+            defaults[key] = bool(raw[key])
+    return defaults
+
+
+def feature_visible(key: str) -> bool:
+    return load_feature_visibility().get(key, True)
+
+
+def save_page_visibility(visible_keys, visible_features=None) -> dict[str, bool]:
     selected = {str(key) for key in visible_keys}
     payload = {page["key"]: page["key"] in selected for page in all_pages()}
+    if visible_features is None:
+        # 未提交功能勾选（兼容仅保存页面显隐的旧调用）时，保留现有功能显隐
+        payload.update(load_feature_visibility())
+    else:
+        chosen = {str(key) for key in visible_features}
+        payload.update({feature["key"]: feature["key"] in chosen for feature in PAGE_FEATURES})
     PAGE_VISIBILITY_FILE.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_name = tempfile.mkstemp(prefix=".page-visibility-", suffix=".json", dir=PAGE_VISIBILITY_FILE.parent)
     try:

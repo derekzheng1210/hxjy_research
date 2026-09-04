@@ -85,8 +85,8 @@ button.ghost{background:#eef2ff;color:#3730a3;font-weight:700;padding:0 10px;hei
 
     <form class="card wide" method="post">
       <input type="hidden" name="target" value="page_visibility">
-      <h2>页面显隐管理</h2>
-      <p>取消勾选后，该页面会从首页和统一导航隐藏；重新勾选即可恢复，设置保存后即时生效。</p>
+      <h2>页面与功能显隐管理</h2>
+      <p>取消勾选后，该页面会从首页和统一导航隐藏；页内功能只隐藏对应模块，不影响所在页面；重新勾选即可恢复，设置保存后即时生效。</p>
       <div class="visibility-sections">
         {% for section in page_sections %}
         <div class="visibility-section">
@@ -96,6 +96,12 @@ button.ghost{background:#eef2ff;color:#3730a3;font-weight:700;padding:0 10px;hei
           {% endfor %}
         </div>
         {% endfor %}
+        <div class="visibility-section">
+          <h3>页内功能</h3>
+          {% for feature in page_features %}
+          <label><input type="checkbox" name="visible_features" value="{{ feature.key }}" {% if feature_visibility.get(feature.key, true) %}checked{% endif %}>{{ feature.title }}<small style="color:#64748b">（{{ feature.description }}）</small></label>
+          {% endfor %}
+        </div>
       </div>
       <div class="actions"><button type="submit">保存页面显隐设置</button></div>
     </form>

@@ -50,7 +50,14 @@ from interest_bond import settings as interest_bond_settings
 from interest_bond.bond_switch import db as interest_bond_switch_db
 from interest_bond.issuance import database as interest_issuance_db
 from interest_bond.spread import db as interest_spread_db
-from page_registry import PAGE_SECTIONS, load_page_visibility, save_page_visibility, visible_sections
+from page_registry import (
+    PAGE_FEATURES,
+    PAGE_SECTIONS,
+    load_feature_visibility,
+    load_page_visibility,
+    save_page_visibility,
+    visible_sections,
+)
 import institution_flow_config
 import institution_flow_data
 from bond_detail import build_bond_detail, search_bonds
@@ -692,8 +699,14 @@ def save_upload(file_storage, destination: Path, allowed_exts, backup_key: str) 
         if destination.exists():
             # 部分机器 datetime.now() 微秒粒度只有几毫秒，连续上传会产生同名备份
             # 互相覆盖；改用纳秒尾数避免碰撞，同时保持文件名按时间排序。
+            # Windows下 time_ns() 时钟粒度约15ms，同一粒度内纳秒也可能相同：
+            # 同名时追加递增尾数兜底（追加名排序在其基础名之后，不影响时间序）。
             timestamp = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{time.time_ns() % 1_000_000_000:09d}"
             backup_path = UPLOADS_DIR / f"{backup_key}_backup_{timestamp}{destination.suffix}"
+            bump = 0
+            while backup_path.exists():
+                bump += 1
+                backup_path = UPLOADS_DIR / f"{backup_key}_backup_{timestamp}_{bump}{destination.suffix}"
             shutil.copy2(destination, backup_path)
             backup_created = True
         os.replace(staged, destination)
@@ -774,6 +787,7 @@ def bond_detail():
         "bond_detail.html",
         "bond_detail",
         initial_code=str(request.args.get("code") or "").strip(),
+        credit_research_visible=load_feature_visibility().get("credit_research", True),
     )
 
 
@@ -811,10 +825,20 @@ def api_bond_detail(code):
     return response
 
 
+def _credit_research_disabled() -> tuple | None:
+    """后台隐藏“发行人信用研究”后，相关接口一律不可用（防止绕过前端直接调API）。"""
+    if not load_feature_visibility().get("credit_research", True):
+        return jsonify({"error": "发行人信用研究功能已在后台隐藏，如需使用请联系管理员开启"}), 404
+    return None
+
+
 @app.route("/api/bond-credit-research/<path:code>", methods=["GET"])
 @login_required
 def api_credit_research_get(code):
     """读取发行人信用研究：命中缓存返回报告，否则返回空态。"""
+    disabled = _credit_research_disabled()
+    if disabled:
+        return disabled
     try:
         bond = credit_research.resolve_bond(code)
     except Exception as exc:  # noqa: BLE001
@@ -862,6 +886,9 @@ def api_credit_research_get(code):
 @login_required
 def api_credit_research_start(code):
     """点击“生成发行人信用研究”：提交预设任务（后台执行，前端轮询进度）。"""
+    disabled = _credit_research_disabled()
+    if disabled:
+        return disabled
     try:
         bond = credit_research.resolve_bond(code)
     except Exception as exc:  # noqa: BLE001
@@ -885,6 +912,9 @@ def api_credit_research_start(code):
 @app.route("/api/bond-credit-research/job/<job_id>", methods=["GET"])
 @login_required
 def api_credit_research_job(job_id):
+    disabled = _credit_research_disabled()
+    if disabled:
+        return disabled
     job = credit_research.get_job_by_id(job_id)
     if not job:
         return jsonify({"error": "任务不存在或已清理"}), 404
@@ -895,6 +925,9 @@ def api_credit_research_job(job_id):
 @login_required
 def api_credit_research_override(code):
     """人工覆盖主体分类（保留自动分类与审计记录）。"""
+    disabled = _credit_research_disabled()
+    if disabled:
+        return disabled
     payload = request.get_json(silent=True) or {}
     new_type = str(payload.get("type") or "").strip()
     note = str(payload.get("note") or "").strip()
@@ -1228,7 +1261,10 @@ def admin():
     if request.method == "POST":
         target = request.form.get("target", "")
         if target == "page_visibility":
-            save_page_visibility(request.form.getlist("visible_pages"))
+            save_page_visibility(
+                request.form.getlist("visible_pages"),
+                request.form.getlist("visible_features"),
+            )
             message = "页面显隐设置已保存并即时生效。"
         else:
             file = request.files.get("file")
@@ -1264,6 +1300,8 @@ def admin():
         error=error,
         page_sections=PAGE_SECTIONS,
         page_visibility=load_page_visibility(),
+        page_features=PAGE_FEATURES,
+        feature_visibility=load_feature_visibility(),
     )
 
 
