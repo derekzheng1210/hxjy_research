@@ -53,7 +53,7 @@ body{margin:0;background:var(--canvas);color:var(--ink);font-family:-apple-syste
         <h3>{{ page.title }}</h3>
         <p>{{ page.description }}</p>
         <div class="meta">
-          {% if page.meta_key %}数据更新：{{ info.get('updated', '-') }}{% else %}团队研究协同与知识沉淀{% endif %}
+          {% if page.meta_key %}数据更新：{{ info.get('data_updated') or info.get('updated', '-') }}{% else %}团队研究协同与知识沉淀{% endif %}
         </div>
       </a>
       {% endfor %}

@@ -27,6 +27,13 @@ BROKER_TIMES = (
     time(15, 0), time(15, 30), time(16, 0),
 )
 DAILY_TIME = time(8, 30)
+# 8:30 每日任务覆盖除利率债三模块（已有各自调度器）外的全部自动数据模块，
+# bond_picker 排首位保证择券工具数据最先就绪；与经纪商抓取共用任务锁，
+# 若全量更新超过 1 小时会顺延（不会丢失）9:30 首次抓取。
+DAILY_MODULES = (
+    "bond_picker", "spread_monitor", "strategy_dashboard",
+    "credit_std_dev", "institution_flow_rates",
+)
 STALE_GRACE = timedelta(minutes=15)
 RETRY_DELAYS = (300, 300)
 # 计划内经纪商抓取的随机错峰区间（秒）：真人不会每次都在整点/半点准点刷新，
@@ -34,6 +41,21 @@ RETRY_DELAYS = (300, 300)
 SCHEDULED_JITTER_RANGE = (10, 75)
 
 _scheduler = None
+
+
+def run_daily_data_update() -> dict:
+    """每日全量数据更新：标准模块 + 一级发行定价缓存。
+
+    利率债三模块（超长端利差/新老券利差/国债地方债发行）有各自的
+    调度器，不在此重复执行。
+    """
+    from juyuan_update.generators import run_all
+
+    results = run_all(modules=list(DAILY_MODULES))
+    from primary_market_pricing.cache_builder import build_cache_once
+
+    results["primary_market_pricing"] = build_cache_once()
+    return results
 
 
 def _empty_item() -> dict:
@@ -261,8 +283,7 @@ class BondTradingScheduler:
                     from .fetcher import fetch_and_save_latest
                     runner = fetch_and_save_latest
                 else:
-                    from juyuan_update.generators import run_all
-                    runner = lambda: run_all(modules=["bond_picker"])
+                    runner = run_daily_data_update
                 result = runner()
                 if kind == "broker" and isinstance(result, dict):
                     try:

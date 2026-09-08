@@ -18,7 +18,7 @@ from openpyxl import Workbook
 
 
 class BrokerMarketStorageTests(unittest.TestCase):
-    def test_quote_history_retains_last_ten_trading_days(self):
+    def test_quote_history_retains_all_trading_days(self):
         snapshot_target = Path.cwd() / ".test-history-latest.json"
         history_dir = Path.cwd() / ".test-quote-history"
         shutil.rmtree(history_dir, ignore_errors=True)
@@ -34,13 +34,13 @@ class BrokerMarketStorageTests(unittest.TestCase):
                         )
                 names = storage.list_quote_history()
                 days = sorted({name[:8] for name in names})
-                # 只保留最近 10 个有数据的交易日（第 3~12 天），每天 2 个时点快照
-                self.assertEqual(len(days), storage.QUOTE_HISTORY_TRADING_DAYS)
-                self.assertEqual(days[0], "20260803")
+                # 历史快照永久保留：12 个交易日全部留存，每天 2 个时点快照
+                self.assertEqual(len(days), 12)
+                self.assertEqual(days[0], "20260801")
                 self.assertEqual(days[-1], "20260812")
-                self.assertEqual(len(names), 20)
+                self.assertEqual(len(names), 24)
                 self.assertEqual(names, sorted(names))
-                # 最新快照不受历史清理影响
+                # 最新快照不受历史写入影响
                 self.assertTrue(snapshot_target.exists())
         finally:
             shutil.rmtree(history_dir, ignore_errors=True)

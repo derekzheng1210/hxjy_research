@@ -215,7 +215,7 @@ def format_date_only(value):
     if not value:
         return ""
     text = str(value).strip()
-    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y/%m/%d %H:%M:%S", "%Y-%m-%d", "%Y/%m/%d"):
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y/%m/%d %H:%M:%S", "%Y-%m-%d", "%Y/%m/%d", "%Y%m%d"):
         try:
             return datetime.strptime(text[:19], fmt).strftime("%Y - %m - %d")
         except ValueError:
@@ -287,7 +287,7 @@ def load_bond_data():
     if not juyuan_config.BOND_STATIC_JSON.exists():
         BONDS_CACHE = []
         DATA_TIMESTAMP = "数据文件未找到"
-        return
+        return False
     try:
         bonds, data_date = read_excel()
         BONDS_CACHE = merge_bond_rows(bonds)
@@ -313,9 +313,75 @@ def load_bond_data():
                 verdict = [result["status"], result["reason"]]
             row.append(verdict)
         DATA_TIMESTAMP = format_date_only(data_date) or file_updated(juyuan_config.BOND_STATIC_JSON)
+        return True
     except Exception as exc:
         BONDS_CACHE = []
         DATA_TIMESTAMP = f"读取失败: {exc}"
+        return False
+
+
+# 择券数据按数据版本缓存：bond_picker_data_version() 是全部输入文件
+# mtime+size 的哈希，版本不变时免掉每次请求的 deepcopy 全量债券池、
+# 报价合并、逐行630合规判定与整页 json.dumps。缓存对象整体重绑
+# （单条全局赋值原子），读侧拿到的一定是自洽的一份快照。
+_picker_cache_lock = threading.Lock()
+_picker_data_cache: dict = {"version": None, "bonds": None, "timestamp": ""}
+_picker_payload_cache: dict = {
+    "version": None, "bonds": None, "timestamp": "", "meta": None,
+    "bonds_json": "[]", "meta_json": "{}", "api_json": "",
+}
+
+
+def _ensure_bond_data_locked(version: str) -> tuple[list, str, bool]:
+    """确保全局 BONDS_CACHE/DATA_TIMESTAMP 与 version 对应（调用方持锁）。"""
+    global _picker_data_cache
+    cached = _picker_data_cache
+    if cached["version"] == version and cached["bonds"] is not None:
+        return cached["bonds"], cached["timestamp"], True
+    ok = load_bond_data()
+    if ok:
+        _picker_data_cache = {
+            "version": version, "bonds": BONDS_CACHE, "timestamp": DATA_TIMESTAMP,
+        }
+    # 读取失败不缓存，让后续请求继续重试轻量失败路径
+    return BONDS_CACHE, DATA_TIMESTAMP, ok
+
+
+def get_bond_picker_data() -> tuple[list, str]:
+    version = bond_picker_data_version()
+    cached = _picker_data_cache
+    if cached["version"] == version and cached["bonds"] is not None:
+        return cached["bonds"], cached["timestamp"]
+    with _picker_cache_lock:
+        bonds, timestamp, _ok = _ensure_bond_data_locked(version)
+        return bonds, timestamp
+
+
+def get_picker_payload() -> dict:
+    """择券整页数据（行数据/meta/序列化JSON/接口响应体）按数据版本缓存。"""
+    global _picker_payload_cache
+    version = bond_picker_data_version()
+    cached = _picker_payload_cache
+    if cached["version"] == version and cached["meta"] is not None:
+        return cached
+    with _picker_cache_lock:
+        cached = _picker_payload_cache
+        if cached["version"] == version and cached["meta"] is not None:
+            return cached
+        bonds, timestamp, ok = _ensure_bond_data_locked(version)
+        meta = bond_picker_market_meta(include_emotion=True)
+        bonds_json = json.dumps(bonds, ensure_ascii=False)
+        meta_json = json.dumps(meta, ensure_ascii=False)
+        api_json = json.dumps(
+            {"version": version, "bonds": bonds, "meta": meta}, ensure_ascii=False
+        )
+        payload = {
+            "version": version, "bonds": bonds, "timestamp": timestamp, "meta": meta,
+            "bonds_json": bonds_json, "meta_json": meta_json, "api_json": api_json,
+        }
+        if ok:
+            _picker_payload_cache = payload
+        return payload
 
 
 def rating_compliance_status():
@@ -354,14 +420,15 @@ def portal_data_status():
 
 
 def status_info():
-    load_bond_data()
+    bonds, _timestamp = get_bond_picker_data()
     static_payload = load_bond_static()
     reconciliation = load_oracle_reconciliation()
     broker_snapshot = load_broker_snapshot()
     return {
         "bond_picker": {
-            "updated": DATA_TIMESTAMP,
-            "total": f"{len(BONDS_CACHE):,}",
+            # 首页口径与其他工具一致：数据文件的更新时间，而非中债估值所属交易日
+            "updated": file_updated(juyuan_config.BOND_PICKER_YIELDS_CACHE),
+            "total": f"{len(bonds):,}",
         },
         "rating_compliance": rating_compliance_status(),
         "portal_data": portal_data_status(),
@@ -948,34 +1015,30 @@ def api_credit_research_override(code):
 @app.route("/bond-picker")
 @login_required
 def bond_picker():
-    load_bond_data()
-    market_meta = bond_picker_market_meta(include_emotion=True)
-    version = bond_picker_data_version()
+    payload = get_picker_payload()
     return render_portal_template(
         "bond_picker.html",
         "bond_picker",
-        bond_data=json.dumps(BONDS_CACHE, ensure_ascii=False),
-        market_meta=json.dumps(market_meta, ensure_ascii=False),
-        data_version=version,
-        timestamp=DATA_TIMESTAMP,
-        total=len(BONDS_CACHE),
+        bond_data=payload["bonds_json"],
+        market_meta=payload["meta_json"],
+        data_version=payload["version"],
+        timestamp=payload["timestamp"],
+        total=len(payload["bonds"]),
     )
 
 
 @app.route("/secondary-bond-picker")
 @login_required
 def secondary_bond_picker():
-    load_bond_data()
-    market_meta = bond_picker_market_meta(include_emotion=True)
-    version = bond_picker_data_version()
+    payload = get_picker_payload()
     return render_portal_template(
         "secondary_bond_picker.html",
         "secondary_bond_picker",
-        bond_data=json.dumps(BONDS_CACHE, ensure_ascii=False),
-        market_meta=json.dumps(market_meta, ensure_ascii=False),
-        data_version=version,
-        timestamp=DATA_TIMESTAMP,
-        total=len(BONDS_CACHE),
+        bond_data=payload["bonds_json"],
+        market_meta=payload["meta_json"],
+        data_version=payload["version"],
+        timestamp=payload["timestamp"],
+        total=len(payload["bonds"]),
     )
 
 
@@ -1052,12 +1115,8 @@ def api_bond_picker_data():
         response = Response(status=304)
         response.set_etag(version)
         return response
-    load_bond_data()
-    response = jsonify({
-        "version": version,
-        "bonds": BONDS_CACHE,
-        "meta": bond_picker_market_meta(),
-    })
+    payload = get_picker_payload()
+    response = Response(payload["api_json"], mimetype="application/json")
     response.set_etag(version)
     response.headers["Cache-Control"] = "private, no-cache"
     return response

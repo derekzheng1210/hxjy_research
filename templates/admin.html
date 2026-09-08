@@ -114,7 +114,7 @@ button.ghost{background:#eef2ff;color:#3730a3;font-weight:700;padding:0 10px;hei
         <tbody>
           <tr>
             <td>Oracle 债券池</td>
-            <td><span class="mode mode-db">一键更新</span></td>
+            <td><span class="mode mode-db">每日定时 / 一键更新</span></td>
             <td>数据日 {{ status.oracle_bonds.as_of }}<br><span style="color:#6b7280">生成 {{ status.oracle_bonds.updated }}</span></td>
             <td>当前 {{ status.oracle_bonds.total }} 只；来源 {{ status.oracle_bonds.source }}
               {% if status.oracle_bonds.review_required %}<br><span class="badge-warn">候选池差异超阈值待核对：旧 {{ status.oracle_bonds.comparison.old_total }} / 新 {{ status.oracle_bonds.comparison.new_total }} / 旧独有 {{ status.oracle_bonds.comparison.old_only }} / 新增 {{ status.oracle_bonds.comparison.new_only }}</span>{% endif %}
@@ -122,13 +122,13 @@ button.ghost{background:#eef2ff;color:#3730a3;font-weight:700;padding:0 10px;hei
           </tr>
           <tr>
             <td>择券工具估值</td>
-            <td><span class="mode mode-db">一键更新</span></td>
+            <td><span class="mode mode-db">每日定时 / 一键更新</span></td>
             <td>{{ status.bond_picker.updated }}</td>
             <td>{{ status.bond_picker.total }} 条（中债估值缓存）</td>
           </tr>
           <tr>
             <td>合规630评级缓存</td>
-            <td><span class="mode mode-db">一键更新</span></td>
+            <td><span class="mode mode-db">每日定时 / 一键更新</span></td>
             <td>{{ status.rating_compliance.updated }}<br><span style="color:#6b7280">判定基准日 {{ status.rating_compliance.as_of or '-' }}</span></td>
             <td>
               {% if status.rating_compliance.missing %}
@@ -162,7 +162,7 @@ button.ghost{background:#eef2ff;color:#3730a3;font-weight:700;padding:0 10px;hei
           </tr>
           <tr>
             <td>利差监控</td>
-            <td><span class="mode mode-db">一键更新</span></td>
+            <td><span class="mode mode-db">每日定时 / 一键更新</span></td>
             <td>{{ status.spread_monitor.updated }}</td>
             <td>{{ status.spread_monitor.size }}</td>
           </tr>
@@ -186,7 +186,7 @@ button.ghost{background:#eef2ff;color:#3730a3;font-weight:700;padding:0 10px;hei
           </tr>
           <tr>
             <td>信用骑乘策略</td>
-            <td><span class="mode mode-db">一键更新</span></td>
+            <td><span class="mode mode-db">每日定时 / 一键更新</span></td>
             <td>{{ status.strategy_dashboard.updated }}</td>
             <td>{{ status.strategy_dashboard.size }}</td>
           </tr>
@@ -198,19 +198,19 @@ button.ghost{background:#eef2ff;color:#3730a3;font-weight:700;padding:0 10px;hei
           </tr>
           <tr>
             <td>两倍标准差</td>
-            <td><span class="mode mode-db">一键更新</span></td>
+            <td><span class="mode mode-db">每日定时 / 一键更新</span></td>
             <td>{{ status.credit_std_dev.data_updated }}</td>
             <td>数据 {{ status.credit_std_dev.data_size }}；页面 {{ status.credit_std_dev.updated }}</td>
           </tr>
           <tr>
             <td>机构行为曲线</td>
-            <td><span class="mode mode-db">一键更新</span></td>
+            <td><span class="mode mode-db">每日定时 / 一键更新</span></td>
             <td>{{ status.institution_flow.updated }}</td>
             <td>{{ status.institution_flow.size }}</td>
           </tr>
           <tr>
             <td>一级发行定价缓存</td>
-            <td><span class="mode mode-db">一键更新</span></td>
+            <td><span class="mode mode-db">每日定时 / 一键更新</span></td>
             <td>{{ status.primary_market_pricing.updated }}</td>
             <td>{{ status.primary_market_pricing.size }}</td>
           </tr>

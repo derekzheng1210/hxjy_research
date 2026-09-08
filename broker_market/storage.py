@@ -24,9 +24,8 @@ LOCK_PATH = MARKET_DIR / "scheduler.lock"
 
 OUTLIER_THRESHOLD_BP = 30.0
 EMOTION_HISTORY_TRADING_DAYS = 60
-# 经纪商报价历史快照保留窗口：盘中每个成功抓取时点独立留存，
-# 超出最近 QUOTE_HISTORY_TRADING_DAYS 个有数据交易日的快照自动清理。
-QUOTE_HISTORY_TRADING_DAYS = 10
+# 经纪商报价历史快照（history/）永久保留：文件按抓取时刻命名、同刻覆盖去重，
+# 基准选择按文件名索引进行（见 _prior_snapshot_index），不会随历史增长变慢。
 
 BASE_FIELD_COUNT = 11
 MARKET_FIELDS = (
@@ -107,11 +106,31 @@ def atomic_write_json(path: Path, payload: Any) -> None:
         raise
 
 
+_json_cache: dict[Path, tuple[float, float, object]] = {}
+
+
 def load_json(path: Path, default: Any) -> Any:
+    """Read and parse *path* as JSON, memoised by (mtime, size).
+
+    latest_snapshot.json 有数 MB 且单次请求内会被读取多次，历史基准
+    快照也依赖本函数；写入走 ``atomic_write_json``（临时文件 + 替换），
+    mtime/size 变化后缓存自动失效。
+    """
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (FileNotFoundError, OSError, UnicodeDecodeError, json.JSONDecodeError):
+        stat = path.stat()
+    except OSError:
+        _json_cache.pop(path, None)
         return default
+    cached = _json_cache.get(path)
+    if cached and cached[0] == stat.st_mtime and cached[1] == stat.st_size:
+        return cached[2]
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        _json_cache.pop(path, None)
+        return default
+    _json_cache[path] = (stat.st_mtime, stat.st_size, payload)
+    return payload
 
 
 def normalize_code(value: Any) -> str:
@@ -202,7 +221,7 @@ def save_snapshot(rows: Iterable[dict[str, Any]], generated_at: datetime | None 
 
 
 def _save_history_snapshot(payload: dict[str, Any]) -> None:
-    """按抓取时刻把快照另存到 history/，并清理超出保留窗口的旧文件。
+    """按抓取时刻把快照另存到 history/，同刻快照按文件名覆盖去重，永久保留。
 
     历史留存属于附属数据：写入失败不影响最新快照与本次任务结果。
     """
@@ -214,22 +233,8 @@ def _save_history_snapshot(payload: dict[str, Any]) -> None:
             observed = datetime.now()
         name = observed.strftime("%Y%m%d_%H%M%S") + ".json"
         atomic_write_json(HISTORY_DIR / name, payload)
-        _prune_quote_history()
     except OSError:
         pass
-
-
-def _prune_quote_history() -> None:
-    files = sorted(HISTORY_DIR.glob("????????_??????.json"))
-    days: list[str] = []
-    for path in reversed(files):
-        day = path.name[:8]
-        if day not in days:
-            days.append(day)
-    keep = set(days[:QUOTE_HISTORY_TRADING_DAYS])
-    for path in files:
-        if path.name[:8] not in keep:
-            path.unlink(missing_ok=True)
 
 
 def list_quote_history() -> list[str]:
@@ -320,43 +325,65 @@ def _clean_offer_yield(quote: dict[str, Any] | None, valuation_yield: float | No
     return ofr
 
 
-def _prior_quote_snapshots(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
-    """Complete snapshots before the current one, ordered by observation time."""
-    current_at = str(snapshot.get("generated_at") or "")
-    candidates: list[tuple[str, dict[str, Any]]] = []
+def _history_filename_to_at(name: str) -> str:
+    """history 文件名 YYYYMMDD_HHMMSS.json 反解为 generated_at 文本。
+
+    写入时文件名由 generated_at 生成且同刻覆盖，二者一一对应。
+    """
+    try:
+        return datetime.strptime(name[:15], "%Y%m%d_%H%M%S").strftime("%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return ""
+
+
+def _prior_snapshot_index(current_at: str) -> list[tuple[str, Path]]:
+    """早于当前快照的历史条目索引：(generated_at, 路径)，按时刻升序。
+
+    只读文件名不加载内容——历史快照永久保留后数量无上限，
+    基准选择必须避免全量解析（每个文件数 MB）。
+    """
     if not current_at:
         return []
-    for path in list_quote_history():
-        payload = load_json(HISTORY_DIR / path, {})
-        observed_at = str(payload.get("generated_at") or "")
-        if not observed_at or observed_at >= current_at:
-            continue
-        candidates.append((observed_at, payload))
-    return [payload for _observed_at, payload in sorted(candidates, key=lambda item: item[0])]
+    entries: list[tuple[str, Path]] = []
+    for name in list_quote_history():
+        observed_at = _history_filename_to_at(name)
+        if observed_at and observed_at < current_at:
+            entries.append((observed_at, HISTORY_DIR / name))
+    entries.sort(key=lambda item: item[0])
+    return entries
 
 
 def _select_ofr_baseline(
     snapshot: dict[str, Any], comparison_mode: str, custom_baseline_at: str
 ) -> tuple[dict[str, Any] | None, list[dict[str, str]]]:
-    prior = _prior_quote_snapshots(snapshot)
-    choices = [{"at": str(item.get("generated_at") or "")} for item in prior]
-    if not prior:
+    current_at = str(snapshot.get("generated_at") or "")
+    index = _prior_snapshot_index(current_at)
+    choices = [{"at": at} for at, _path in index]
+    if not index:
         return None, choices
+    target_at: str | None = None
     if comparison_mode == "previous_snapshot":
-        return prior[-1], choices
-    current_day = str(snapshot.get("generated_at") or "")[:10]
-    if comparison_mode == "today_open":
-        matches = [item for item in prior if str(item.get("generated_at") or "")[:10] == current_day]
-        return (matches[0] if matches else None), choices
-    previous_days = sorted({str(item.get("generated_at") or "")[:10] for item in prior if str(item.get("generated_at") or "")[:10] < current_day})
-    if comparison_mode in {"previous_day_close", "previous_day_open"}:
-        if not previous_days:
-            return None, choices
-        matches = [item for item in prior if str(item.get("generated_at") or "")[:10] == previous_days[-1]]
-        return (matches[-1] if comparison_mode == "previous_day_close" else matches[0]), choices
-    if comparison_mode == "custom":
-        return next((item for item in prior if str(item.get("generated_at") or "") == custom_baseline_at), None), choices
-    return None, choices
+        target_at = index[-1][0]
+    elif comparison_mode == "today_open":
+        current_day = current_at[:10]
+        target_at = next((at for at, _path in index if at[:10] == current_day), None)
+    elif comparison_mode in {"previous_day_close", "previous_day_open"}:
+        previous_days = sorted({at[:10] for at, _path in index if at[:10] < current_at[:10]})
+        if previous_days:
+            day = previous_days[-1]
+            matches = [at for at, _path in index if at[:10] == day]
+            target_at = matches[-1] if comparison_mode == "previous_day_close" else matches[0]
+    elif comparison_mode == "custom":
+        if any(at == custom_baseline_at for at, _path in index):
+            target_at = custom_baseline_at
+    if target_at is None:
+        return None, choices
+    # 只加载选中的那一个基准文件
+    path = next(path for at, path in index if at == target_at)
+    payload = load_json(path, {})
+    if not payload.get("generated_at"):
+        return None, choices
+    return payload, choices
 
 
 def calculate_ofr_movers(
