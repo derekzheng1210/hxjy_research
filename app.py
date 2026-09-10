@@ -60,7 +60,7 @@ from page_registry import (
 )
 import institution_flow_config
 import institution_flow_data
-from bond_detail import build_bond_detail, search_bonds
+from bond_detail import build_bond_detail, build_quote_history, search_bonds
 from bond_detail import credit_research
 from bond_detail import meso as credit_meso
 from broker_market import (
@@ -886,6 +886,31 @@ def api_bond_detail(code):
         return jsonify({"error": str(exc)}), 422
     except Exception as exc:
         return jsonify({"error": f"债券诊断加载失败: {str(exc)[:240]}"}), 500
+    response = jsonify(payload)
+    response.set_etag(payload["version"])
+    response.headers["Cache-Control"] = "private, no-cache"
+    return response
+
+
+@app.route("/api/bond-quote-history/<path:code>")
+@login_required
+def api_bond_quote_history(code):
+    try:
+        days_raw = str(request.args.get("days") or "").strip()
+        start = str(request.args.get("start") or "").strip()
+        end = str(request.args.get("end") or "").strip()
+        payload = build_quote_history(
+            code,
+            days=int(days_raw) if days_raw else None,
+            start=start or None,
+            end=end or None,
+        )
+    except KeyError as exc:
+        return jsonify({"error": str(exc).strip("'")}), 404
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 422
+    except Exception as exc:
+        return jsonify({"error": f"报价历史加载失败: {str(exc)[:240]}"}), 500
     response = jsonify(payload)
     response.set_etag(payload["version"])
     response.headers["Cache-Control"] = "private, no-cache"

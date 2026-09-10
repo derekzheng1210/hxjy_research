@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import os
+import tempfile
 import time
 import unittest
 from concurrent.futures import ThreadPoolExecutor
@@ -316,6 +318,25 @@ class BondDetailRouteTests(unittest.TestCase):
             "T.IB", exclude_exchange_tech=False, horizon_months=6
         )
 
+    def test_quote_history_route_returns_payload_with_etag(self):
+        payload = {"version": "qh123", "days": []}
+        with patch.object(portal_app, "build_quote_history", return_value=payload) as builder:
+            response = self.client.get("/api/bond-quote-history/T.IB?days=5")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_etag()[0], "qh123")
+        builder.assert_called_once_with("T.IB", days=5, start=None, end=None)
+
+    def test_quote_history_route_maps_parameter_and_not_found_errors(self):
+        with patch.object(portal_app, "build_quote_history", side_effect=ValueError("天数仅支持1至30天")):
+            response = self.client.get("/api/bond-quote-history/T.IB?days=31")
+        self.assertEqual(response.status_code, 422)
+        self.assertIn("天数", response.get_json()["error"])
+        response = self.client.get("/api/bond-quote-history/T.IB?days=abc")
+        self.assertEqual(response.status_code, 422)
+        with patch.object(portal_app, "build_quote_history", side_effect=KeyError("未找到该债券")):
+            response = self.client.get("/api/bond-quote-history/UNKNOWN.IB")
+        self.assertEqual(response.status_code, 404)
+
 
 class BondDetailPerformanceCacheTests(unittest.TestCase):
     def setUp(self):
@@ -401,6 +422,218 @@ class BondDetailPerformanceCacheTests(unittest.TestCase):
         self.assertEqual([path.name for path in paths], [
             "20260903_090000.json", "20260902_153000.json", "20260901_150000.json",
         ])
+
+
+class QuoteHistoryTests(unittest.TestCase):
+    """本券报价历史：全部盘中时点、逐日上一交易日估值、增量缓存与参数校验。"""
+
+    def setUp(self):
+        bond_service._reset_detail_caches_for_test()
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.history_dir = Path(self._tmp.name)
+        self._names: list[str] = []
+        self.bond = {"code": "T.IB", "name": "测试债", "issuer": "测试发行人", "term": 2.0}
+        self.spread_cache: dict[str, dict] = {}
+
+    def _write_snapshot(self, name: str, rows: list[dict], *, pretty: bool = False):
+        payload = {
+            "version": name, "generated_at": bond_service._history_name_to_at(name),
+            "quote_count": len(rows), "quotes": rows,
+        }
+        with (self.history_dir / name).open("w", encoding="utf-8", newline="\n") as stream:
+            if pretty:
+                json.dump(payload, stream, ensure_ascii=False)
+            else:
+                json.dump(payload, stream, ensure_ascii=False, separators=(",", ":"))
+        if name not in self._names:
+            self._names.append(name)
+            self._names.sort()
+
+    def _quote_row(self, code: str = "T.IB", bid=2.0, ofr=2.05):
+        return {
+            "code": code, "name": "测试债", "bid_yield": bid, "ofr_yield": ofr,
+            "bid_volume_value": 1000.0, "ofr_volume_value": 2000.0,
+            "bid_volume_text": "1000", "ofr_volume_text": "2000",
+            "bid_broker": "国利", "ofr_broker": "平安",
+            "bid_time": "09:30", "ofr_time": "09:31", "quote_time": "09:31",
+            "has_bid": True, "has_offer": True, "two_sided": True,
+        }
+
+    def _patches(self):
+        return (
+            patch.object(bond_service, "list_quote_history", return_value=list(self._names)),
+            patch.object(bond_service, "HISTORY_DIR", self.history_dir),
+            patch.object(bond_service, "_bond_indexes", return_value=([], {"T.IB": self.bond, "T": self.bond}, {})),
+            patch.object(bond_service, "_get_spread_model", return_value={"history_cache": self.spread_cache}),
+        )
+
+    def _build(self, **kwargs):
+        patch_days, patch_dir, patch_bonds, patch_spread = self._patches()
+        with patch_days, patch_dir, patch_bonds, patch_spread:
+            return bond_service.build_quote_history("T.IB", **kwargs)
+
+    def test_days_preset_returns_all_intraday_points_from_old_to_new(self):
+        self.spread_cache = {"20260908": {"T": {"yield": 2.0}}}
+        self._write_snapshot("20260909_093000.json", [self._quote_row(bid=2.0, ofr=2.05)])
+        self._write_snapshot("20260909_150000.json", [self._quote_row(bid=2.02, ofr=2.06)])
+        self._write_snapshot("20260910_093000.json", [])
+        self._write_snapshot("20260910_103000.json", [self._quote_row(bid=2.01, ofr=2.04)])
+        payload = self._build(days=2)
+        self.assertEqual([day["date"] for day in payload["days"]], ["2026-09-09", "2026-09-10"])
+        self.assertEqual(payload["range"]["trading_days"], 2)
+        self.assertEqual(payload["range"]["start"], "2026-09-09")
+        self.assertEqual(payload["available"]["latest"], "2026-09-10")
+        first, second = payload["days"]
+        self.assertEqual(
+            [s["observed_at"] for s in first["snapshots"]],
+            ["2026-09-09 09:30:00", "2026-09-09 15:00:00"],
+        )
+        self.assertAlmostEqual(first["snapshots"][0]["bid"], 2.0)
+        self.assertAlmostEqual(first["snapshots"][0]["ofr_vs_valuation_bp"], 5.0)
+        # 09-10 09:30 本券无报价：时间点保留（图上留空档），标记 absent
+        self.assertTrue(second["snapshots"][0]["absent"])
+        self.assertIsNone(second["snapshots"][0]["bid"])
+        self.assertAlmostEqual(second["snapshots"][1]["bid"], 2.01)
+
+    def test_days_preset_keeps_only_days_with_snapshots(self):
+        self._write_snapshot("20260907_093000.json", [self._quote_row()])
+        self._write_snapshot("20260909_093000.json", [self._quote_row()])
+        payload = self._build(days=5)
+        self.assertEqual([day["date"] for day in payload["days"]], ["2026-09-07", "2026-09-09"])
+
+    def test_daily_valuation_uses_previous_trading_day(self):
+        self.spread_cache = {
+            "20260908": {"T": {"yield": 1.90}},
+            "20260909": {"T": {"yield": 1.95}},
+            "20260910": {"T": {"yield": 2.00}},
+        }
+        self._write_snapshot("20260909_093000.json", [self._quote_row()])
+        self._write_snapshot("20260910_093000.json", [self._quote_row()])
+        payload = self._build(days=2)
+        first, second = payload["days"]
+        self.assertAlmostEqual(first["valuation_yield"], 1.90)
+        self.assertEqual(first["valuation_date"], "2026-09-08")
+        self.assertAlmostEqual(second["valuation_yield"], 1.95)
+        self.assertEqual(second["valuation_date"], "2026-09-09")
+
+    def test_daily_valuation_falls_back_when_bond_missing_that_date(self):
+        self.spread_cache = {
+            "20260908": {"T": {"yield": 1.90}},
+            "20260909": {"OTHER": {"yield": 1.00}},
+        }
+        self._write_snapshot("20260910_093000.json", [self._quote_row()])
+        payload = self._build(days=1)
+        day = payload["days"][0]
+        self.assertAlmostEqual(day["valuation_yield"], 1.90)
+        self.assertEqual(day["valuation_date"], "2026-09-08")
+
+    def test_daily_valuation_missing_everywhere_is_null(self):
+        self.spread_cache = {"20260909": {"OTHER": {"yield": 1.00}}}
+        self._write_snapshot("20260910_093000.json", [self._quote_row()])
+        payload = self._build(days=1)
+        day = payload["days"][0]
+        self.assertIsNone(day["valuation_yield"])
+        self.assertEqual(day["valuation_date"], "")
+        self.assertIsNone(day["snapshots"][0]["ofr_vs_valuation_bp"])
+
+    def test_outlier_is_judged_against_daily_valuation(self):
+        self.spread_cache = {
+            "20260908": {"T": {"yield": 2.00}},
+            "20260909": {"T": {"yield": 2.50}},
+        }
+        # 同一报价 2.40：09-09 时点对照 09-08 估值 2.00 偏离 40BP（异常置空），
+        # 09-10 时点对照 09-09 估值 2.50 偏离 10BP（保留）。
+        self._write_snapshot("20260909_093000.json", [self._quote_row(bid=2.40, ofr=2.40)])
+        self._write_snapshot("20260910_093000.json", [self._quote_row(bid=2.40, ofr=2.40)])
+        payload = self._build(days=2)
+        first, second = payload["days"]
+        self.assertIsNone(first["snapshots"][0]["bid"])
+        self.assertTrue(first["snapshots"][0]["bid_outlier"])
+        self.assertAlmostEqual(second["snapshots"][0]["bid"], 2.40)
+        self.assertFalse(second["snapshots"][0]["bid_outlier"])
+
+    def test_custom_range_filters_days(self):
+        for day in ("20260907", "20260908", "20260909", "20260910"):
+            self._write_snapshot(f"{day}_093000.json", [self._quote_row()])
+        payload = self._build(start="2026-09-08", end="2026-09-09")
+        self.assertEqual([day["date"] for day in payload["days"]], ["2026-09-08", "2026-09-09"])
+        self.assertEqual(payload["range"]["start"], "2026-09-08")
+        self.assertEqual(payload["range"]["end"], "2026-09-09")
+
+    def test_invalid_params_raise_value_error(self):
+        self._write_snapshot("20260909_093000.json", [self._quote_row()])
+        with self.assertRaises(ValueError):
+            self._build(days=0)
+        with self.assertRaises(ValueError):
+            self._build(days=31)
+        with self.assertRaises(ValueError):
+            self._build(days="x")
+        with self.assertRaises(ValueError):
+            self._build(days=5, start="2026-09-01", end="2026-09-02")
+        with self.assertRaises(ValueError):
+            self._build(start="2026-09-05", end="2026-09-01")
+        with self.assertRaises(ValueError):
+            self._build(start="2026-08-01", end="2026-09-10")
+        with self.assertRaises(ValueError):
+            self._build(start="2026-09-01")
+
+    def test_unknown_bond_raises_key_error(self):
+        self._write_snapshot("20260909_093000.json", [self._quote_row()])
+        with patch.object(bond_service, "list_quote_history", return_value=list(self._names)), \
+                patch.object(bond_service, "HISTORY_DIR", self.history_dir), \
+                patch.object(bond_service, "_bond_indexes", return_value=([], {}, {})):
+            with self.assertRaises(KeyError):
+                bond_service.build_quote_history("UNKNOWN.IB", days=5)
+
+    def test_day_cache_extracts_only_new_files(self):
+        self._write_snapshot("20260909_093000.json", [self._quote_row(bid=2.0)])
+        self._write_snapshot("20260909_100000.json", [self._quote_row(bid=2.01)])
+        original = bond_service._extract_quote_row
+        patches = self._patches()
+        with patches[0], patches[1], patches[2], patches[3], \
+                patch.object(bond_service, "_extract_quote_row", side_effect=original) as extractor:
+            bond_service.build_quote_history("T.IB", days=1)
+            self.assertEqual(extractor.call_count, 2)
+            self._write_snapshot("20260909_150000.json", [self._quote_row(bid=2.02)])
+            # list_quote_history 的返回值在补丁创建时已固定，手动纳入新文件
+            with patch.object(bond_service, "list_quote_history", return_value=list(self._names)):
+                payload = bond_service.build_quote_history("T.IB", days=1)
+            self.assertEqual(extractor.call_count, 3)
+        self.assertEqual(
+            [s["observed_at"] for s in payload["days"][0]["snapshots"]],
+            ["2026-09-09 09:30:00", "2026-09-09 10:00:00", "2026-09-09 15:00:00"],
+        )
+
+    def test_payload_cache_hits_and_invalidates_on_file_change(self):
+        self._write_snapshot("20260909_093000.json", [self._quote_row(bid=2.0)])
+        patches = self._patches()
+        with patches[0], patches[1], patches[2], patches[3]:
+            first = bond_service.build_quote_history("T.IB", days=1)
+            second = bond_service.build_quote_history("T.IB", days=1)
+            self.assertIs(first, second)
+            # 文件签名变化（重写内容）后缓存失效，重新组装
+            self._write_snapshot("20260909_093000.json", [self._quote_row(bid=2.05)])
+            with patch.object(bond_service, "list_quote_history", return_value=list(self._names)):
+                third = bond_service.build_quote_history("T.IB", days=1)
+        self.assertIsNot(third, first)
+        self.assertAlmostEqual(third["days"][0]["snapshots"][0]["bid"], 2.05)
+
+    def test_extract_quote_row_survives_tricky_content_and_format(self):
+        tricky = self._quote_row(code="A.IB")
+        tricky["name"] = '怪名{带}花括号"code":"T.IB"转义'
+        self._write_snapshot("20260909_093000.json", [tricky, self._quote_row(bid=2.0)])
+        row = bond_service._extract_quote_row(self.history_dir / "20260909_093000.json", "T.IB")
+        self.assertEqual(row["code"], "T.IB")
+        self.assertAlmostEqual(row["bid_yield"], 2.0)
+        # 紧凑分隔符匹配失败（如此处用默认带空格格式写出）时回退整文件解析
+        self._write_snapshot("20260909_100000.json", [tricky, self._quote_row(bid=2.1)], pretty=True)
+        row = bond_service._extract_quote_row(self.history_dir / "20260909_100000.json", "T.IB")
+        self.assertEqual(row["code"], "T.IB")
+        self.assertAlmostEqual(row["bid_yield"], 2.1)
+        # 文件中无本券时返回 None
+        self._write_snapshot("20260909_110000.json", [tricky])
+        self.assertIsNone(bond_service._extract_quote_row(self.history_dir / "20260909_110000.json", "T.IB"))
 
 
 if __name__ == "__main__":

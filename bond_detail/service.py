@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import math
 import os
 import statistics
 import threading
 import time
-from bisect import bisect_right
+from bisect import bisect_left, bisect_right
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterable
@@ -67,6 +68,17 @@ _js_cache_lock = threading.RLock()
 _js_cache: dict[Path, tuple[tuple[int, int] | None, dict[str, Any]]] = {}
 _quote_cache_lock = threading.RLock()
 _quote_cache: dict[Path, tuple[tuple[int, int] | None, dict[str, Any], dict[str, dict[str, Any]]]] = {}
+
+# 本券报价历史（全部盘中时点）：单日提取结果与整段响应分开缓存。
+# 提取缓存按 (交易日, 债券) 存 {文件名: (签名, 行)}，日内新快照落盘后只解析新增文件；
+# 响应缓存键含区间与数据版本，仅用于免去毫秒级的重组装。
+QUOTE_HISTORY_MAX_RANGE_DAYS = 30
+QUOTE_HISTORY_DAY_CACHE_MAX_ENTRIES = 400
+QUOTE_HISTORY_PAYLOAD_CACHE_MAX_ENTRIES = 48
+_quote_history_day_lock = threading.RLock()
+_quote_history_day_cache: dict[tuple[str, str], dict[str, tuple[tuple[int, int] | None, dict[str, Any] | None]]] = {}
+_quote_history_payload_lock = threading.RLock()
+_quote_history_payload_cache: dict[tuple[str, str, str], tuple[str, dict[str, Any]]] = {}
 
 DETAIL_CACHE_TTL_SECONDS = max(1, int(os.environ.get("BOND_DETAIL_CACHE_TTL_SECONDS", "300")))
 DETAIL_CACHE_MAX_ENTRIES = max(8, int(os.environ.get("BOND_DETAIL_CACHE_MAX_ENTRIES", "256")))
@@ -859,6 +871,256 @@ def _selected_quote_history_paths() -> list[Path]:
     return paths
 
 
+def _history_days_index() -> dict[str, list[Path]]:
+    """历史快照按交易日分组（升序），日内按抓取时刻升序。"""
+    index: dict[str, list[Path]] = {}
+    for name in list_quote_history():
+        day = name[:8]
+        if len(day) == 8 and day.isdigit():
+            index.setdefault(day, []).append(HISTORY_DIR / name)
+    return index
+
+
+def _history_name_to_at(name: str) -> str:
+    """history 文件名 YYYYMMDD_HHMMSS.json 反解为快照时刻文本。
+
+    写入时文件名由快照 generated_at 生成且同刻覆盖，二者一一对应。
+    """
+    try:
+        return datetime.strptime(name[:15], "%Y%m%d_%H%M%S").strftime("%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return ""
+
+
+def _json_object_end(data: bytes, start: int) -> int:
+    """从 start（指向 '{' 字节）做括号配对，返回对象闭合位置。
+
+    UTF-8 多字节序列不含 ASCII 字节值，字节层的大括号/引号配对与字符层等价。
+    """
+    depth = 0
+    in_string = False
+    escaped = False
+    for index in range(start, len(data)):
+        char = data[index]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == 0x5C:  # backslash
+                escaped = True
+            elif char == 0x22:  # double quote
+                in_string = False
+        elif char == 0x22:
+            in_string = True
+        elif char == 0x7B:  # {
+            depth += 1
+        elif char == 0x7D:  # }
+            depth -= 1
+            if depth == 0:
+                return index
+    return -1
+
+
+def _extract_quote_row(path: Path, code: str) -> dict[str, Any] | None:
+    """从单个历史快照提取目标债券的报价行。
+
+    快路径按字节读取并定位目标 code 所在的 JSON 对象（快照行以 code 为首
+    字段、紧凑分隔符写入；needle 为 ASCII，字节层搜索安全），整文件 UTF-8
+    解码才是主要成本，按字节操作可把单文件提取从数十毫秒降到几毫秒；
+    定位或解析失败时回退整文件解析，结果与全量解析一致。
+    """
+    bare = bare_code(code)
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return None
+    for needle_code in dict.fromkeys((code, bare)):
+        if not needle_code:
+            continue
+        needle = f'"code":"{needle_code}"'.encode("ascii")
+        search_from = 0
+        while True:
+            position = data.find(needle, search_from)
+            if position < 0:
+                break
+            search_from = position + 1
+            obj_start = data.rfind(b"{", 0, position)
+            if obj_start < 0:
+                continue
+            obj_end = _json_object_end(data, obj_start)
+            if obj_end < 0:
+                continue
+            try:
+                row = json.loads(data[obj_start:obj_end + 1])
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                continue
+            if not isinstance(row, dict):
+                continue
+            row_code = normalize_code(row.get("code"))
+            if row_code and (row_code == code or bare_code(row_code) == bare):
+                return row
+    payload = load_market_json(path, {})
+    for row in payload.get("quotes") or []:
+        row_code = normalize_code(row.get("code"))
+        if row_code and (row_code == code or bare_code(row_code) == bare):
+            return row
+    return None
+
+
+def _day_quote_rows(day: str, paths: list[Path], code: str) -> list[tuple[Path, dict[str, Any] | None]]:
+    """单日全部时点的本券报价行（按抓取时刻升序），按文件签名增量缓存。"""
+    key = (day, code)
+    with _quote_history_day_lock:
+        cached = _quote_history_day_cache.get(key)
+        rows = dict(cached) if cached else {}
+    current: dict[str, tuple[tuple[int, int] | None, dict[str, Any] | None]] = {}
+    for path in paths:
+        signature = _path_signature(path)
+        kept = rows.get(path.name)
+        if kept and kept[0] == signature:
+            current[path.name] = kept
+            continue
+        current[path.name] = (signature, _extract_quote_row(path, code))
+    with _quote_history_day_lock:
+        _quote_history_day_cache[key] = current
+        if len(_quote_history_day_cache) > QUOTE_HISTORY_DAY_CACHE_MAX_ENTRIES:
+            stale_count = len(_quote_history_day_cache) - QUOTE_HISTORY_DAY_CACHE_MAX_ENTRIES
+            for stale in list(_quote_history_day_cache)[:stale_count]:
+                _quote_history_day_cache.pop(stale, None)
+    return [(path, current[path.name][1]) for path in paths]
+
+
+def _daily_valuation(
+    day: str, bare: str, history_cache: dict[str, Any], valuation_dates: list[str],
+) -> tuple[float | None, str]:
+    """交易日 day 使用上一交易日（估值日严格早于 day 的最近一日）的中债估值。
+
+    与当天盘中市场参考口径一致（当日 session 对照前一晚已发布的估值）；
+    该日缺券时继续向前回溯到最近有估值的日期。
+    """
+    index = bisect_left(valuation_dates, day) - 1
+    while index >= 0:
+        entry = (history_cache.get(valuation_dates[index]) or {}).get(bare) or {}
+        value = finite_number(entry.get("yield"))
+        if value is not None:
+            return _number(value, 4), valuation_dates[index]
+        index -= 1
+    return None, ""
+
+
+def _quote_history_day_param(value: Any, label: str) -> str:
+    text = str(value or "").strip().replace("-", "")[:8]
+    if len(text) != 8 or not text.isdigit():
+        raise ValueError(f"{label}格式应为YYYYMMDD或YYYY-MM-DD")
+    try:
+        datetime.strptime(text, "%Y%m%d")
+    except ValueError:
+        raise ValueError(f"{label}不是有效日期") from None
+    return text
+
+
+def _format_history_day(day: str) -> str:
+    return f"{day[:4]}-{day[4:6]}-{day[6:8]}" if len(day) == 8 else ""
+
+
+def build_quote_history(
+    code: str, *, days: int | None = None, start: str | None = None, end: str | None = None,
+) -> dict[str, Any]:
+    """本券报价历史：所选周期内全部盘中时点，逐日配上一交易日中债估值。
+
+    ``days`` 为预设（取最近 N 个有快照文件的交易日）；``start``/``end`` 为
+    自定义区间（YYYY-MM-DD，最长 30 天）。两者互斥。
+    """
+    if days is not None and (start or end):
+        raise ValueError("预设天数与自定义区间不能同时提供")
+    days_index = _history_days_index()
+    all_days = sorted(days_index)
+    if days is not None:
+        try:
+            count = int(days)
+        except (TypeError, ValueError):
+            raise ValueError("天数参数无效") from None
+        if not 1 <= count <= QUOTE_HISTORY_MAX_RANGE_DAYS:
+            raise ValueError(f"天数仅支持1至{QUOTE_HISTORY_MAX_RANGE_DAYS}天")
+        selected = all_days[-count:]
+        range_start, range_end = (selected[0], selected[-1]) if selected else ("", "")
+    else:
+        range_start = _quote_history_day_param(start, "开始日期")
+        range_end = _quote_history_day_param(end, "结束日期")
+        if range_start > range_end:
+            raise ValueError("开始日期不能晚于结束日期")
+        span = (
+            datetime.strptime(range_end, "%Y%m%d") - datetime.strptime(range_start, "%Y%m%d")
+        ).days + 1
+        if span > QUOTE_HISTORY_MAX_RANGE_DAYS:
+            raise ValueError(f"自定义区间最长{QUOTE_HISTORY_MAX_RANGE_DAYS}天")
+        selected = [day for day in all_days if range_start <= day <= range_end]
+    code = normalize_code(code)
+    if not code:
+        raise KeyError("未找到该债券")
+    _, by_code, _ = _bond_indexes()
+    bond = by_code.get(code) or by_code.get(bare_code(code))
+    if not bond:
+        raise KeyError("未找到该债券")
+    code = normalize_code(bond.get("code"))
+    bare = bare_code(code)
+    involved = [path for day in selected for path in days_index[day]]
+    token = _detail_version(
+        *involved, config.SPREAD_HISTORY_CACHE,
+        extra=f"{code}|{range_start}|{range_end}",
+    )
+    cache_key = (code, range_start, range_end)
+    with _quote_history_payload_lock:
+        cached = _quote_history_payload_cache.get(cache_key)
+        if cached and cached[0] == token:
+            return cached[1]
+    spread_model = _get_spread_model()
+    history_cache = spread_model["history_cache"] or {}
+    valuation_dates = sorted(history_cache)
+    day_payloads = []
+    for day in selected:
+        valuation_yield, valuation_date = _daily_valuation(day, bare, history_cache, valuation_dates)
+        snapshots = []
+        for path, row in _day_quote_rows(day, days_index[day], code):
+            observed_at = _history_name_to_at(path.name)
+            cleaned = _clean_quote(row, valuation_yield, observed_at) if row is not None else None
+            if cleaned:
+                snapshots.append(cleaned)
+            else:
+                # 该时点本券无报价：保留时间点（图上留空档），表格渲染时跳过。
+                snapshots.append({
+                    "observed_at": observed_at, "absent": True, "bid": None, "ofr": None,
+                })
+        day_payloads.append({
+            "date": _format_history_day(day),
+            "valuation_yield": valuation_yield,
+            "valuation_date": _format_history_day(valuation_date),
+            "snapshots": snapshots,
+        })
+    payload = {
+        "version": token,
+        "code": code,
+        "name": bond.get("name") or "",
+        "range": {
+            "start": _format_history_day(range_start),
+            "end": _format_history_day(range_end),
+            "trading_days": len(selected),
+        },
+        "available": {
+            "earliest": _format_history_day(all_days[0]) if all_days else "",
+            "latest": _format_history_day(all_days[-1]) if all_days else "",
+        },
+        "days": day_payloads,
+        "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    with _quote_history_payload_lock:
+        _quote_history_payload_cache[cache_key] = (token, payload)
+        if len(_quote_history_payload_cache) > QUOTE_HISTORY_PAYLOAD_CACHE_MAX_ENTRIES:
+            stale_count = len(_quote_history_payload_cache) - QUOTE_HISTORY_PAYLOAD_CACHE_MAX_ENTRIES
+            for stale in list(_quote_history_payload_cache)[:stale_count]:
+                _quote_history_payload_cache.pop(stale, None)
+    return payload
+
+
 def quote_analysis(
     target: dict[str, Any], issuer_bonds: list[dict[str, Any]], yields: dict[str, float]
 ) -> dict[str, Any]:
@@ -1303,6 +1565,10 @@ def _reset_detail_caches_for_test() -> None:
         _js_cache.clear()
     with _quote_cache_lock:
         _quote_cache.clear()
+    with _quote_history_day_lock:
+        _quote_history_day_cache.clear()
+    with _quote_history_payload_lock:
+        _quote_history_payload_cache.clear()
     with _detail_cache_lock:
         _detail_cache.clear()
         _detail_inflight.clear()

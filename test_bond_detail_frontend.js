@@ -77,6 +77,29 @@ assert(bondQuoteRenderer[1].includes("itemStyle:{color:'#64748b'}"), 'valuation 
 assert(issuerQuoteRenderer[1].includes("itemStyle:{color:'#d9485f'}"), 'issuer Bid legend must match the red scatter color');
 assert(issuerQuoteRenderer[1].includes("itemStyle:{color:'#0f8f67'}"), 'issuer Ofr legend must match the green scatter color');
 
+// 本券报价：周期（近5日/近10日/自定义）与明细粒度（每日一条/每日一条+变化/全部时点）控件
+assert(
+  source.includes('data-quote-days="5"') && source.includes('data-quote-days="10"') && source.includes('data-quote-days="custom"'),
+  'bond quotes need 5/10/custom period toggle',
+);
+assert(
+  source.includes('data-quote-gran="daily"') && source.includes('data-quote-gran="full"')
+    && !source.includes('daily_change'),
+  'quote table needs exactly the daily / full granularity toggle',
+);
+assert(script.includes('/api/bond-quote-history/'), 'bond quotes must fetch the dedicated quote-history endpoint');
+assert(script.includes('quoteHistorySeq'), 'stale quote-history responses must be ignored');
+assert(script.includes('quotePeriodControls'), 'period controls must toggle with bond/issuer mode');
+assert(bondQuoteRenderer[1].includes('valuation_yield'), 'bond quote view must consume per-day valuation');
+assert(bondQuoteRenderer[1].includes('x.day.date'), 'bond quote view must group points by day');
+assert(
+  bondQuoteRenderer[1].includes('markLine') && bondQuoteRenderer[1].includes("type:'dashed'"),
+  'trading days must be separated by dashed vertical lines',
+);
+assert(bondQuoteRenderer[1].includes('<th>中债估值</th>'), 'quote table must show the daily valuation column');
+assert(bondQuoteRenderer[1].includes('上一交易日估值'), 'per-day valuation convention must be documented in the table footnote');
+assert(!source.includes('quoteSubtext'), 'the panel-head subtext must be removed');
+
 // 主体财务透视表：日期式报告期须折叠为标准期（2026-06-30→2026H1），
 // 期间列按时间先后排序（年报按年末、H1/Q3按对应月），避免拆出不可比的孤立列
 const pivotRenderer = script.match(/function aiPivotMetrics\(rows,category,title\)\{([\s\S]*?)\nfunction aiEventItem/);
