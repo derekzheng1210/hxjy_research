@@ -543,7 +543,7 @@ def issuer_curve_analysis(
         "peers": peers,
         "exclude_exchange_tech": bool(exclude_exchange_tech),
         "excluded_exchange_tech_count": excluded_exchange_tech_count,
-        "method": "同主体同层级、无担保债券留一法分段线性拟合"
+        "method": "同主体同层级、无担保债券分段线性拟合（拟合时剔除本券）"
         + ("，剔除交易所科创债" if exclude_exchange_tech else "，保留交易所科创债"),
     }
     if target_term is None or target_yield is None:
@@ -1044,7 +1044,7 @@ def deterministic_summary(payload: dict[str, Any]) -> str:
     issuer_curve = relative.get("issuer_curve") or {}
     if issuer_curve.get("available"):
         sentences.append(
-            f"留一法主体曲线残差为{issuer_curve['residual_bp']:.1f}BP，判断为{issuer_curve['convexity']}"
+            f"剔除本券后拟合的主体曲线残差为{issuer_curve['residual_bp']:.1f}BP，判断为{issuer_curve['convexity']}"
             f"（样本{issuer_curve['sample_count']}只，置信度{issuer_curve['confidence']}）。"
         )
     else:
