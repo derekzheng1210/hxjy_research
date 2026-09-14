@@ -481,5 +481,66 @@ class ReportAiSummaryTests(unittest.TestCase):
         self.assertEqual(long.status_code, 400)
 
 
+class ReportFileEndpointTests(unittest.TestCase):
+    """文件接口：默认附件下载，?inline=1 供 iframe 在线查看流式加载。"""
+
+    REPORT_ID = "r-file-001"
+
+    def setUp(self):
+        app.config.update(TESTING=True)
+        assert_isolated_test_store()
+        with store.transaction() as conn:
+            for table in ("audit_log", "pdf_cache", "report_summaries", "engagement", "ratings",
+                          "reports", "roadshow_schedule", "qa_usage", "qa_history", "users"):
+                conn.execute(f"DELETE FROM {table}")
+        store.add_user({
+            "id": "member", "name": "测试成员", "org": "固收中心", "role": "member",
+            "password_hash": generate_password_hash("member-password"),
+        })
+        upload_dir = Path(routes.UPLOAD_DIR)
+        upload_dir.mkdir(parents=True, exist_ok=True)
+        (upload_dir / "file-fixture.pdf").write_bytes(b"%PDF-1.4\n%%EOF")
+        store.add_report({
+            "id": self.REPORT_ID, "title": "文件接口测试", "author": "研究员甲", "org": "固收中心",
+            "reportType": "internal", "category": "credit", "theme": "credit",
+            "reportDate": "2026-09-14", "summary": "", "tags": [],
+            "fileName": "文件接口测试_中文.pdf",
+            "fileUrl": "uploads/file-fixture.pdf", "fileStored": True,
+            "fileSha256": "sha-file-001", "uploadedAt": "2026-09-14T10:00:00",
+        })
+        self.client = app.test_client()
+        with self.client.session_transaction() as session:
+            session["authenticated"] = True
+            session["internal_knowledge_base_user_id"] = "member"
+
+    def test_file_requires_login(self):
+        anonymous = app.test_client()
+        response = anonymous.get(f"/internal-knowledge-base/api/reports/{self.REPORT_ID}/file")
+        self.assertEqual(response.status_code, 401)
+
+    def test_file_download_is_attachment_by_default(self):
+        response = self.client.get(f"/internal-knowledge-base/api/reports/{self.REPORT_ID}/file")
+        self.assertEqual(response.status_code, 200)
+        disposition = response.headers.get("Content-Disposition", "")
+        self.assertIn("attachment", disposition)
+        self.assertIn("application/pdf", response.headers.get("Content-Type", ""))
+
+    def test_file_inline_for_preview(self):
+        response = self.client.get(
+            f"/internal-knowledge-base/api/reports/{self.REPORT_ID}/file?inline=1")
+        self.assertEqual(response.status_code, 200)
+        disposition = response.headers.get("Content-Disposition", "")
+        self.assertNotIn("attachment", disposition)
+        self.assertIn("inline", disposition)
+
+    @unittest.skipIf(routes.SOFFICE is None, "LibreOffice 不可用")
+    def test_preview_get_branch_uses_report_file_url(self):
+        # 前端非 PDF 预览改走 GET /api/preview?file=，此处覆盖定位逻辑（PDF 直接透传）
+        response = self.client.get(
+            "/internal-knowledge-base/api/preview?file=uploads/file-fixture.pdf")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("application/pdf", response.headers.get("Content-Type", ""))
+
+
 if __name__ == "__main__":
     unittest.main()

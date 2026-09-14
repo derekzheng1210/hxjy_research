@@ -3231,27 +3231,16 @@
   async function downloadReport(reportId) {
     const report = getReport(reportId);
     if (!report) return notify('未找到该报告', 'error');
-     await recordExternalView(report);
-    try {
-      const response = await apiFetch(`/api/reports/${reportId}/file`, { credentials: 'same-origin' });
-      if (!response.ok) {
-        const err = await response.json().catch(() => ({}));
-        throw new Error(err.error || '下载失败');
-      }
-      const blob = await response.blob();
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = report.fileName || report.title;
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 1000);
-      notify('已开始下载报告');
-    } catch (error) {
-      console.error(error);
-      notify(error.message || '报告文件不可用', 'error');
-    }
+    await recordExternalView(report);
+    // 交给浏览器原生下载：不经过 fetch，网络抖动不会报 "Failed to fetch"，
+    // 自带进度与断点续传；download 为空串时文件名以服务端 Content-Disposition 为准
+    const link = document.createElement('a');
+    link.href = `${MODULE_BASE}/api/reports/${reportId}/file`;
+    link.download = report.fileName || '';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    notify('已开始下载报告');
   }
 
   async function previewReport(reportId) {
@@ -3276,11 +3265,8 @@
     try {
       let pdfUrl, revokeUrl = false;
       if (isPdf) {
-        const response = await apiFetch(`/api/reports/${reportId}/file`, { credentials: 'same-origin' });
-        if (!response.ok) throw new Error('报告文件不可用');
-        const blob = await response.blob();
-        pdfUrl = URL.createObjectURL(blob);
-        revokeUrl = true;
+        // PDF 直链流式加载（同源 cookie 鉴权），不再整文件 fetch 成 blob
+        pdfUrl = `${MODULE_BASE}/api/reports/${reportId}/file?inline=1`;
       } else {
         pdfUrl = await fetchConvertedPdfUrl(report);
         revokeUrl = true;
@@ -3290,6 +3276,19 @@
       if (!body || !doc) { if (revokeUrl && pdfUrl) URL.revokeObjectURL(pdfUrl); return; }
       if (pdfUrl) {
         doc.innerHTML = `<iframe src="${pdfUrl}" title="${escapeHTML(report.title)}"></iframe>`;
+        const iframe = doc.querySelector('iframe');
+        if (iframe) {
+          // 直链加载没有 fetch 的错误分支；同源下若返回 JSON 错误页（如登录过期）给出提示而不是白屏
+          iframe.addEventListener('load', () => {
+            try {
+              const type = iframe.contentDocument && iframe.contentDocument.contentType;
+              if (type && !type.includes('pdf')) {
+                doc.innerHTML = `<div class="preview-notice">预览失败：报告文件不可用或登录已过期，请重新登录后重试。</div>`;
+                notify('预览失败，请重新登录后重试', 'error');
+              }
+            } catch (_) { /* PDF 渲染器内部文档不可访问，属正常情况 */ }
+          });
+        }
         if (revokeUrl) {
           const observer = new MutationObserver(() => {
             if (!document.getElementById('previewBody')) { URL.revokeObjectURL(pdfUrl); observer.disconnect(); }
@@ -3302,7 +3301,7 @@
     } catch (error) {
       console.error(error);
       const doc = document.getElementById('previewDoc');
-      if (doc) doc.innerHTML = `<div class="preview-notice">预览失败：${escapeHTML(error.message || '报告文件不可用')}。请下载后查看。</div>`;
+      if (doc) doc.innerHTML = `<div class="preview-notice">预览失败：${escapeHTML(previewErrorMessage(error))}。请下载后查看。</div>`;
       notify('预览失败，请尝试下载后查看', 'error');
     }
   }
@@ -3356,15 +3355,20 @@
     if (!document.fullscreenElement) exitPreviewFullscreen();
   });
 
+  function previewErrorMessage(error) {
+    // 浏览器网络层错误（fetch TypeError，如英文的 "Failed to fetch"）转成可读的中文提示
+    if (error instanceof TypeError) {
+      return '网络连接中断，可能是网络波动或服务器繁忙，请稍后重试；若反复失败请检查本机网络或安全软件';
+    }
+    return error.message || '报告文件不可用';
+  }
+
   async function fetchConvertedPdfUrl(report) {
-    // 先取文件 Blob
-    const fileResponse = await apiFetch(`/api/reports/${report.id}/file`, { credentials: 'same-origin' });
-    if (!fileResponse.ok) throw new Error('报告文件不可用');
-    const fileBlob = await fileResponse.blob();
-    const formData = new FormData();
-    formData.append('file', fileBlob, report.fileName || 'upload');
-    formData.append('reportId', report.id);
-    const response = await apiFetch('/api/preview', { method: 'POST', body: formData });
+    // 服务端直转：GET /api/preview?file= 由服务器读取已存文件转换并流式返回，
+    // 不再把整个文件下载后回传给服务器，传输量减半且不受上传中断影响
+    const fileUrl = String(report.fileUrl || '').replace(/\\/g, '/').replace(/^\//, '');
+    if (!fileUrl) throw new Error('报告文件不可用');
+    const response = await apiFetch(`/api/preview?file=${encodeURIComponent(fileUrl)}`, { credentials: 'same-origin' });
     if (!response.ok) {
       const data = await response.json().catch(() => ({}));
       throw new Error(data.error || '转换失败');

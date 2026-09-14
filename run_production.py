@@ -6,7 +6,9 @@ gunicorn 不支持 Windows，本机生产部署统一使用本脚本：
 
 - 不启用 Flask 调试器 / 热重载（FLASK_DEBUG 强制为 0）
 - 监听端口由 PORT 环境变量控制，默认 5000
-- 并发为 4 线程 × 默认连接数，适配 2 核内网服务器
+- 并发默认 16 线程（WAITRESS_THREADS 可覆盖）：AI 流式回答、LibreOffice 预览转换、
+  文件传输等长请求均为 I/O 等待为主，宽线程池可避免任务队列积压（队列深度告警）
+  导致的请求排队与连接中断
 - 日志建议重定向到数据目录 logs/（NSSM 部署时由 AppStdout/AppStderr 接管）
 
 Linux / 云端生产环境仍按 README 使用 gunicorn：
@@ -43,6 +45,6 @@ if os.environ.get("BOND_MONITOR_SCHEDULERS_ENABLED", "1") == "1":
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "5000"))
-    threads = int(os.environ.get("WAITRESS_THREADS", "4"))
+    threads = int(os.environ.get("WAITRESS_THREADS", "16"))
     print(f"[production] waitress serving on 0.0.0.0:{port} ({threads} threads)", flush=True)
     serve(app, host="0.0.0.0", port=port, threads=threads)

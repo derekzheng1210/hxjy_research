@@ -2090,7 +2090,10 @@ def api_report_file(rid):
     full = report_file_path(report)
     if not full:
         return json_error("文件不存在", 404)
-    return send_file(full, as_attachment=True, download_name=report.get("fileName") or os.path.basename(full))
+    # inline=1 供 iframe 在线查看流式加载，不触发下载；默认仍为附件下载
+    inline = request.args.get("inline") == "1"
+    return send_file(full, as_attachment=not inline,
+                     download_name=report.get("fileName") or os.path.basename(full))
 
 
 @app.route("/api/reports/<rid>", methods=["DELETE"])
