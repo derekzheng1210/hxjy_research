@@ -1,4 +1,4 @@
-﻿flask>=2.3
+flask>=2.3
 openpyxl>=3.1
 gunicorn>=21.2
 waitress>=3.0  # Windows 生产 WSGI 服务器（gunicorn 不支持 Windows）
@@ -12,3 +12,4 @@ numpy>=1.24
 PyMuPDF>=1.24
 python-docx>=1.1
 python-pptx>=1.0
+dm_quant_api_client @ http://dm-download.oss-cn-shanghai.aliyuncs.com/dm_api_client/python/0.2.3/dm_quant_api_client-0.2.3-py3-none-any.whl  # DM量化API（债券详查经纪商成交）

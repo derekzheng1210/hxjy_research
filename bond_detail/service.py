@@ -1022,18 +1022,18 @@ def _format_history_day(day: str) -> str:
     return f"{day[:4]}-{day[4:6]}-{day[6:8]}" if len(day) == 8 else ""
 
 
-def build_quote_history(
+def resolve_quote_history_selection(
     code: str, *, days: int | None = None, start: str | None = None, end: str | None = None,
 ) -> dict[str, Any]:
-    """本券报价历史：所选周期内全部盘中时点，逐日配上一交易日中债估值。
+    """报价历史与经纪商成交历史共用的区间与债券解析。
 
     ``days`` 为预设（取最近 N 个有快照文件的交易日）；``start``/``end`` 为
     自定义区间（YYYY-MM-DD，最长 30 天）。两者互斥。
+    返回 {"code","bare","name","selected","range_start","range_end"}。
     """
     if days is not None and (start or end):
         raise ValueError("预设天数与自定义区间不能同时提供")
-    days_index = _history_days_index()
-    all_days = sorted(days_index)
+    all_days = sorted(_history_days_index())
     if days is not None:
         try:
             count = int(days)
@@ -1062,7 +1062,28 @@ def build_quote_history(
     if not bond:
         raise KeyError("未找到该债券")
     code = normalize_code(bond.get("code"))
-    bare = bare_code(code)
+    return {
+        "code": code,
+        "bare": bare_code(code),
+        "name": bond.get("name") or "",
+        "selected": selected,
+        "range_start": range_start,
+        "range_end": range_end,
+    }
+
+
+def build_quote_history(
+    code: str, *, days: int | None = None, start: str | None = None, end: str | None = None,
+) -> dict[str, Any]:
+    """本券报价历史：所选周期内全部盘中时点，逐日配上一交易日中债估值。"""
+    selection = resolve_quote_history_selection(code, days=days, start=start, end=end)
+    code = selection["code"]
+    bare = selection["bare"]
+    selected = selection["selected"]
+    range_start = selection["range_start"]
+    range_end = selection["range_end"]
+    days_index = _history_days_index()
+    all_days = sorted(days_index)
     involved = [path for day in selected for path in days_index[day]]
     token = _detail_version(
         *involved, config.SPREAD_HISTORY_CACHE,
@@ -1099,7 +1120,7 @@ def build_quote_history(
     payload = {
         "version": token,
         "code": code,
-        "name": bond.get("name") or "",
+        "name": selection["name"],
         "range": {
             "start": _format_history_day(range_start),
             "end": _format_history_day(range_end),

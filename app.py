@@ -917,6 +917,46 @@ def api_bond_quote_history(code):
     return response
 
 
+@app.route("/api/bond-deal-history/<path:code>")
+@login_required
+def api_bond_deal_history(code):
+    """单券经纪商成交（DM量化API）：日度统计+盘中分钟时点，区间与报价历史一致。"""
+    from bond_detail import resolve_quote_history_selection
+    from broker_market.dm_deals import DealsFetchError, DealsUnavailable, build_deal_history
+
+    try:
+        days_raw = str(request.args.get("days") or "").strip()
+        start = str(request.args.get("start") or "").strip()
+        end = str(request.args.get("end") or "").strip()
+        selection = resolve_quote_history_selection(
+            code,
+            days=int(days_raw) if days_raw else None,
+            start=start or None,
+            end=end or None,
+        )
+        payload = build_deal_history(
+            selection["code"],
+            name=selection["name"],
+            range_start=selection["range_start"],
+            range_end=selection["range_end"],
+            trading_days=len(selection["selected"]),
+        )
+    except KeyError as exc:
+        return jsonify({"error": str(exc).strip("'")}), 404
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 422
+    except DealsUnavailable as exc:
+        return jsonify({"error": str(exc)}), 503
+    except DealsFetchError as exc:
+        return jsonify({"error": f"成交数据获取失败: {str(exc)[:240]}"}), 502
+    except Exception as exc:
+        return jsonify({"error": f"成交数据加载失败: {str(exc)[:240]}"}), 500
+    response = jsonify(payload)
+    response.set_etag(payload["version"])
+    response.headers["Cache-Control"] = "private, no-cache"
+    return response
+
+
 def _credit_research_disabled() -> tuple | None:
     """后台隐藏“发行人信用研究”后，相关接口一律不可用（防止绕过前端直接调API）。"""
     if not load_feature_visibility().get("credit_research", True):
