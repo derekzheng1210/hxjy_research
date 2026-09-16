@@ -321,6 +321,14 @@ button.ghost{background:#eef2ff;color:#3730a3;font-weight:700;padding:0 10px;hei
       <div class="meta" id="dmFallbackNote" style="display:none"></div>
     </section>
 
+    <section class="card wide">
+      <h2>DM 量化API（经纪商成交数据）</h2>
+      <p>债券详查的经纪商成交数据来源（gapi-ext.innodealing.com，SM4 加密）。连通性测试只发起一次最小只读请求（查询探测债券最近一个自然日的日度统计），不写缓存、不影响页面数据。</p>
+      <table class="llm-table"><thead><tr><th>服务</th><th>接口地址</th><th>AppKey</th><th>连通性</th></tr></thead>
+        <tbody id="dmQuantTable"><tr><td colspan="4" style="color:#6b7280">加载中...</td></tr></tbody></table>
+      <div class="toolbar"><button id="dmQuantTestButton" type="button">测试 DM 量化API 连通性</button><span id="dmQuantMessage"></span></div>
+    </section>
+
     <form class="card" method="post" enctype="multipart/form-data"><h2>行业景气度 HTML</h2><p>上传行业景气度跟踪静态 HTML，访问时由 Flask 注入统一顶部导航。</p><input type="hidden" name="target" value="industry_prosperity"><input type="file" name="file" accept=".html,.htm" required><button type="submit">上传 HTML</button><div class="meta">当前：{{ status.industry_prosperity.updated }} / {{ status.industry_prosperity.size }}</div></form>
   </div>
   <div class="note">数据库更新依赖公司内网 Oracle。线上部署请设置 SITE_PASSWORD、ADMIN_PASSWORD、SECRET_KEY、JUYUAN_DB_USER、JUYUAN_DB_PASSWORD、JUYUAN_DB_DSN 和 JUYUAN_ORACLE_CLIENT 环境变量。信评门户同步依赖 IAM_USERNAME / IAM_PASSWORD，经纪商行情依赖 DM 凭证。大模型配置：SELF_LLM_*、DEEPSEEK_INTERNAL_BASE_URL / DEEPSEEK_INTERNAL_API_KEY / DEEPSEEK_INTERNAL_MODEL、MIMO_*、DEEPSEEK_*。</div>
@@ -520,6 +528,34 @@ agentTestButton.addEventListener('click', () => {
     agentInfo = data; agentResult = data; renderAgent(); agentMessage.textContent = ok ? '测试完成：AI Agent 可用' : `测试失败：${data.error || '连接不可用'}`;
   }).catch(() => { agentMessage.textContent = '测试失败：无法连接后台接口'; })
     .finally(() => { agentTestButton.disabled = false; agentTestButton.textContent = '测试 AI Agent 连通性'; });
+});
+
+/* ===== DM 量化API ===== */
+const dmQuantTable = document.getElementById('dmQuantTable');
+const dmQuantTestButton = document.getElementById('dmQuantTestButton');
+const dmQuantMessage = document.getElementById('dmQuantMessage');
+let dmQuantInfo = null;
+let dmQuantResult = null;
+function renderDmQuant() {
+  if (!dmQuantInfo) return;
+  let connection = '<span class="dot"></span>未检测';
+  if (!dmQuantInfo.configured) connection = `<span class="dot bad"></span>未配置<span class="llm-err">${dmQuantInfo.sdk_installed ? `请设置 ${llmEscape(dmQuantInfo.key_hint || '')}` : 'SDK 未安装（dm_quant_api_client）'}</span>`;
+  if (dmQuantResult) connection = dmQuantResult.ok
+    ? `<span class="dot ok"></span>可用<span class="llm-latency">${dmQuantResult.latency_ms || '-'}ms</span>`
+    : `<span class="dot bad"></span>不可用<span class="llm-err">${llmEscape(dmQuantResult.error || '')}</span>`;
+  dmQuantTable.innerHTML = `<tr><td>DM 量化API</td><td>gapi-ext.innodealing.com</td><td>${dmQuantInfo.app_key_masked ? llmEscape(dmQuantInfo.app_key_masked) : '<span style="color:#b91c1c">未设置</span>'}</td><td>${connection}</td></tr>`;
+}
+fetch('{{ url_for("admin_dm_quant_overview") }}').then(r => r.json()).then(data => { dmQuantInfo = data; renderDmQuant(); })
+  .catch(() => { dmQuantTable.innerHTML = '<tr><td colspan="4" style="color:#b91c1c">DM 量化API 状态加载失败</td></tr>'; });
+dmQuantTestButton.addEventListener('click', () => {
+  dmQuantTestButton.disabled = true; dmQuantTestButton.textContent = '测试中...'; dmQuantMessage.textContent = '';
+  fetch('{{ url_for("admin_dm_quant_test") }}', {method: 'POST'}).then(async r => ({ok: r.ok, data: await r.json()})).then(({ok, data}) => {
+    dmQuantResult = data; renderDmQuant();
+    dmQuantMessage.textContent = ok
+      ? `测试完成：DM 量化API 可用（探测债券 ${data.probe_code || '-'} 返回 ${data.rows} 行）`
+      : `测试失败：${data.error || '连接不可用'}`;
+  }).catch(() => { dmQuantMessage.textContent = '测试失败：无法连接后台接口'; })
+    .finally(() => { dmQuantTestButton.disabled = false; dmQuantTestButton.textContent = '测试 DM 量化API 连通性'; });
 });
 
 /* ===== DM 经纪商行情账号 ===== */

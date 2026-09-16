@@ -401,3 +401,57 @@ def deals_configured() -> bool:
         return True
     except DealsUnavailable:
         return False
+
+
+# 联通性探测：用一只高流动性债券查最近一个自然日的日度统计，验证
+# SDK/凭据/网络/加解密全链路；返回0行也算连通（非交易日或无成交）。
+_PROBE_CODE = os.environ.get("DM_DEALS_PROBE_CODE", "240215.IB")
+
+
+def deals_overview() -> dict[str, Any]:
+    """配置概览（供后台展示；密钥脱敏）。"""
+    try:
+        import dm_quant_api_client  # noqa: F401
+        sdk_installed = True
+    except ImportError:
+        sdk_installed = False
+    app_key = os.environ.get("INNO_APP_KEY", "").strip()
+    app_secret = os.environ.get("INNO_APP_SECRET", "").strip()
+    return {
+        "configured": bool(sdk_installed and app_key and app_secret),
+        "sdk_installed": sdk_installed,
+        "key_hint": "INNO_APP_KEY / INNO_APP_SECRET",
+        "app_key_masked": f"{app_key[:4]}***{app_key[-4:]}" if app_key else "",
+        "secret_configured": bool(app_secret),
+    }
+
+
+def test_deals_connectivity() -> dict[str, Any]:
+    """联通性检测：一次最小 date 序列请求，只读、不写缓存。"""
+    started = time.time()
+    day = _prev_day(date.today().strftime("%Y%m%d"))
+    try:
+        rows = _post(
+            {
+                "security_id_list": [_PROBE_CODE],
+                "data_source_list": [1],
+                "start_date": _fmt_day(day),
+                "end_date": _fmt_day(day),
+            },
+            _DATE_PATH,
+        )
+    except DealsUnavailable as exc:
+        return {"ok": False, "error": str(exc)}
+    except DealsFetchError as exc:
+        return {
+            "ok": False,
+            "error": str(exc),
+            "latency_ms": int((time.time() - started) * 1000),
+            "probe_code": _PROBE_CODE,
+        }
+    return {
+        "ok": True,
+        "latency_ms": int((time.time() - started) * 1000),
+        "probe_code": _PROBE_CODE,
+        "rows": len(rows),
+    }

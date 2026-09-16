@@ -1491,6 +1491,25 @@ def admin_ai_agent_test():
     return result, (200 if result["ok"] else 503)
 
 
+@app.route("/admin/api/dm-quant", methods=["GET"])
+@login_required
+@admin_required
+def admin_dm_quant_overview():
+    """DM 量化API（债券详查成交数据）配置概览，密钥脱敏。"""
+    from broker_market.dm_deals import deals_overview
+    return deals_overview()
+
+
+@app.route("/admin/api/dm-quant/test", methods=["POST"])
+@login_required
+@admin_required
+def admin_dm_quant_test():
+    """DM 量化API连通性检测：一次最小只读请求，不写缓存。"""
+    from broker_market.dm_deals import test_deals_connectivity
+    result = test_deals_connectivity()
+    return result, (200 if result["ok"] else 503)
+
+
 @app.route("/admin/api/dm-accounts", methods=["GET"])
 @login_required
 @admin_required
