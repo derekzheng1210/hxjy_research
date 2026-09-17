@@ -1510,6 +1510,25 @@ def admin_dm_quant_test():
     return result, (200 if result["ok"] else 503)
 
 
+@app.route("/admin/api/oracle-pool-apply", methods=["GET"])
+@login_required
+@admin_required
+def admin_oracle_pool_apply_status():
+    """Oracle 债券池应用任务状态（管理页核对候选池差异后触发）。"""
+    from juyuan_update.oracle_pool_apply import load_status
+    return jsonify(load_status())
+
+
+@app.route("/admin/api/oracle-pool-apply", methods=["POST"])
+@login_required
+@admin_required
+def admin_oracle_pool_apply_start():
+    """强制应用 Oracle 候选债券池并重建择券估值缓存（后台运行，约数分钟）。"""
+    from juyuan_update.oracle_pool_apply import start_apply
+    ok, message = start_apply()
+    return jsonify({"ok": ok, "message": message}), (200 if ok else 409)
+
+
 @app.route("/admin/api/dm-accounts", methods=["GET"])
 @login_required
 @admin_required

@@ -117,7 +117,9 @@ button.ghost{background:#eef2ff;color:#3730a3;font-weight:700;padding:0 10px;hei
             <td><span class="mode mode-db">每日定时 / 一键更新</span></td>
             <td>数据日 {{ status.oracle_bonds.as_of }}<br><span style="color:#6b7280">生成 {{ status.oracle_bonds.updated }}</span></td>
             <td>当前 {{ status.oracle_bonds.total }} 只；来源 {{ status.oracle_bonds.source }}
-              {% if status.oracle_bonds.review_required %}<br><span class="badge-warn">候选池差异超阈值待核对：旧 {{ status.oracle_bonds.comparison.old_total }} / 新 {{ status.oracle_bonds.comparison.new_total }} / 旧独有 {{ status.oracle_bonds.comparison.old_only }} / 新增 {{ status.oracle_bonds.comparison.new_only }}</span>{% endif %}
+              {% if status.oracle_bonds.review_required %}<br><span class="badge-warn">候选池差异超阈值待核对：旧 {{ status.oracle_bonds.comparison.old_total }} / 新 {{ status.oracle_bonds.comparison.new_total }} / 旧独有 {{ status.oracle_bonds.comparison.old_only }} / 新增 {{ status.oracle_bonds.comparison.new_only }}</span><br>
+              <button type="button" id="oracleApplyButton" class="ghost">核对无误，应用Oracle候选池</button>
+              <span id="oracleApplyMessage" style="font-size:12px;color:#475569"></span>{% endif %}
             </td>
           </tr>
           <tr>
@@ -557,6 +559,37 @@ dmQuantTestButton.addEventListener('click', () => {
   }).catch(() => { dmQuantMessage.textContent = '测试失败：无法连接后台接口'; })
     .finally(() => { dmQuantTestButton.disabled = false; dmQuantTestButton.textContent = '测试 DM 量化API 连通性'; });
 });
+
+/* ===== Oracle 债券池候选应用 ===== */
+const oracleApplyButton = document.getElementById('oracleApplyButton');
+const oracleApplyMessage = document.getElementById('oracleApplyMessage');
+function oracleApplyPoll() {
+  fetch('{{ url_for("admin_oracle_pool_apply_status") }}').then(r => r.json()).then(data => {
+    if (data.running) {
+      const last = String((data.log || []).slice(-1)[0] || '进行中...').trim().split('\n').pop();
+      oracleApplyMessage.textContent = `应用中：${last.slice(9)}`;
+      setTimeout(oracleApplyPoll, 5000);
+    } else {
+      oracleApplyButton.disabled = false;
+      oracleApplyMessage.textContent = data.ok
+        ? '应用完成，刷新页面查看最新债券池'
+        : `应用失败：${data.error || '未知错误'}`;
+    }
+  }).catch(() => { oracleApplyButton.disabled = false; oracleApplyMessage.textContent = '状态查询失败，可刷新页面确认'; });
+}
+if (oracleApplyButton) {
+  oracleApplyButton.addEventListener('click', () => {
+    if (!confirm('将强制应用 Oracle 候选池（覆盖现有债券池）并重建择券估值缓存，约需数分钟。确定继续？')) return;
+    oracleApplyButton.disabled = true; oracleApplyMessage.textContent = '启动中...';
+    fetch('{{ url_for("admin_oracle_pool_apply_start") }}', {method: 'POST'}).then(async r => ({ok: r.ok, data: await r.json()})).then(({ok, data}) => {
+      if (!ok) { oracleApplyButton.disabled = false; oracleApplyMessage.textContent = data.message || '启动失败'; return; }
+      oracleApplyPoll();
+    }).catch(() => { oracleApplyButton.disabled = false; oracleApplyMessage.textContent = '无法连接后台接口'; });
+  });
+  fetch('{{ url_for("admin_oracle_pool_apply_status") }}').then(r => r.json()).then(data => {
+    if (data.running) { oracleApplyButton.disabled = true; oracleApplyPoll(); }
+  }).catch(() => {});
+}
 
 /* ===== DM 经纪商行情账号 ===== */
 const dmAccountTable = document.getElementById('dmAccountTable');

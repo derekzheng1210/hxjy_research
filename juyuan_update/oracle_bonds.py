@@ -72,6 +72,15 @@ def is_perpetual_bond(name: str = "", option_memo: str = "", exercise_type: str 
     return "永续" in text or bool(_PERPETUAL_RE.search(text))
 
 
+def _option_dates_from(value) -> list[date]:
+    """把行权日字段（单值或可迭代）规范成有效日期列表。"""
+    if value is None:
+        return []
+    if isinstance(value, (str, date, datetime)):
+        value = [value]
+    return [d for d in (_date(item) for item in value) if d]
+
+
 def effective_maturity_date(
     *,
     as_of: date,
@@ -79,24 +88,34 @@ def effective_maturity_date(
     maturity_date=None,
     put_date=None,
     redeem_date=None,
+    option_dates=None,
     option_memo: str = "",
 ) -> tuple[date | None, str]:
-    """Return the first exercise date, not the legal final maturity.
+    """Return the effective maturity: the earliest exercise date still ahead,
+    or the legal final maturity once every exercise window has passed.
 
-    Direct Oracle PUTDATE/REDEEMDATE fields win.  Some 3+2 bonds only expose
-    the structure in CVTBDEXPIREMEMP, so the first leg is derived from STARTDATE.
-    A past exercise date is deliberately not replaced by the final maturity:
-    the requested universe treats 3+2 as the three-year exercise term.
+    Direct Oracle PUTDATE/REDEEMDATE fields win while an exercise window is
+    still ahead; some 3+2 bonds only expose the structure in CVTBDEXPIREMEMP,
+    so the first leg is derived from STARTDATE.  When a window has passed and
+    the bond keeps an outstanding balance (the usual 3+2 case: almost nobody
+    exercises), the term rolls to the next exercise date or the final
+    maturity instead of dropping the bond.
     """
-    option_dates = [d for d in (_date(put_date), _date(redeem_date)) if d]
-    if option_dates:
-        return min(option_dates), "oracle_exercise_date"
+    oracle_dates = (
+        _option_dates_from(option_dates)
+        + _option_dates_from(put_date)
+        + _option_dates_from(redeem_date)
+    )
+    future_oracle = sorted(d for d in oracle_dates if d > as_of)
+    if future_oracle:
+        return future_oracle[0], "oracle_exercise_date"
 
     match = _OPTION_TERM_RE.search(str(option_memo or ""))
     start = _date(start_date)
     if match and start:
-        years = float(match.group(1))
-        return start + timedelta(days=round(years * 365)), "option_memo_first_leg"
+        first_leg = start + timedelta(days=round(float(match.group(1)) * 365))
+        if first_leg > as_of:
+            return first_leg, "option_memo_first_leg"
 
     return _date(maturity_date), "maturity_date"
 
@@ -179,9 +198,13 @@ def _candidate_sql(extra_where: str = "", *, restrict_types: bool = True) -> str
 
 
 def _attach_option_dates(conn, rows: list[tuple]) -> list[tuple]:
-    """Attach the earliest valid exercise dates without duplicating master rows."""
+    """Attach all valid exercise dates (put + redeem) without duplicating master rows.
+
+    全部行权日都保留而非只留最早一个：首个窗口过了但未行权时，期限要
+    落到下一个行权日（或最终到期日），需要后面的日期才能推进。
+    """
     secodes = list(dict.fromkeys(str(row[2]) for row in rows if row[2]))
-    option_dates: dict[str, tuple[str | None, str | None]] = {}
+    option_dates: dict[str, tuple[str, ...]] = {}
     cur = conn.cursor()
     for batch in _batched(secodes):
         binds = {f"s{i}": value for i, value in enumerate(batch)}
@@ -197,20 +220,18 @@ def _attach_option_dates(conn, rows: list[tuple]) -> list[tuple]:
         )
         for secode, put_date, redeem_date in cur.fetchall():
             key = str(secode)
-            old_put, old_redeem = option_dates.get(key, (None, None))
-            put_text = _yyyymmdd(put_date)
-            redeem_text = _yyyymmdd(redeem_date)
-            if put_text > "19010101" and (old_put is None or put_text < old_put):
-                old_put = put_text
-            if redeem_text > "19010101" and (old_redeem is None or redeem_text < old_redeem):
-                old_redeem = redeem_text
-            option_dates[key] = (old_put, old_redeem)
+            dates = set(option_dates.get(key) or ())
+            for value in (put_date, redeem_date):
+                text = _yyyymmdd(value)
+                if text > "19010101":
+                    dates.add(text)
+            if dates:
+                option_dates[key] = tuple(sorted(dates))
     attached = []
     for row in rows:
-        put_date, redeem_date = option_dates.get(str(row[2]), (None, None))
         values = list(row)
-        values[10] = put_date
-        values[11] = redeem_date
+        values[10] = option_dates.get(str(row[2])) or None
+        values[11] = None
         attached.append(tuple(values))
     return attached
 
@@ -279,7 +300,7 @@ def _row_to_bond(
 ) -> tuple[dict | None, str | None]:
     (
         symbol, exchange, secode, name, issuer, bond_type2, start_date,
-        maturity_date, option_memo, exercise_type, put_date, redeem_date,
+        maturity_date, option_memo, exercise_type, option_dates, _unused_redeem,
         is_subdebt, is_city, guarantor, download_time, is_valid,
         raise_mode, calc_mode, issue_company_code,
     ) = row
@@ -305,8 +326,7 @@ def _row_to_bond(
         as_of=as_of,
         start_date=start_date,
         maturity_date=maturity_date,
-        put_date=put_date,
-        redeem_date=redeem_date,
+        option_dates=option_dates,
         option_memo=str(option_memo or ""),
     )
     term = remaining_term(effective_date, as_of)
@@ -414,17 +434,30 @@ def build_incremental_oracle_universe(
         return build_full_oracle_universe(conn, as_of_date)
 
     changed_secodes = _fetch_changed_secodes(conn, watermark)
-    changed_rows = _fetch_rows_by_secode(conn, changed_secodes)
-    ratings = _fetch_latest_ratings(conn, changed_secodes)
-    entities = _fetch_entity_types(conn, (row[19] for row in changed_rows.values()))
     bonds_by_secode = {
         str(item.get("secode") or ""): dict(item)
         for item in current_payload.get("bonds") or []
         if item.get("secode")
     }
-    counts = {"incremental_changed_secodes": len(changed_secodes)}
+    # 存量券的行权窗口刚过：未行权仍有余额的，期限推进到下一行权日/到期日，
+    # 而不是按过期行权日剔除；已全额行权/兑付的由 Oracle 主表重判后移除。
+    passed_secodes = {
+        str(bond.get("secode") or "")
+        for bond in current_payload.get("bonds") or []
+        if bond.get("secode")
+        and (stored_effective := _date(bond.get("effective_maturity_date"))) is not None
+        and stored_effective <= as_of
+    }
+    reprocess = sorted(set(changed_secodes) | passed_secodes)
+    changed_rows = _fetch_rows_by_secode(conn, reprocess)
+    ratings = _fetch_latest_ratings(conn, reprocess)
+    entities = _fetch_entity_types(conn, (row[19] for row in changed_rows.values()))
+    counts = {
+        "incremental_changed_secodes": len(changed_secodes),
+        "incremental_passed_exercise": len(passed_secodes),
+    }
 
-    for secode in changed_secodes:
+    for secode in reprocess:
         row = changed_rows.get(secode)
         if row is None:
             bonds_by_secode.pop(secode, None)
@@ -475,12 +508,14 @@ def compare_bond_universes(old_bonds: list[dict], new_bonds: list[dict]) -> dict
     }
 
 
-def refresh_oracle_bond_universe(conn, as_of_date: str) -> dict:
+def refresh_oracle_bond_universe(conn, as_of_date: str, *, force: bool | None = None) -> dict:
     """Build the Oracle pool and protect the first Excel-to-Oracle cutover.
 
     Oracle is read in one filtered master-table pass plus indexed rating batches.
     The approved production pool is cached locally; daily term recalculation then
     needs no historical Oracle scan.  A full reconciliation is repeated weekly.
+    ``force`` 显式覆盖差异阈值（管理页核对候选池后应用）；缺省沿用
+    JUYUAN_BOND_FORCE_SWITCH 环境变量。
     """
     current = load_bond_static()
     old_bonds = list(current.get("bonds") or [])
@@ -497,11 +532,9 @@ def refresh_oracle_bond_universe(conn, as_of_date: str) -> dict:
     else:
         new_bonds, filter_counts = build_incremental_oracle_universe(conn, as_of_date, current)
     comparison = compare_bond_universes(old_bonds, new_bonds)
-    review_required = bool(
-        old_bonds
-        and comparison["symmetric_diff_ratio"] > MAX_SWITCH_DIFF_RATIO
-        and not FORCE_SWITCH
-    )
+    force_switch = FORCE_SWITCH if force is None else bool(force)
+    over_threshold = bool(old_bonds and comparison["symmetric_diff_ratio"] > MAX_SWITCH_DIFF_RATIO)
+    review_required = bool(over_threshold and not force_switch)
     report = {
         "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "as_of_date": as_of_date,
@@ -509,6 +542,7 @@ def refresh_oracle_bond_universe(conn, as_of_date: str) -> dict:
         "comparison": comparison,
         "threshold": MAX_SWITCH_DIFF_RATIO,
         "review_required": review_required,
+        "forced": bool(over_threshold and force_switch),
         "source_was_oracle": source_is_oracle,
         "refresh_mode": "full" if full_refresh else "incremental",
     }
