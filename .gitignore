@@ -31,5 +31,9 @@ primary_market_pricing/大智慧财汇元数据表结构 (1).xlsx
 *.log
 *.tmp
 /.test_runtime/
+/outputs/fair_value_v1/
+/outputs/fair_value_v2/
+/outputs/fair_value_widening/
+/fair_value_research/node_modules/
 broker_market/dm_client_local.py
 .venv/

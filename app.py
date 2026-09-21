@@ -21,9 +21,11 @@ from juyuan_update import config as juyuan_config
 from juyuan_update.tasks import get_status as get_update_status, start_update
 from juyuan_update.unified_excel import (
     get_bond_picker_bonds,
+    holding_ratio_fields,
     load_bond_picker_yields_cache,
     load_bond_static,
     load_counterparty_limits,
+    load_portal_holdings,
 )
 from juyuan_update.oracle_bonds import load_oracle_reconciliation
 from juyuan_update.rating_compliance import (
@@ -34,6 +36,7 @@ from juyuan_update.rating_compliance import (
 from juyuan_update.neiping_portal_fetch import load_portal_data
 import llm_config
 from primary_market_pricing.app import pricing_bp
+from bond_dashboard_proxy import bp as bond_dashboard_bp, ensure_server as ensure_bond_dashboard
 from internal_knowledge_base import bp as internal_knowledge_base_bp
 from ipm_tracker import bp as ipm_tracker_bp, init_app as init_ipm_tracker
 from ipm_tracker.ingest import bp as ipm_ingest_bp
@@ -116,6 +119,7 @@ for _warn_var, _warn_default in (
         print(f"[安全提醒] 环境变量 {_warn_var} 未设置，正在使用代码内置默认值；公网部署前请在 .env 或服务环境中显式配置。")
 
 app.register_blueprint(pricing_bp, url_prefix="/primary-market-pricing")
+app.register_blueprint(bond_dashboard_bp, url_prefix="/bond-dashboard")
 app.register_blueprint(internal_knowledge_base_bp, url_prefix="/internal-knowledge-base")
 app.register_blueprint(spread_bp)
 app.register_blueprint(bond_switch_bp)
@@ -195,6 +199,7 @@ def admin_required(func):
 def protect_blueprint_pages():
     protected_blueprints = {
         pricing_bp.name,
+        bond_dashboard_bp.name,
         spread_bp.name,
         bond_switch_bp.name,
         issuance_bp.name,
@@ -298,6 +303,12 @@ def load_bond_data():
         # 缓存仅每日更新时覆盖；跨日未刷新时按事实现算兜底（不回写缓存）
         cache_current = str(rating_cache.get("as_of_date") or "") == date.today().strftime("%Y-%m-%d")
         today = date.today()
+        # 单券持仓占比：信评门户持仓金额（亿元）向下取千万整数后 / 债券余额（亿元）
+        holdings = load_portal_holdings()
+        outstanding_by_code = {
+            str(bond.get("code") or "").strip().upper(): bond.get("outstanding_amount")
+            for bond in load_bond_static().get("bonds") or []
+        }
         for row in BONDS_CACHE:
             value = limits.get(str(row[4] or "").strip())
             try:
@@ -312,6 +323,17 @@ def load_bond_data():
                 result = evaluate_rating_compliance(today, fact)
                 verdict = [result["status"], result["reason"]]
             row.append(verdict)
+            info = holdings.get(code)
+            try:
+                amount = float(info.get("amount")) if info and info.get("amount") is not None else None
+            except (TypeError, ValueError):
+                amount = None
+            outstanding = outstanding_by_code.get(code)
+            try:
+                outstanding = round(float(outstanding), 4) if outstanding is not None else None
+            except (TypeError, ValueError):
+                outstanding = None
+            row.extend(holding_ratio_fields(amount, outstanding))
         DATA_TIMESTAMP = format_date_only(data_date) or file_updated(juyuan_config.BOND_STATIC_JSON)
         return True
     except Exception as exc:
@@ -535,7 +557,8 @@ def portal_nav(active_endpoint: str):
         items.append(f'<div class="{group_class}"><button type="button">{section["title"]} ▾</button><div class="portal-nav-menu">')
         for page in section["pages"]:
             active_class = ' class="active"' if page["endpoint"] == active_endpoint else ""
-            items.append(f'<a href="{url_for(page["endpoint"])}"{active_class}>{page["title"]}</a>')
+            badge = '<small style="font-size:10px;font-weight:400;margin-left:6px;color:#927345">测试阶段</small>' if page.get("badge") else ''
+            items.append(f'<a href="{url_for(page["endpoint"])}"{active_class}>{page["title"]}{badge}</a>')
         items.append('</div></div>')
     items.append('</div>')
     items.append(f'<a class="portal-nav-admin" href="{url_for("admin")}">后台上传</a>')
@@ -603,6 +626,10 @@ def inject_portal_nav(html: str, active_endpoint: str):
 def render_portal_template(template_name: str, active_endpoint: str, **context):
     html = render_template(template_name, **context)
     return Response(inject_portal_nav(html, active_endpoint), content_type="text/html; charset=utf-8")
+
+
+from fair_value_observation.routes import register as register_fair_value_observation
+register_fair_value_observation(app, login_required, admin_required, render_portal_template)
 
 
 # 注入导航栏后的 HTML 缓存：仪表盘 HTML（如策略仪表盘 ~7MB）每次请求都全量读盘 +
@@ -1651,8 +1678,13 @@ if __name__ == "__main__":
     debug = os.environ.get("FLASK_DEBUG", "0") == "1"
     if os.environ.get("BROKER_SCHEDULER_ENABLED", "1") == "1":
         start_broker_scheduler()
+    from fair_value_observation.scheduler import start as start_fair_value_observation
+    start_fair_value_observation()
     if os.environ.get("BOND_MONITOR_SCHEDULERS_ENABLED", "1") == "1":
         init_spread()
         init_bond_switch()
         init_issuance()
+    # 信用债一级发行看板（Node 服务）预热点位：失败不阻断门户启动，代理层会再兜底拉起
+    if not ensure_bond_dashboard():
+        print("[dev] 一级发行看板 Node 服务未能自动拉起，首次访问时将由代理重试", flush=True)
     app.run(host=host, port=port, debug=debug, use_reloader=False)

@@ -32,10 +32,17 @@ from juyuan_update.unified_excel import (
     load_bond_static,
     load_bond_picker_yields_cache,
     load_json,
+    load_portal_holdings,
     normalize_rating,
     load_spread_history_cache,
 )
 HOLDING_DAYS_BY_MONTHS = {3: 91, 6: 182}
+
+# 详情 payload 结构版本：字段增删时递增，确保浏览器 ETag 失效拿到新结构
+DETAIL_SCHEMA_VERSION = "v2"
+
+# 单券持仓占比预警线（%）：超过该值前端标红提示集中度
+HOLDING_RATIO_ALERT_PCT = 20.0
 
 # 主体曲线外推：目标期限落在样本区间外时，样本（不含目标债）不少于该数量才允许外推。
 # 偏离边界不超过 EXTRAPOLATION_LINEAR_MAX_GAP 年时用最小二乘线性外推；更远时改用
@@ -129,7 +136,9 @@ def _build_read_model(signature: tuple[tuple[int, int] | None, ...]) -> dict[str
     # 数据树，同时维持调用方看到的字段与原逻辑一致。
     portal = load_portal_data() or {}
     ratings = portal.get("ratings") or {}
-    holdings = portal.get("holdings") or {}
+    # 门户 holdings 的键是裸代码，须用 load_portal_holdings 归一成带后缀代码后再按
+    # bond.code 匹配（此前直接用裸键查找，持仓标记恒为 False）
+    holdings = load_portal_holdings()
     bonds: list[dict[str, Any]] = []
     for raw_bond in load_bond_static().get("bonds", []):
         bond = dict(raw_bond)
@@ -1306,6 +1315,25 @@ def rating_compliance_analysis(code: str) -> dict[str, Any]:
     }
 
 
+def holding_position_analysis(bond: dict[str, Any]) -> dict[str, Any]:
+    """单券持仓占比：信评持仓（亿元，向下取千万整数）/ 债券余额（亿元），口径与二级择券一致。"""
+    from juyuan_update.unified_excel import holding_ratio_fields
+
+    amount = finite_number(bond.get("holding_amount"))
+    outstanding = finite_number(bond.get("outstanding_amount"))
+    holding, outstanding, ratio = holding_ratio_fields(amount, outstanding)
+    return {
+        "is_holding": bool(bond.get("is_holding")),
+        "holding_amount": _number(amount, 4),
+        "holding_rounded": holding,
+        "holding_date": str(bond.get("holding_date") or ""),
+        "outstanding_amount": _number(outstanding, 4),
+        "ratio_pct": ratio,
+        "exceeds_threshold": bool(ratio is not None and ratio > HOLDING_RATIO_ALERT_PCT),
+        "threshold_pct": HOLDING_RATIO_ALERT_PCT,
+    }
+
+
 def deterministic_summary(payload: dict[str, Any]) -> str:
     bond = payload["bond"]
     relative = payload["relative_value"]
@@ -1352,7 +1380,7 @@ def deterministic_summary(payload: dict[str, Any]) -> str:
 
 
 def _detail_version(*paths: Path, extra: str = "") -> str:
-    parts = [extra]
+    parts = [DETAIL_SCHEMA_VERSION, extra]
     for path in paths:
         try:
             stat = path.stat()
@@ -1460,6 +1488,7 @@ def _build_bond_detail_uncached(
     stage_started = time.perf_counter()
     rating_compliance = rating_compliance_analysis(code)
     stages["rating_compliance"] = (time.perf_counter() - stage_started) * 1000
+    holding_position = holding_position_analysis(bond)
     relative = {
         "rating_curve_name": curve_name,
         "rating_curve_yield": _number(rating_curve_yield),
@@ -1473,6 +1502,7 @@ def _build_bond_detail_uncached(
         **{key: bond.get(key) for key in (
             "name", "issuer", "implied_rating", "internal_rating", "entity", "ct", "sub", "tech",
             "guarantor", "issue_date", "effective_maturity_date", "term_source", "is_holding",
+            "outstanding_amount",
         )},
         "code": code,
         "term": round(term, 4),
@@ -1509,6 +1539,7 @@ def _build_bond_detail_uncached(
         "spreads": spreads,
         "credit_facility": credit_facility,
         "rating_compliance": rating_compliance,
+        "holding_position": holding_position,
         "data_quality": {
             "issuer_curve_confidence": issuer_curve.get("confidence") or "不足",
             "issuer_curve_samples": issuer_curve.get("sample_count") or 0,

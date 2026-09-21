@@ -20,3 +20,8 @@ capture_output = True
 
 # Prevent accidental over-allocation if this file is reused on a smaller host.
 workers = max(1, min(workers, max(2, multiprocessing.cpu_count())))
+
+
+def post_worker_init(worker):
+    from fair_value_observation.scheduler import start
+    start()

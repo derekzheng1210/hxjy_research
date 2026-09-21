@@ -234,7 +234,7 @@ button.ghost{background:#eef2ff;color:#3730a3;font-weight:700;padding:0 10px;hei
 
     <section class="card wide">
       <h2>后台一键更新</h2>
-      <p>集中刷新公司 Oracle 数据库、信评门户与量化库中的定期数据，包括信用债工具、利率债研究、机构行为与一级发行研究。任务异步运行，异常差异不会覆盖旧数据。</p>
+      <p>集中刷新公司 Oracle 数据库、信评门户与量化库中的定期数据，包括信用债工具、利率债研究、机构行为与一级偏离统计。任务异步运行，异常差异不会覆盖旧数据。</p>
       <form id="dbUpdateForm" method="post" action="{{ url_for('admin_start_db_update') }}">
         <div class="module-list">
           <label><input type="checkbox" name="modules" value="bond_picker" checked>择券工具估值（含630评级）</label>

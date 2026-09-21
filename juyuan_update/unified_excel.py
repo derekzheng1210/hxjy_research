@@ -1,12 +1,29 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 from datetime import datetime
 from pathlib import Path
 
 
 from . import config
+
+
+def holding_ratio_fields(amount, outstanding):
+    """信评持仓金额（亿元）向下取千万整数后与债券余额（亿元）相除。
+
+    返回 (单券持仓亿, 债券余额亿, 占比%)；无持仓/余额缺失时对应值为 None。
+    二级择券与债券详查共用此口径，勿在调用方各自重写取整规则。
+    """
+    # 向下取千万（0.1亿）整数：2.06亿 -> 2.0亿；epsilon 抵消浮点误差
+    holding = math.floor(round(amount, 6) * 10 + 1e-9) / 10 if amount is not None and amount > 0 else None
+    ratio = round(holding / outstanding * 100, 2) if holding is not None and outstanding and outstanding > 0 else None
+    return (
+        round(holding, 1) if holding is not None else None,
+        outstanding,
+        ratio,
+    )
 
 
 RATING_RANK = {

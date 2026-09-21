@@ -25,6 +25,9 @@ from waitress import serve
 
 from app import app
 
+from fair_value_observation.scheduler import start as start_fair_value_observation
+start_fair_value_observation()
+
 # 经纪商行情调度器：app.py 开发模式下在 __main__ 启动，waitress 部署时在此启动。
 # BROKER_SCHEDULER_ENABLED=0 可关闭；锁文件被其他进程持有时说明已有实例在调度，跳过。
 if os.environ.get("BROKER_SCHEDULER_ENABLED", "1") == "1":
@@ -43,8 +46,19 @@ if os.environ.get("BOND_MONITOR_SCHEDULERS_ENABLED", "1") == "1":
     init_issuance()
     print("[production] 利率债研究模块调度器已启动", flush=True)
 
+# 信用债一级发行看板（Node 服务）：启动时预热拉起；失败不阻断门户，
+# 代理层（/bond-dashboard/）在请求期仍会兜底重试
+if os.environ.get("BOND_DASHBOARD_AUTOSTART", "1") == "1":
+    from bond_dashboard_proxy import ensure_server as ensure_bond_dashboard
+
+    if ensure_bond_dashboard():
+        print("[production] 一级发行看板 Node 服务已就绪", flush=True)
+    else:
+        print("[production] 一级发行看板 Node 服务未能自动拉起，代理层将在请求期重试", flush=True)
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "5000"))
     threads = int(os.environ.get("WAITRESS_THREADS", "16"))
-    print(f"[production] waitress serving on 0.0.0.0:{port} ({threads} threads)", flush=True)
-    serve(app, host="0.0.0.0", port=port, threads=threads)
+    host = os.environ.get("HOST", "0.0.0.0")
+    print(f"[production] waitress serving on {host}:{port} ({threads} threads)", flush=True)
+    serve(app, host=host, port=port, threads=threads)

@@ -204,6 +204,12 @@ class BondTradingScheduler:
         ensure_directories()
         if not self._process_lock.acquire():
             return False
+        # Acquiring the process lock proves persisted in-flight jobs are orphaned.
+        status=load_status()
+        for kind in ("broker","bond_picker"):
+            if status[kind].get("state") in {"running","retrying"}:
+                status[kind].update(state="failed",last_error="上次进程已结束，任务恢复为可重试状态")
+        save_status(status)
         self._thread = threading.Thread(target=self._loop, name="bond-trading-scheduler", daemon=True)
         self._thread.start()
         return True

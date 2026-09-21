@@ -189,7 +189,7 @@ def _candidate_sql(extra_where: str = "", *, restrict_types: bool = True) -> str
                NULL AS PUTDATE, NULL AS REDEEMDATE,
                n.ISSUBDEBT, n.ISCITYINVERT, n.GUARANTOR,
                n.DATA_DOWNLOAD_TIME, n.ISVALID, n.RAISEMODE, n.CALCAMODE,
-               n.ISSUECOMPCODE
+               n.ISSUECOMPCODE, NVL(n.CURRENTAMT, n.ACTISSAMT)
         FROM TQ_BD_NEWESTBASICINFO n
         WHERE n.SYMBOL IS NOT NULL
           {type_filter}
@@ -302,7 +302,7 @@ def _row_to_bond(
         symbol, exchange, secode, name, issuer, bond_type2, start_date,
         maturity_date, option_memo, exercise_type, option_dates, _unused_redeem,
         is_subdebt, is_city, guarantor, download_time, is_valid,
-        raise_mode, calc_mode, issue_company_code,
+        raise_mode, calc_mode, issue_company_code, outstanding_amount,
     ) = row
     if str(is_valid or "") != "1":
         return None, "invalid"
@@ -360,6 +360,8 @@ def _row_to_bond(
         "is_holding": False,
         "bond_type2": str(bond_type2 or ""),
         "oracle_download_time": str(download_time or ""),
+        # 债券余额（亿元）：优先最新余额 CURRENTAMT，缺失时回落实际发行额 ACTISSAMT
+        "outstanding_amount": round(float(outstanding_amount), 4) if outstanding_amount is not None else None,
     }, None
 
 

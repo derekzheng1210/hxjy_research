@@ -119,4 +119,18 @@ assert(script.includes('params.seriesName===\'隐含评级曲线\''), 'rating cu
 assert(source.includes('{% if credit_research_visible %}'), 'AI research panel must be conditionally rendered');
 assert(script.includes("if(!document.getElementById('aiPanel'))return"), 'aiOnBondLoaded must no-op when panel is hidden');
 
+// 信评合规信息面板：改名 + 单券持仓占比并入第一行第三列（>20%标红，无附注小字）
+assert(source.includes('<h2>信评合规信息</h2>'), 'panel must be renamed to 信评合规信息');
+assert(!source.includes('授信与630评级合规'), 'old panel title must be removed');
+assert(source.includes('id="holdingPosition"'), 'holding position block is missing');
+assert(source.includes('.compliance-grid{display:grid;grid-template-columns:1fr 1fr auto'), 'holding ratio must be a compact auto-width column on the right');
+assert(script.includes("d.holding_position||{}"), 'renderCompliance must consume holding_position payload');
+assert(script.includes('exceeds_threshold'), 'holding ratio renderer must read exceeds_threshold');
+assert(script.includes('color:var(--red)'), 'over-threshold ratio must be highlighted red');
+assert(script.includes("$('holdingPosition').innerHTML=metric('占比'"), 'holding block must render only the ratio value');
+assert(!source.includes('集中度提示线'), 'ratio metric must not carry a note line');
+assert(!script.includes('信评持仓（亿）') && !script.includes('债券余额（亿）'), 'holding block must not render extra metric cards');
+assert(script.includes("kpi('债券余额',num(b.outstanding_amount,2),'亿'"), 'headline KPI must show outstanding after remaining term');
+assert(source.includes('grid-template-columns:repeat(5,minmax(0,1fr))'), 'kpi grid must fit 5 cards');
+
 console.log('bond detail chart lifecycle: ok');

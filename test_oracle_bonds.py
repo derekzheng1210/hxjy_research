@@ -77,11 +77,12 @@ class ExerciseTermTests(unittest.TestCase):
             "115010", "001002", "SEC3", "23测试01", "测试公司",
             "621", "20230310", "20280310", "3+2", "回售",
             ("20260310",), None, 0, 0, "", None, 1, "1", "20",
-            "COMP1",
+            "COMP1", 8.5,
         )
         bond, reason = _row_to_bond(row, "AA", date(2026, 9, 16))
         self.assertIsNone(reason)
         self.assertEqual(bond["term_source"], "maturity_date")
+        self.assertEqual(bond["outstanding_amount"], 8.5)
         self.assertEqual(bond["effective_maturity_date"], "2028-03-10")
         self.assertGreater(bond["term"], 1.0)
         self.assertLess(bond["term"], 2.0)
@@ -96,7 +97,7 @@ class ExerciseTermTests(unittest.TestCase):
             "102600001", "001005", "SEC1", "26测试MTN001", "测试公司",
             "641", "20250101", "20300101", "3+2", "回售",
             None, None, 0, 1, "", None, 1, "1", "20",
-            "COMP1",
+            "COMP1", 15.0,
         )
         bond, reason = _row_to_bond(row, "AA+", date(2026, 7, 31))
         self.assertIsNone(reason)
@@ -109,7 +110,7 @@ class ExerciseTermTests(unittest.TestCase):
             "102600002", "001005", "SEC2", "26测试MTN002", "测试公司",
             "641", "20260801", "20300101", "", "",
             None, None, 0, 0, "", None, 1, "1", "20",
-            "COMP1",
+            "COMP1", 5.0,
         )
         bond, reason = _row_to_bond(row, "AA+", date(2026, 7, 31))
         self.assertIsNone(bond)
@@ -197,7 +198,7 @@ class ReconciliationTests(unittest.TestCase):
             "115010", "001002", "SEC3", "23测试01", "测试公司",
             "621", "20230310", "20280310", "3+2", "回售",
             ("20260310",), None, 0, 0, "", None, 1, "1", "20",
-            "COMP1",
+            "COMP1", 8.5,
         )
         with (
             patch("juyuan_update.oracle_bonds._fetch_changed_secodes", return_value=set()),
@@ -225,7 +226,7 @@ class ReconciliationTests(unittest.TestCase):
             "115010", "001002", "SEC3", "23测试01", "测试公司",
             "621", "20230310", "20260901", "", "",
             ("20260310",), None, 0, 0, "", None, 1, "1", "20",
-            "COMP1",
+            "COMP1", 8.5,
         )
         with (
             patch("juyuan_update.oracle_bonds._fetch_changed_secodes", return_value=set()),

@@ -130,7 +130,11 @@ assert(source.includes('window.setInterval(checkUpdate,10000)'));
 assert(!source.includes('id="recommendList"'));
 assert(!source.includes('共享筛选预设'));
 assert(!source.includes('id="preset"'));
-assert(source.includes('可用对手限额'));
+assert(source.includes('最新可用对手限额'));
+// 单券持仓占比列 + 收窄后的对手限额表头
+assert(source.includes("tableHeader('对手限额','counterpartyLimit'"));
+assert(source.includes("tableHeader('持仓占比','holdingRatio'"));
+assert(source.includes('单券持仓占比(%)'));
 assert(source.includes('id="ratingPill"'));
 assert(source.includes('function renderRatingPill'));
 assert(source.includes("if(b.rating630!=='ok')return false"));
@@ -138,4 +142,52 @@ assert(source.includes("tableHeader('中债估值','ytm'"));
 assert(source.includes('table-layout:fixed'));
 assert(source.includes('.sort-mark{display:inline-block;width:10px'));
 assert(source.includes(":'&nbsp;';return `<span class=\"sort-mark\">"));
+
+// ---- 交易场所筛选：由代码后缀派生（.IB=银行间，.SH/.SZ/.BJ=交易所） ----
+// 行字段下标：0=CODE 29=HOLDING 30=OUTSTANDING 31=HOLDING_RATIO（F 在 eval 内作用域拿不到）
+const holdingRow = new Array(32).fill(null);
+holdingRow[0] = '102280342.IB';
+holdingRow[29] = 2.0;
+holdingRow[30] = 15;
+holdingRow[31] = 13.33;
+const holdingBond = toBond(holdingRow);
+assert.strictEqual(holdingBond.market, '银行间');
+assert.strictEqual(holdingBond.holding, 2.0);
+assert.strictEqual(holdingBond.outstanding, 15);
+assert.strictEqual(holdingBond.holdingRatio, 13.33);
+const exchangeRow = new Array(32).fill(null);
+exchangeRow[0] = '245902.SH';
+assert.strictEqual(toBond(exchangeRow).market, '交易所');
+assert.strictEqual(toBond(new Array(32).fill(null)).holdingRatio, null);
+
+eval(functionSource('matches', 'sortValue'));
+const noFilter = {
+  search: '', ct: '', market: '', rating: [], ir: [], entity: [], sub: '',
+  minTerm: null, maxTerm: null, minYield: null, maxYield: null,
+  minOfferVolume: null, maxValOfr: null, hasOffer: false, twoSided: false,
+  favoritesOnly: false, offerAboveVal: false, onlyCredit: false, only630Ok: false,
+};
+const ibBond = { code: '102280342.IB', market: '银行间', name: '', issuer: '', ct: '', rating: '', ir: '', entity: '', sub: '', term: 1, ytm: 2 };
+assert(matches(ibBond, noFilter));
+assert(matches(ibBond, { ...noFilter, market: '银行间' }));
+assert(!matches(ibBond, { ...noFilter, market: '交易所' }));
+const shBond = { ...ibBond, code: '245902.SH', market: '交易所' };
+assert(matches(shBond, { ...noFilter, market: '交易所' }));
+assert(!matches(shBond, { ...noFilter, market: '银行间' }));
+
+// ---- 单券持仓占比展示：占比文本与悬停明细 ----
+eval(functionSource('holdingTitle', 'renderMoverTable'));
+assert.strictEqual(holdingText({ holding: 2.0, outstanding: 15, holdingRatio: 13.33 }), '13.3%');
+assert.strictEqual(holdingText({ holding: null, outstanding: 5, holdingRatio: null }), '-');
+assert(holdingTitle({ holding: null }).includes('信评门户无此券持仓'));
+assert(holdingTitle({ holding: 2.0, outstanding: 15, holdingRatio: 13.33 }).includes('信评持仓 2.0亿'));
+assert(holdingTitle({ holding: 2.0, outstanding: 15, holdingRatio: 13.33 }).includes('债券余额 15.0亿'));
+assert(holdingTitle({ holding: 0.5, outstanding: null, holdingRatio: null }).includes('债券余额缺失'));
+
+// ---- 列宽重排：新增持仓占比后整表仍能在常规屏内放下（无横向滚动） ----
+const widthMatch = source.match(/min-width:(\d+)px;width:max\(100%,(\d+)px\)/);
+assert(widthMatch, 'table min-width rule missing');
+assert(Number(widthMatch[1]) <= 1300, `table too wide: ${widthMatch[1]}px`);
+assert(source.includes('id="market"'));
+assert(source.includes("['ct','sub','market'].forEach"));
 console.log('secondary bond picker frontend logic: ok');

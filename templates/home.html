@@ -26,6 +26,7 @@ body{margin:0;background:var(--canvas);color:var(--ink);font-family:-apple-syste
 .card p{font-size:12px;color:#5e6c80;line-height:1.55;margin:0 0 14px}
 .meta{margin-top:auto;font-size:11px;color:#7c899a;border-top:1px solid #edf1f5;padding-top:9px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .section[data-section="interest_rate"] .card:before{background:#2f6fad}
+.section[data-section="credit_primary"] .card:before{background:#0e7490}
 .section[data-section="credit"] .card:before{background:#16845b}
 .section[data-section="institution"] .card:before{background:#8b5dad}
 .section[data-section="macro"] .card:before{background:#b7791f}
@@ -50,10 +51,10 @@ body{margin:0;background:var(--canvas);color:var(--ink);font-family:-apple-syste
       {% for page in section.pages %}
       {% set info = status.get(page.meta_key, {}) if page.meta_key else {} %}
       <a class="card" href="{{ url_for(page.endpoint) }}">
-        <h3>{{ page.title }}</h3>
+        <h3>{{ page.title }}{% if page.badge %} <small style="font-size:11px;font-weight:400;color:#927345">{{ page.badge }}</small>{% endif %}</h3>
         <p>{{ page.description }}</p>
         <div class="meta">
-          {% if page.meta_key %}数据更新：{{ info.get('data_updated') or info.get('updated', '-') }}{% else %}团队研究协同与知识沉淀{% endif %}
+          {% if page.meta_key %}数据更新：{{ info.get('data_updated') or info.get('updated', '-') }}{% elif page.key == 'bond_dashboard' %}每日 19:00 自动刷新 · 支持网页上传{% elif page.key == 'fair_value_observation' %}历史判断 · 持续观测{% else %}团队研究协同与知识沉淀{% endif %}
         </div>
       </a>
       {% endfor %}

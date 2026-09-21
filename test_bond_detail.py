@@ -279,6 +279,36 @@ class CreditAndComplianceTests(unittest.TestCase):
         self.assertEqual(result["status"], "unknown")
         self.assertTrue(result["reason"])
 
+    def test_holding_position_floors_and_flags_over_threshold(self):
+        result = bond_service.holding_position_analysis({
+            "is_holding": True,
+            "holding_amount": 2.06,
+            "holding_date": "2026-08-25",
+            "outstanding_amount": 10.0,
+        })
+        self.assertTrue(result["is_holding"])
+        self.assertEqual(result["holding_rounded"], 2.0)
+        self.assertEqual(result["ratio_pct"], 20.0)
+        self.assertFalse(result["exceeds_threshold"])  # 恰好20%不算“超过”
+        over = bond_service.holding_position_analysis({
+            "is_holding": True, "holding_amount": 2.11, "outstanding_amount": 10.0,
+        })
+        self.assertEqual(over["holding_rounded"], 2.1)
+        self.assertEqual(over["ratio_pct"], 21.0)
+        self.assertTrue(over["exceeds_threshold"])
+
+    def test_holding_position_without_holding_or_outstanding(self):
+        empty = bond_service.holding_position_analysis({"is_holding": False})
+        self.assertFalse(empty["is_holding"])
+        self.assertIsNone(empty["holding_rounded"])
+        self.assertIsNone(empty["ratio_pct"])
+        self.assertFalse(empty["exceeds_threshold"])
+        no_outstanding = bond_service.holding_position_analysis({
+            "is_holding": True, "holding_amount": 2.06, "outstanding_amount": None,
+        })
+        self.assertEqual(no_outstanding["holding_rounded"], 2.0)
+        self.assertIsNone(no_outstanding["ratio_pct"])
+
 
 class BondDetailRouteTests(unittest.TestCase):
     def setUp(self):

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+import inspect
 from datetime import datetime
 from typing import Any
 
@@ -11,18 +12,22 @@ from .storage import save_snapshot
 MAX_ACCOUNT_ATTEMPTS = 3
 
 
+def make_client(client_type,account,timeout=45):
+    """Support both SDK signatures without masking internal constructor errors."""
+    parameters=inspect.signature(client_type).parameters
+    kwargs={"timeout":timeout}
+    if "device_id" in parameters or any(p.kind==inspect.Parameter.VAR_KEYWORD for p in parameters.values()):
+        kwargs["device_id"]=account.get("device_id") or ""
+    return client_type(account["username"],account["password"],**kwargs)
+
+
 def _fetch_with_account(account: dict[str, Any], timeout: int) -> dict:
     """用指定账号完成一次完整快照抓取并原子替换缓存。"""
     # dm_client_local 含接口逆向细节且被 .gitignore 排除，保持延迟导入，
     # 缺文件时错误能进入调度器状态而不是打断门户启动。
     from .dm_client_local import DMClient, choose_value, enrich_market_rows
 
-    client = DMClient(
-        account["username"],
-        account["password"],
-        timeout=timeout,
-        device_id=account.get("device_id") or "",
-    )
+    client = make_client(DMClient,account,timeout)
     try:
         client.login()
         quotes, _audit = client.fetch_partitioned_best_quotes(73_000, 450)
@@ -96,10 +101,7 @@ def test_connectivity(username: str | None = None) -> list[dict[str, Any]]:
         outcome: dict[str, Any] = {"username": account["username"]}
         client = None
         try:
-            client = DMClient(
-                account["username"], account["password"],
-                device_id=account.get("device_id") or "",
-            )
+            client = make_client(DMClient,account)
             client.login()
             try:
                 permissions = client.get_json(RESOURCE_PATH)

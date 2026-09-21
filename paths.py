@@ -38,6 +38,10 @@ INTERNAL_KNOWLEDGE_BASE_PDF_CACHE = INTERNAL_KNOWLEDGE_BASE_DIR / "pdf_cache"
 INTERNAL_KNOWLEDGE_BASE_TEMP = INTERNAL_KNOWLEDGE_BASE_DIR / "temp"
 INTERNAL_KNOWLEDGE_BASE_MIGRATION_BACKUPS = INTERNAL_KNOWLEDGE_BASE_DIR / "migration_backups"
 
+# 信用债一级发行看板（bond_dashboard，Next.js）运行态数据目录：
+# 拉起 Node 服务时经 BOND_DASHBOARD_DATA_DIR 下发，未设置时看板回退项目内 ./data
+BOND_DASHBOARD_DIR = DATA_ROOT / "bond_dashboard"
+
 # 一级发行定价底稿输出目录
 WORKPAPER_DIR = DATA_ROOT / "primary_market_pricing"
 

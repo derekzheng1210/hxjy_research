@@ -17,13 +17,39 @@
 
 ## 门户页面结构
 
-首页按“管理与协同、利率债研究、信用债研究、机构行为、中观研究”分区。后台“页面显隐管理”可即时控制各入口是否出现在首页和统一导航。
+首页按“管理与协同、利率债研究、信用债一级发行、信用债研究、机构行为、中观研究”分区。后台“页面显隐管理”可即时控制各入口是否出现在首页和统一导航。
 
 - 利率债研究：超长端利率利差、新老券利差、国债·地方债发行跟踪（原 `bond_monitor` 三个模块，统一使用主站登录与端口）。
-- 信用债研究：二级择券、收益率倒挂、信用骑乘策略、存量债利差、一级发行研究。
+- 信用债一级发行：一级发行看板（`bond_dashboard/`，Next.js 独立服务，见下节）。
+- 信用债研究：二级择券、收益率倒挂、信用骑乘策略、存量债利差、一级偏离统计。
 - 机构行为：机构行为监测。
 - 中观研究：行业景气度跟踪、行业景气高频跟踪。
 - 管理与协同：内部知识库。
+
+## 信用债一级发行看板（bond_dashboard）
+
+原独立部署的 Next.js 一级市场看板整体并入本仓库 `bond_dashboard/`（含 `node_modules` 与 `.next` 构建产物，克隆后无需 npm install / build 即可运行），由门户反向代理整合：
+
+- 访问入口 `/bond-dashboard/`，鉴权与门户站点密码合一（无独立登录）。
+- 门户首次请求或生产启动时自动拉起 Node 服务（`node scripts/serve.mjs`，分离进程，绑定 127.0.0.1:3100，不可从局域网绕过门户直连）；`BOND_DASHBOARD_AUTOSTART=0` 关闭，`BOND_DASHBOARD_UPSTREAM` 改上游地址。更新看板代码后需杀掉 node 进程令其重启生效。
+- HTML 响应由代理注入统一顶部导航栏：App Router 对整份 document 水合，导航在 load 事件后由脚本插入（`bond_dashboard_proxy.py`），侧边栏/移动顶栏自动下移让位。
+- 凭证与环境由门户统一下发：DM 凭证复用门户 `.env` 的 `INNO_APP_KEY/INNO_APP_SECRET`；主体内评文件自动指向 `PORTAL_DATA_ROOT` 下的 `data/portal_data.json`。看板自身 `.env.local`（不入库）仍可覆盖。
+- 看板运行态数据已**外置**到 `PORTAL_DATA_ROOT/bond_dashboard/`（投标库 bond.db、日历/估值/曲线 JSON、cache、海报；拉起时经 `BOND_DASHBOARD_DATA_DIR` 下发，源码收口在 `bond_dashboard/src/lib/data-dir.ts`，未设置时回退项目内 `./data` 保持独立部署兼容）。每日 19:00 由看板内置调度自动刷新 DM 数据，详见 `bond_dashboard/方案B改造说明.md`。改动看板源码后需 `npm run build` 重建（需能访问 fonts.googleapis.com 下载 Geist 字体）再杀 node 进程重拉。
+
+## 迁移到另一台电脑
+
+代码走 git（含看板源码，仅约 1MB），其余资产按下表搬运（`node_modules`/`.next`/`.env`/数据根目录均不入库）：
+
+| 事项 | 内容 |
+|---|---|
+| 基础软件 | Python 3.12、Node.js ≥18（全局安装）、LibreOffice（知识库在线预览）、Git；NSSM 已随仓库携带 |
+| `.env` | 门户凭证整文件拷贝：SITE_PASSWORD/ADMIN_PASSWORD/SECRET_KEY、INNO_APP_KEY/SECRET、DM 账号、LLM keys 等 |
+| `juyuan_credit_data/` | 整个数据根目录拷贝（放项目同级，或设 `PORTAL_DATA_ROOT`）：各模块数据、internal_knowledge_base/、bond_dashboard/（看板 12M）、page_visibility.json、uploads |
+| `bond_dashboard/node_modules` | 640M，npm 内网拉取慢，**建议整目录拷贝**（Windows + Node 版本一致即可，better-sqlite3 为预编译二进制） |
+| `bond_dashboard/.next` | 首选新机 `npm run build` 重建（需 fonts.googleapis.com 可达）；网络不通时可整拷本机 `.next` 并实测 |
+| `.venv` | 不拷贝，新机重建：`python -m venv .venv` + `pip install -r requirements.txt`（服务安装脚本会自动做） |
+| 生产服务 | 管理员 PowerShell 运行 `install_windows_service.ps1`（建 venv、装依赖、写入服务环境变量、注册 NSSM 服务）；启动后访问 `/bond-dashboard/` 验证看板自动拉起 |
+| 网络可达 | DM 数据源、机构行为上游、IPM 服务器、LLM 网关、Oracle（聚源更新）；均不可达时对应模块降级但不影响启动 |
 
 ## 本地运行
 
