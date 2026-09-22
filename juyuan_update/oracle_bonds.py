@@ -528,7 +528,16 @@ def refresh_oracle_bond_universe(conn, as_of_date: str, *, force: bool | None = 
     except ValueError:
         last_full = None
     as_of = datetime.strptime(as_of_date.replace("-", ""), "%Y%m%d").date()
-    full_refresh = not source_is_oracle or last_full is None or (as_of - last_full).days >= FULL_REFRESH_DAYS
+    # 余额等列是后补进 _row_to_bond 的：增量刷新对未变更券原样携带旧字典，
+    # 全量构建早于新列的池子会无限期缺列（如 2026-09 余额缺失）。检测到
+    # 存量池整体无该键时强制全量重建，不等每周例行。
+    schema_stale = bool(old_bonds) and all("outstanding_amount" not in bond for bond in old_bonds)
+    full_refresh = (
+        not source_is_oracle
+        or last_full is None
+        or (as_of - last_full).days >= FULL_REFRESH_DAYS
+        or schema_stale
+    )
     if full_refresh:
         new_bonds, filter_counts = build_full_oracle_universe(conn, as_of_date)
     else:
@@ -546,6 +555,7 @@ def refresh_oracle_bond_universe(conn, as_of_date: str, *, force: bool | None = 
         "review_required": review_required,
         "forced": bool(over_threshold and force_switch),
         "source_was_oracle": source_is_oracle,
+        "schema_stale_forced_full": schema_stale,
         "refresh_mode": "full" if full_refresh else "incremental",
     }
     write_json(config.ORACLE_BOND_RECONCILIATION_JSON, report)

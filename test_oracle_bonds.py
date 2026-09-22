@@ -244,6 +244,77 @@ class ReconciliationTests(unittest.TestCase):
         self.assertEqual(bonds, [])
         self.assertEqual(counts.get("term_below_minimum"), 1)
 
+    def test_pool_missing_balance_column_forces_full_refresh(self):
+        """存量池整体缺 outstanding_amount 键（旧代码全量构建）：强制全量重建补列。"""
+        with tempfile.TemporaryDirectory(dir=Path.cwd()) as directory:
+            root = Path(directory)
+            bond_json = root / "bond.json"
+            bond_json.write_text(
+                json.dumps({
+                    "source_file": "oracle:TQ_BD_NEWESTBASICINFO",
+                    "last_full_refresh": "2026-09-21",
+                    "oracle_watermark": "2026-09-21 09:00:00",
+                    "bonds": [
+                        {"code": "A.IB", "secode": "SEC1", "effective_maturity_date": "2030-01-01"},
+                        {"code": "B.IB", "secode": "SEC2", "effective_maturity_date": "2030-01-01"},
+                    ],
+                }, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            new_bonds = [
+                {"code": "A.IB", "outstanding_amount": 10.0},
+                {"code": "B.IB", "outstanding_amount": 20.0},
+            ]
+            with (
+                patch.object(config, "BOND_STATIC_JSON", bond_json),
+                patch.object(config, "ORACLE_BOND_CANDIDATE_JSON", root / "candidate.json"),
+                patch.object(config, "ORACLE_BOND_RECONCILIATION_JSON", root / "report.json"),
+                patch("juyuan_update.oracle_bonds.build_full_oracle_universe", return_value=(new_bonds, {"selected": 2})) as full_build,
+                patch("juyuan_update.oracle_bonds.build_incremental_oracle_universe") as incremental_build,
+            ):
+                result = refresh_oracle_bond_universe(object(), "20260922")
+            full_build.assert_called_once()
+            incremental_build.assert_not_called()
+            self.assertTrue(result["schema_stale_forced_full"])
+            self.assertEqual(result["refresh_mode"], "full")
+            self.assertTrue(result["applied"])
+            saved = json.loads(bond_json.read_text(encoding="utf-8"))
+            self.assertEqual([bond["outstanding_amount"] for bond in saved["bonds"]], [10.0, 20.0])
+
+    def test_pool_with_balance_column_stays_incremental(self):
+        """池内已有余额列（含合法 None）时不受缺列守卫影响，维持增量刷新。"""
+        with tempfile.TemporaryDirectory(dir=Path.cwd()) as directory:
+            root = Path(directory)
+            bond_json = root / "bond.json"
+            bond_json.write_text(
+                json.dumps({
+                    "source_file": "oracle:TQ_BD_NEWESTBASICINFO",
+                    "last_full_refresh": "2026-09-21",
+                    "oracle_watermark": "2026-09-21 09:00:00",
+                    "bonds": [
+                        {"code": "A.IB", "secode": "SEC1", "effective_maturity_date": "2030-01-01", "outstanding_amount": 10.0},
+                        {"code": "B.IB", "secode": "SEC2", "effective_maturity_date": "2030-01-01", "outstanding_amount": None},
+                    ],
+                }, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            carried = [
+                {"code": "A.IB", "outstanding_amount": 10.0, "term": 3.3},
+                {"code": "B.IB", "outstanding_amount": None, "term": 3.3},
+            ]
+            with (
+                patch.object(config, "BOND_STATIC_JSON", bond_json),
+                patch.object(config, "ORACLE_BOND_CANDIDATE_JSON", root / "candidate.json"),
+                patch.object(config, "ORACLE_BOND_RECONCILIATION_JSON", root / "report.json"),
+                patch("juyuan_update.oracle_bonds.build_full_oracle_universe") as full_build,
+                patch("juyuan_update.oracle_bonds.build_incremental_oracle_universe", return_value=(carried, {"selected": 2})),
+            ):
+                result = refresh_oracle_bond_universe(object(), "20260922")
+            full_build.assert_not_called()
+            self.assertFalse(result["schema_stale_forced_full"])
+            self.assertEqual(result["refresh_mode"], "incremental")
+            self.assertTrue(result["applied"])
+
 
 class SpreadMonitorRatingFilterTests(unittest.TestCase):
     """利差监控清单剔除隐含评级低于CCC的违约债；池本身与其他档位不受影响。"""
