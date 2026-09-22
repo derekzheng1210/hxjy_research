@@ -27,19 +27,28 @@ def holding_ratio_fields(amount, outstanding):
 
 
 RATING_RANK = {
-    "AAA+": 12,
-    "AAA": 11,
-    "AAA-": 10,
-    "AA+": 9,
-    "AA": 8,
-    "AA(2)": 8,
-    "AA-": 7,
-    "A+": 6,
-    "A": 5,
-    "A-": 4,
-    "BBB+": 3,
-    "BBB": 2,
-    "BBB-": 1,
+    "C": 1,
+    "CC": 2,
+    "CCC": 3,
+    "B-": 4,
+    "B": 5,
+    "B+": 6,
+    "BB-": 7,
+    "BB": 8,
+    "BB+": 9,
+    "BBB-": 10,
+    "BBB": 11,
+    "BBB+": 12,
+    "A-": 13,
+    "A": 14,
+    "A+": 15,
+    "AA-": 16,
+    "AA": 17,
+    "AA(2)": 17,
+    "AA+": 18,
+    "AAA-": 19,
+    "AAA": 20,
+    "AAA+": 21,
 }
 
 def atomic_write_text(path: Path, text: str) -> None:
@@ -81,8 +90,14 @@ def normalize_rating(value) -> str:
 
 
 def rating_at_least(value, floor: str = "BBB-") -> bool:
-    rating = normalize_rating(value)
-    return RATING_RANK.get(rating, 0) >= RATING_RANK[floor]
+    rank = RATING_RANK.get(normalize_rating(value))
+    return rank is not None and rank >= RATING_RANK[floor]
+
+
+def rating_below(value, floor: str) -> bool:
+    """已知评级且严格低于floor；空/未知评级不算低（去留由调用方另行判断）。"""
+    rank = RATING_RANK.get(normalize_rating(value))
+    return rank is not None and rank < RATING_RANK[floor]
 
 
 def is_blank(value) -> bool:
@@ -194,12 +209,20 @@ def get_bond_picker_bonds() -> list[dict]:
     ]
 
 
+# 利差监控清单下限：隐含评级低于CCC（违约/深度高风险，利差动辄上万bp）不进监控。
+# 只在这里过滤，不改 bond_static 池本身——二级择券的期限修复与全量池依赖完整池。
+SPREAD_MONITOR_MIN_RATING = "CCC"
+
+
 def get_spread_monitor_bonds() -> list[dict]:
     import copy
 
     bonds = copy.deepcopy(load_bond_static().get("bonds", []))
     apply_portal_metadata(bonds)
-    return bonds
+    return [
+        bond for bond in bonds
+        if not rating_below(bond.get("implied_rating"), SPREAD_MONITOR_MIN_RATING)
+    ]
 
 
 def load_portal_holdings() -> dict:

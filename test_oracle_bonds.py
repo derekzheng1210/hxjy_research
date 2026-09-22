@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 from datetime import date
@@ -18,6 +19,11 @@ from juyuan_update.oracle_bonds import (
     refresh_oracle_bond_universe,
 )
 from juyuan_update.fund_index_mysql import refresh_fund_index
+from juyuan_update.unified_excel import (
+    get_spread_monitor_bonds,
+    rating_at_least,
+    rating_below,
+)
 
 
 class ExerciseTermTests(unittest.TestCase):
@@ -237,6 +243,57 @@ class ReconciliationTests(unittest.TestCase):
             bonds, counts = build_incremental_oracle_universe(object(), "20260916", current)
         self.assertEqual(bonds, [])
         self.assertEqual(counts.get("term_below_minimum"), 1)
+
+
+class SpreadMonitorRatingFilterTests(unittest.TestCase):
+    """利差监控清单剔除隐含评级低于CCC的违约债；池本身与其他档位不受影响。"""
+
+    @staticmethod
+    def _pool_payload():
+        return {
+            "source_file": "oracle:test",
+            "bonds": [
+                {"code": "102600001.IB", "name": "26测试MTN001", "term": 3.0, "implied_rating": "AA(2)"},
+                {"code": "155557.SH", "name": "H19当代1", "term": 0.36, "implied_rating": "CC"},
+                {"code": "112810.SZ", "name": "18渤租05", "term": 2.0, "implied_rating": "C"},
+                {"code": "112997.SZ", "name": "19启迪G2", "term": 1.0, "implied_rating": "CC"},
+                {"code": "111111.SH", "name": "26测试弱资质", "term": 2.0, "implied_rating": "BB"},
+                {"code": "222222.SH", "name": "26测试无评级", "term": 2.0, "implied_rating": ""},
+            ],
+        }
+
+    def test_monitor_list_drops_sub_ccc_bonds(self):
+        with tempfile.TemporaryDirectory(dir=Path.cwd()) as directory:
+            bond_json = Path(directory) / "bond.json"
+            bond_json.write_text(json.dumps(self._pool_payload(), ensure_ascii=False), encoding="utf-8")
+            with (
+                patch.object(config, "BOND_STATIC_JSON", bond_json),
+                patch("juyuan_update.unified_excel.apply_portal_metadata", lambda bonds: 0),
+            ):
+                bonds = get_spread_monitor_bonds()
+            codes = {bond["code"] for bond in bonds}
+            self.assertNotIn("155557.SH", codes)
+            self.assertNotIn("112810.SZ", codes)
+            self.assertNotIn("112997.SZ", codes)
+            self.assertIn("102600001.IB", codes)
+            self.assertIn("111111.SH", codes)  # BB 高于 CCC，保留
+            self.assertIn("222222.SH", codes)  # 空评级不算低于 CCC，保留
+
+    def test_rating_below_requires_known_rating(self):
+        self.assertTrue(rating_below("CC", "CCC"))
+        self.assertTrue(rating_below("C", "CCC"))
+        self.assertFalse(rating_below("CCC", "CCC"))
+        self.assertFalse(rating_below("BB", "CCC"))
+        self.assertFalse(rating_below("", "CCC"))
+        self.assertFalse(rating_below("#N/A", "CCC"))
+
+    def test_rating_at_least_keeps_picker_floor_after_scale_extension(self):
+        # 评级表扩展到C档后，择券口径不变：未知与低评级仍低于 BBB-
+        self.assertTrue(rating_at_least("AA(2)"))
+        self.assertTrue(rating_at_least("BBB-"))
+        self.assertFalse(rating_at_least("BB+"))
+        self.assertFalse(rating_at_least("CC"))
+        self.assertFalse(rating_at_least(""))
 
 
 class FundIndexMysqlTests(unittest.TestCase):
