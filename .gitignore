@@ -37,3 +37,7 @@ primary_market_pricing/大智慧财汇元数据表结构 (1).xlsx
 /fair_value_research/node_modules/
 broker_market/dm_client_local.py
 .venv/
+
+# .env 备份（含密钥）与运维输出，不入库
+.env.bak_*
+.nssm_out.txt
