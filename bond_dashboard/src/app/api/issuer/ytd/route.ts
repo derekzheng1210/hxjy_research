@@ -7,7 +7,8 @@ import { internalRatingOf } from "@/lib/internal-ratings";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-// GET /api/issuer/ytd — 返回发行人 YTD 发行分析（来自 data/issuer_ytd.json，由 scripts/build_issuer_ytd.py 生成）
+// GET /api/issuer/ytd — 返回发行人 YTD 发行分析（来自 data/issuer_ytd.json，
+// 由服务器每日刷新 dm-refresh.ts 第 7 步从 DM 一级发行全量重建，亦可 POST /api/refresh?steps=issuerYtd 单步补跑）
 // 并合并 data/cache/issuer_metrics.json 的「交易所存量债券质押比区间」与「近五年 YY 评级调整」
 export async function GET() {
   try {
@@ -30,8 +31,8 @@ export async function GET() {
       metricsMeta = m.meta ?? null;
     }
 
-    // 评级读时富化：issuer_ytd 内嵌的外部评级/YY 是构建日快照（同事管道重建不及时），
-    // 用服务器每晚 DM 刷新的 cache/issuer_ratings_live.json 覆盖（live 值优先，缺失回退快照）
+    // 评级读时富化：issuer_ytd 内嵌的外部评级/YY 是重建日快照（每晚 19:00 重建），
+    // 用 cache/issuer_ratings_live.json 覆盖（live 值优先，缺失回退快照），评级变动 T+1 生效
     let liveMap: Record<string, { yy?: string | null; external?: string | null }> = {};
     let ratingsMeta: { generated?: string } | null = null;
     const liveP = path.join(DATA_DIR, "cache", "issuer_ratings_live.json");

@@ -12,13 +12,16 @@
 //     （sync_list_dates.py 依赖打包者机器 Python 环境，服务器上跑不了 → TS 移植）
 //  6. 票面曲线：DM 一级发行 YTD 全量重建 coupon_curve.json（build_coupon_curve.py 的 TS 移植——
 //      本机无 raw_primary_history.csv，曲线此前停在打包日无法更新）
+//  7. 发行人分析 YTD：DM 一级发行 YTD 全量重建 issuer_ytd.json + issuer_bonds.json
+//     （build_issuer_ytd.py 的 TS 移植——issuer_ytd 原是打包者机器管道快照，停在打包日后
+//      新发主体在「发行人分析」页搜不到；内嵌评级取当晚 live，读时 live 仍优先覆盖）
 // 调度：src/instrumentation.ts 启动时注册，每日 DM_REFRESH_AT（默认 19:00）后自动跑一次；
 //      手动触发走 POST /api/refresh。状态落 data/refresh_state.json。
 import { DATA_DIR } from "@/lib/data-dir";
 import fs from "node:fs";
 import path from "node:path";
 import { fetchPrimaryAll, fetchYieldCurve, fetchBasicInfo, fetchCompanyRatingHistory, postData } from "./dm-client";
-import { isPPN } from "./credit";
+import { cleanReason, isPPN } from "./credit";
 import { getCompanyRatings, localYyOf } from "./ratings";
 import { getBids, updateBid } from "./store";
 import type { BidRecord, ExcelBond } from "./types";
@@ -349,9 +352,9 @@ async function refreshGov30y() {
 }
 
 // ==================== 4. 发行人评级（DM → cache/issuer_ratings_live.json） ====================
-// issuer 页「外部评级/YY」来自 issuer_ytd.json（同事机器管道快照），重建不及时；
-// 此处每晚拉 DM company/rating/data（YY评分 + 外部评级各取 rating_date 最新一条）覆盖式刷新。
-// 写独立 live 文件而非同事管道的 issuer_ratings.json：快照同步不会带这个文件名，互不覆盖。
+// issuer 页「外部评级/YY」的 issuer_ytd.json 虽已由第 7 步每晚重建，但评级日内变动要等到
+// 19:00 重建才生效；此处每晚拉 DM company/rating/data（YY评分 + 外部评级各取 rating_date 最新一条）
+// 覆盖式刷新，读时 live 优先。写独立 live 文件而非管道的 issuer_ratings.json：互不覆盖。
 
 interface LiveRatingEntry {
   yy?: string | null; // YY 评分（1~8 档位，DM data_source=YY评分 最新行）
@@ -893,6 +896,279 @@ export async function refreshCouponCurve() {
   };
 }
 
+// ==================== 7. 发行人分析 YTD（DM → issuer_ytd.json + issuer_bonds.json） ====================
+// scripts/build_issuer_ytd.py 的 TS 移植。issuer_ytd.json 原是打包者机器管道的打包快照，
+// 重建不及时（快照停在打包日，其后新发的主体在「发行人分析」页搜不到），与票面曲线同样
+// 改为服务器每日从 DM 全量重建（幂等覆盖写）。口径与 Python 版一致：
+// 信用债清洗（credit.ts cleanReason：剔 PPN/定向、永续、私募 283/520、可转债/可交换）+ 剔取消发行；
+// 计划/实际规模按截标日归属（亿元）；品种/市场规模取「实际优先、缺则计划」；
+// 内嵌评级取当晚第 4 步刚刷新的 issuer_ratings_live（读时 /api/issuer/ytd 仍以 live 优先覆盖）。
+
+const ISSUER_YTD_START = "2026-01-01";
+
+interface YtdBondOut {
+  name: string;
+  code: string;
+  tenor: string | null;
+  type: string;
+  planYi: number;
+  actYi: number;
+  coupon: number | null;
+  date: string;
+  market: string;
+}
+
+/** DM 日期兼容：字符串 "2026-09-16" 或毫秒时间戳 → "2026-09-16"（同 build_issuer_ytd.py to_date，本地时区） */
+function dmDate10(v: unknown): string {
+  const s = String(v ?? "").trim();
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+  const n = Number(s);
+  if (s && Number.isFinite(n) && n > 1e12) {
+    const d = new Date(n);
+    const p = (x: number) => String(x).padStart(2, "0");
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+  }
+  return "";
+}
+
+/** 与 build_issuer_ytd.py market_of 一致：.IB 或 10/11/12 开头=银行间，.SH/.SZ 后缀=交易所 */
+function marketOfCode(code: unknown): string {
+  const c = String(code ?? "");
+  if (/\.ib$/i.test(c) || c.toUpperCase().includes(".IB") || /^(10|11|12)/.test(c)) return "银行间";
+  if (/\.(sh|sz)$/i.test(c)) return "交易所";
+  if (c.includes("交易所")) return "交易所";
+  return "其他";
+}
+
+/** 与 build_issuer_ytd.py tenor_key 一致：期限字符串→年数（D/365、W/52、M/12），无法解析 -1 */
+function tenorYears(s: string | null | undefined): number {
+  const m = /([\d.]+)\s*([YMDW])?/i.exec(String(s ?? ""));
+  if (!m) return -1;
+  const v = parseFloat(m[1]);
+  if (!Number.isFinite(v)) return -1;
+  const u = (m[2] || "Y").toUpperCase();
+  if (u === "D") return v / 365;
+  if (u === "W") return v / 52;
+  if (u === "M") return v / 12;
+  return v;
+}
+
+/** 计数器取众数（并列取先出现者，与 Python Counter.most_common(1) 一致） */
+function topOfCounter(m: Map<string, number>): string | null {
+  let best: string | null = null;
+  let bestN = -1;
+  for (const [k, n] of m) {
+    if (n > bestN) {
+      best = k;
+      bestN = n;
+    }
+  }
+  return best;
+}
+
+export async function refreshIssuerYtd() {
+  const t0 = Date.now();
+  const start = ISSUER_YTD_START;
+  const end = todayStr();
+
+  // ---- 第一遍：30 天窗口拉 YTD 一级发行全量（按 security_id 去重，同 refreshCouponCurve）----
+  const seen = new Set<string>();
+  const rows: Array<DmRow & { _sd: string }> = [];
+  let winStart = start;
+  while (winStart <= end) {
+    const winEnd = [addDays(winStart, 29), end].sort()[0];
+    let batch: DmRow[] = [];
+    try {
+      batch = (await fetchPrimaryAll(winStart, winEnd, 1)) as unknown as DmRow[];
+    } catch {
+      /* 单窗口失败跳过 */
+    }
+    for (const b of batch) {
+      const sid = String(b.security_id ?? "").trim();
+      const sd = dmDate10(b.subscribe_date);
+      if (!sid || !sd || sd < start || sd > end || seen.has(sid)) continue;
+      seen.add(sid);
+      rows.push({ ...b, _sd: sd });
+    }
+    if (winEnd >= end) break;
+    winStart = addDays(winEnd, 1);
+    await sleep(200);
+  }
+
+  // ---- 第二遍：信用债清洗（剔 PPN/定向、永续、私募、转债/可交换、取消发行）后按主体聚合 ----
+  const dropped = { clean: 0, cancel: 0 };
+  const monthly = new Map<string, { cnt: number; plan: number; act: number }>();
+  const typeAgg = new Map<string, { cnt: number; amt: number }>();
+  const marketAgg = new Map<string, { cnt: number; amt: number }>();
+  const byIssuer = new Map<
+    string,
+    {
+      cnt: number;
+      plan: number;
+      act: number;
+      couponSum: number;
+      couponN: number;
+      types: Map<string, number>;
+      markets: Map<string, number>;
+      province: string;
+      first: string;
+      last: string;
+      bonds: YtdBondOut[];
+    }
+  >();
+
+  for (const b of rows) {
+    if (cleanReason(b as Parameters<typeof cleanReason>[0])) {
+      dropped.clean++;
+      continue;
+    }
+    if (String(b.issue_status_desc ?? "").includes("取消")) {
+      dropped.cancel++;
+      continue;
+    }
+    const sd = b._sd;
+    const planYi = (Number(b.plan_issue_amount) || 0) / 10000;
+    const actYi = (Number(b.actu_issue_amount) || 0) / 10000;
+    const amtYi = actYi > 0 ? actYi : planYi; // 品种/市场规模口径：实际优先、缺则计划
+    const y = Number(b.issue_yield);
+    const coupon = Number.isFinite(y) && y > 0 ? y : null;
+    const type = String(b.bond_type_desc ?? "").trim() || "其他";
+    const market = marketOfCode(b.security_id);
+    const ym = sd.slice(0, 7);
+
+    const m = monthly.get(ym) ?? { cnt: 0, plan: 0, act: 0 };
+    m.cnt++;
+    m.plan += planYi;
+    m.act += actYi;
+    monthly.set(ym, m);
+    const ta = typeAgg.get(type) ?? { cnt: 0, amt: 0 };
+    ta.cnt++;
+    ta.amt += amtYi;
+    typeAgg.set(type, ta);
+    const ma = marketAgg.get(market) ?? { cnt: 0, amt: 0 };
+    ma.cnt++;
+    ma.amt += amtYi;
+    marketAgg.set(market, ma);
+
+    const name = String(b.issuer_full_name ?? "").trim() || "未知主体";
+    let g = byIssuer.get(name);
+    if (!g) {
+      g = {
+        cnt: 0, plan: 0, act: 0, couponSum: 0, couponN: 0,
+        types: new Map(), markets: new Map(), province: "",
+        first: sd, last: sd, bonds: [],
+      };
+      byIssuer.set(name, g);
+    }
+    g.cnt++;
+    g.plan += planYi;
+    g.act += actYi;
+    if (coupon !== null) {
+      g.couponSum += coupon;
+      g.couponN++;
+    }
+    g.types.set(type, (g.types.get(type) ?? 0) + 1);
+    g.markets.set(market, (g.markets.get(market) ?? 0) + 1);
+    if (!g.province) g.province = String(b.province_name ?? "").trim();
+    if (sd < g.first) g.first = sd;
+    if (sd > g.last) g.last = sd;
+    g.bonds.push({
+      name: String(b.sec_short_name ?? "").trim(),
+      code: String(b.security_id ?? "").trim(),
+      tenor: String(b.bond_issue_tenor ?? "").trim() || null,
+      type,
+      planYi: round2(planYi),
+      actYi: round2(actYi),
+      coupon: coupon !== null ? Math.round(coupon * 1000) / 1000 : null,
+      date: sd,
+      market,
+    });
+  }
+
+  // ---- 评级内嵌（第 4 步 live 刚刷新；YY 再经 localYyOf 兜底每日 Excel yy_lookup；
+  //      读时 API 仍以 live 优先覆盖，双保险）----
+  const live =
+    readJson<{ map?: Record<string, { yy?: string | null; external?: string | null }> }>(
+      "cache/issuer_ratings_live.json",
+      { map: {} }
+    ).map ?? {};
+
+  const issuersOut = [...byIssuer.entries()].map(([name, g]) => ({
+    issuer: name,
+    cnt: g.cnt,
+    planYi: round2(g.plan),
+    actYi: round2(g.act),
+    couponAvg: g.couponN ? round2(g.couponSum / g.couponN) : null,
+    topType: topOfCounter(g.types),
+    topMarket: topOfCounter(g.markets),
+    exCount: g.markets.get("交易所") ?? 0,
+    province: g.province,
+    ratingExt: live[name]?.external ?? null,
+    yy: live[name]?.yy ?? localYyOf(name) ?? null,
+    firstDate: g.first,
+    lastDate: g.last,
+  }));
+  issuersOut.sort((a, b) => b.planYi - a.planYi || b.cnt - a.cnt);
+
+  // ---- 个券明细：期限从长到短（同 Python tenor_key），主体按名字典序 ----
+  const bondsOut: Record<string, YtdBondOut[]> = {};
+  for (const [name, g] of byIssuer) {
+    g.bonds.sort(
+      (x, y) =>
+        tenorYears(y.tenor) - tenorYears(x.tenor) ||
+        (x.date < y.date ? -1 : x.date > y.date ? 1 : 0) ||
+        (x.name < y.name ? -1 : 1)
+    );
+    bondsOut[name] = g.bonds;
+  }
+
+  const monthlyArr = [...monthly.entries()]
+    .sort((a, b) => (a[0] < b[0] ? -1 : 1))
+    .map(([ym, v]) => ({ ym, cnt: v.cnt, planYi: round2(v.plan), actYi: round2(v.act) }));
+  const typesArr = [...typeAgg.entries()]
+    .sort((a, b) => b[1].cnt - a[1].cnt)
+    .slice(0, 12)
+    .map(([t, v]) => ({ type: t, cnt: v.cnt, planYi: round2(v.amt) }));
+  const marketsArr = [...marketAgg.entries()]
+    .sort((a, b) => (a[0] < b[0] ? -1 : 1))
+    .map(([m, v]) => ({ market: m, cnt: v.cnt, planYi: round2(v.amt) }));
+
+  const range = `${start}~${end}`;
+  const bondCount = [...byIssuer.values()].reduce((s, g) => s + g.cnt, 0);
+  const planTotal = issuersOut.reduce((s, x) => s + x.planYi, 0);
+  const actTotal = issuersOut.reduce((s, x) => s + x.actYi, 0);
+
+  writeJsonAtomic(path.join(DATA_DIR, "issuer_bonds.json"), {
+    meta: { generated: localStamp(), range, issuerCount: byIssuer.size, bondCount },
+    issuers: Object.fromEntries(Object.keys(bondsOut).sort().map((k) => [k, bondsOut[k]])),
+  });
+  writeJsonAtomic(path.join(DATA_DIR, "issuer_ytd.json"), {
+    meta: {
+      source: "DM 一级发行(primary/data) 信用债（服务器每日自动重建）",
+      generated: localStamp(),
+      range,
+      clean: "信用债口径：剔 PPN/定向、永续、私募(283/520)、可转债/可交换、取消发行",
+      issuerCount: byIssuer.size,
+      bondCount,
+      planYi: round2(planTotal),
+      actYi: round2(actTotal),
+    },
+    monthly: monthlyArr,
+    types: typesArr,
+    markets: marketsArr,
+    issuers: issuersOut,
+  });
+
+  return {
+    issuers: byIssuer.size,
+    bonds: bondCount,
+    droppedClean: dropped.clean,
+    droppedCancel: dropped.cancel,
+    range,
+    ms: Date.now() - t0,
+  };
+}
+
 // ==================== 编排 + 状态 + 调度 ====================
 
 export interface RefreshState {
@@ -920,14 +1196,28 @@ function writeRefreshState(s: RefreshState) {
 
 let running = false;
 
-/** 执行一轮完整刷新（日历补数 → 记录回填 → 估值 → 30Y 国债 → 发行人评级 → 票面曲线）。单飞：并发调用返回 skipped */
-export async function runDailyRefresh(ratingsLimit = 0): Promise<{ skipped?: boolean; summary?: Record<string, unknown>; error?: string }> {
+/**
+ * 执行一轮完整刷新（日历补数 → 记录回填 → 估值 → 30Y 国债 → 发行人评级 → 票面曲线 → 发行人 YTD）。
+ * 单飞：并发调用返回 skipped。steps 传步骤名子集（如 ["issuerYtd"]）时仅跑指定步骤（补跑用，
+ * 不更新 lastOkDate，不影响当晚整点自动全量刷新）。
+ */
+export async function runDailyRefresh(
+  ratingsLimit = 0,
+  steps?: string[]
+): Promise<{ skipped?: boolean; summary?: Record<string, unknown>; error?: string }> {
   if (running) return { skipped: true, summary: readRefreshState().summary };
   if (!process.env.INNO_APP_KEY || !process.env.INNO_APP_SECRET) {
     return { error: "未配置 DM 凭证（INNO_APP_KEY / INNO_APP_SECRET），无法自动刷新" };
   }
+  const want = (s: string) => !steps || steps.includes(s);
+  const partial = !!steps && steps.length > 0;
   running = true;
   const state: RefreshState = { lastRun: new Date().toISOString() };
+  // 单步补跑不清 lastOkDate：保留上一次全量刷新的记录，避免调度器当晚重复全量跑
+  if (partial) {
+    const prev = readRefreshState();
+    if (prev.lastOkDate) state.lastOkDate = prev.lastOkDate;
+  }
   // 单步失败不拖垮整轮（先完成的步骤已落盘），错误记入 summary
   const safe = async (fn: () => Promise<Record<string, unknown>>): Promise<Record<string, unknown>> => {
     try {
@@ -936,16 +1226,19 @@ export async function runDailyRefresh(ratingsLimit = 0): Promise<{ skipped?: boo
       return { error: e instanceof Error ? e.message : String(e) };
     }
   };
+  const skip = () => ({ skipped: true }) as Record<string, unknown>;
   try {
-    const calendar = await refreshCalendar(10);
+    const calendar = want("calendar") ? await refreshCalendar(10) : skip();
     // 回填在估值前：新补的 securityId 当晚即可被估值覆盖
-    const bidsInfo = await safe(() => refreshBidsInfo());
-    const valuations = await refreshValuations();
-    const gov30y = await refreshGov30y();
-    const issuerRatings = await safe(() => refreshIssuerRatings(ratingsLimit));
-    const couponCurve = await safe(() => refreshCouponCurve());
-    state.lastOkDate = todayStr();
-    state.summary = { calendar, bidsInfo, valuations, gov30y, issuerRatings, couponCurve, finishedAt: new Date().toISOString() };
+    const bidsInfo = want("bids") ? await safe(() => refreshBidsInfo()) : skip();
+    const valuations = want("valuations") ? await refreshValuations() : skip();
+    const gov30y = want("gov30y") ? await refreshGov30y() : skip();
+    const issuerRatings = want("issuerRatings") ? await safe(() => refreshIssuerRatings(ratingsLimit)) : skip();
+    const couponCurve = want("couponCurve") ? await safe(() => refreshCouponCurve()) : skip();
+    // 发行人 YTD 在评级之后：内嵌评级取当晚刚刷新的 live 值
+    const issuerYtd = want("issuerYtd") ? await safe(() => refreshIssuerYtd()) : skip();
+    if (!partial) state.lastOkDate = todayStr();
+    state.summary = { calendar, bidsInfo, valuations, gov30y, issuerRatings, couponCurve, issuerYtd, finishedAt: new Date().toISOString() };
     writeRefreshState(state);
     return { summary: state.summary };
   } catch (e) {
