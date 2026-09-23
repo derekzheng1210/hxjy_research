@@ -452,6 +452,9 @@ def status_info():
             "updated": file_updated(juyuan_config.BOND_PICKER_YIELDS_CACHE),
             "total": f"{len(bonds):,}",
         },
+        "bond_detail": {
+            "updated": file_updated(juyuan_config.BOND_PICKER_YIELDS_CACHE),
+        },
         "rating_compliance": rating_compliance_status(),
         "portal_data": portal_data_status(),
         "strategy_dashboard": {

@@ -15,12 +15,13 @@ from .db import (
     fetch_cnbd_yields_by_symbol,
     fetch_curve_series,
     fetch_curve_series_for_dates,
+    fetch_issuer_rating_raw,
     latest_curve_date,
     latest_cnbd_valuation_date,
     resolve_curve_codes,
     cnbd_reference_dates,
 )
-from .rating_compliance import persist_rating_facts
+from .rating_compliance import build_issuer_rating_status, persist_rating_facts
 from .oracle_bonds import refresh_oracle_bond_universe
 from .strategy_dashboard import build_dashboard as build_strategy_dashboard
 from .unified_excel import (
@@ -589,6 +590,7 @@ def generate_bond_picker_yields(progress=None) -> dict:
     if not bonds:
         raise RuntimeError("未找到符合 BBB- 及以上且无担保人的择券工具债券")
     rating_facts = None
+    issuer_rating_raw = None
     rating_error = ""
     with connect() as conn:
         trade_date = latest_cnbd_valuation_date(conn)
@@ -601,9 +603,20 @@ def generate_bond_picker_yields(progress=None) -> dict:
             rating_facts = fetch_bond_rating_facts(conn, [b["code"] for b in bonds])
         except Exception as exc:
             rating_error = str(exc)
+        if progress:
+            progress("查询主体评级状态：终止公告/有效期（研报口径，合规630）", 70)
+        try:
+            issuer_rating_raw = fetch_issuer_rating_raw(conn, bonds)
+        except Exception as exc:
+            # 主体状态抓取失败不阻断630事实缓存（evaluate 按有效豁免兜底）
+            rating_error = rating_error or str(exc)
     payload = save_bond_picker_yields_cache(trade_date, yields)
     if rating_facts is not None:
-        persist_rating_facts(rating_facts, bonds, date.today())
+        issuer_status = (
+            build_issuer_rating_status(issuer_rating_raw, date.today())
+            if issuer_rating_raw else None
+        )
+        persist_rating_facts(rating_facts, bonds, date.today(), issuer_status=issuer_status)
         if progress:
             progress(f"630评级事实缓存完成 {len(rating_facts)} 条", 85)
     payload["rating_facts"] = {

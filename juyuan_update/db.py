@@ -750,6 +750,214 @@ def fetch_bond_rating_facts(conn, raw_codes: Iterable[str], batch_size: int = 50
     return facts
 
 
+def _dm_rating_day(value) -> str:
+    """DM.COM_RATING / RATEEXPDATE 日期值 -> 'YYYY-MM-DD'；空与1900占位返回 ''。"""
+    if value is None:
+        return ""
+    text = yyyymmdd(value)
+    if len(text) != 8 or not text.isdigit() or text.startswith(_PLACEHOLDER_DATE_PREFIX):
+        return ""
+    return f"{text[:4]}-{text[4:6]}-{text[6:8]}"
+
+
+def fetch_issuer_rating_raw(conn, bonds: list[dict], batch_size: int = 500) -> dict[str, dict]:
+    """抓取主体存续有效评级判定所需的原始数据（按发行人聚合）。
+
+    返回 ``{issuer: {"events": {机构: [主体评级日, ...]},
+    "bond_ratings": {机构: [[债项评级日, 有效截止日], ...]},
+    "announcements": [[公告日, 标题], ...]}}``，供
+    ``rating_compliance.compute_issuer_rating_status`` 判定。
+
+    - 主体评级事件 = DM.COM_RATING（主体级全历史，覆盖券级表缺口如重启评级）
+      ∪ TQ_BD_CREDITRATEINFO.ISSUERATEDATE（券级，带 RATECOMPNAME）；
+    - 有效截止日 = TQ_BD_CREDITRATE.RATEEXPDATE（债项评级记录，聚源唯一
+      承载"评级有效截止"的字段）；
+    - 终止/撤销评级公告来自 TQ_BD_ANNOUNCEMT（类型+标题筛选全库）。公告挂
+      在发行人名下任一债券（含已兑付的池外券）上都要计入，故先全库取公告、
+      再按 secode -> TQ_BD_NEWESTBASICINFO.COMPNAME 反查发行人后过滤。
+    """
+    code2issuer: dict[str, str] = {}
+    for bond in bonds or []:
+        code = str(bond.get("code") or "").strip().upper()
+        issuer = str(bond.get("issuer") or "").strip()
+        if code and issuer:
+            code2issuer[code] = issuer
+    issuers = sorted(set(code2issuer.values()))
+    raw: dict[str, dict] = {}
+    if not issuers:
+        return raw
+    cur = conn.cursor()
+
+    resolved = resolve_bond_codes(conn, list(code2issuer), batch_size=batch_size)
+    secode2issuer: dict[str, str] = {}
+    for code, meta in resolved.items():
+        secode = str(meta.get("secode") or "")
+        issuer = code2issuer.get(code)
+        if secode and issuer:
+            secode2issuer.setdefault(secode, issuer)
+            raw.setdefault(issuer, {"events": {}, "bond_ratings": {}, "announcements": []})
+
+    # 发行人在池外的债券（含已兑付）同样承载主体评级事件与债项评级有效期
+    # （如浙江创新投：有效期记录只挂在中票上，池内公司债无记录），按
+    # COMPNAME 反查全部 secode 后统一拉取
+    issuer_set_lookup = set(issuers)
+    for start in range(0, len(issuers), 100):
+        batch = issuers[start:start + 100]
+        binds = {f"n{i}": name for i, name in enumerate(batch)}
+        placeholders = ",".join(f":n{i}" for i in range(len(batch)))
+        cur.execute(
+            f"SELECT SECODE, COMPNAME FROM TQ_BD_NEWESTBASICINFO WHERE COMPNAME IN ({placeholders})",
+            binds,
+        )
+        for secode, compname in cur.fetchall():
+            issuer = str(compname or "").strip()
+            if secode and issuer in issuer_set_lookup:
+                secode2issuer.setdefault(str(secode), issuer)
+                raw.setdefault(issuer, {"events": {}, "bond_ratings": {}, "announcements": []})
+    secodes = sorted(secode2issuer)
+    if not secodes:
+        return raw
+
+    security_ids: dict[str, str] = {}
+    for table in ("TQ_BD_NEWESTBASICINFO", "TQ_BD_BASICINFO"):
+        missing = [s for s in secodes if s not in security_ids]
+        if not missing:
+            break
+        for batch in _batched(missing, batch_size):
+            binds = {f"s{i}": s for i, s in enumerate(batch)}
+            placeholders = ",".join(f":s{i}" for i in range(len(batch)))
+            cur.execute(
+                f"SELECT SECODE, SECURITYID FROM {table} WHERE SECODE IN ({placeholders})",
+                binds,
+            )
+            for secode, security_id in cur.fetchall():
+                if secode and security_id:
+                    security_ids.setdefault(str(secode), str(security_id))
+    sid2issuer = {
+        security_ids[s]: secode2issuer[s] for s in secodes if s in security_ids
+    }
+
+    # 券级主体评级事件（带机构）
+    for batch in _batched(sorted(sid2issuer), batch_size):
+        binds = {f"x{i}": sid for i, sid in enumerate(batch)}
+        placeholders = ",".join(f":x{i}" for i in range(len(batch)))
+        cur.execute(
+            f"""
+            SELECT SECURITYID, ISSUERATEDATE, RATECOMPNAME
+            FROM TQ_BD_CREDITRATEINFO WHERE SECURITYID IN ({placeholders})
+            """,
+            binds,
+        )
+        for security_id, issuer_rate_date, comp in cur.fetchall():
+            issuer = sid2issuer.get(str(security_id))
+            day = normalize_event_date(issuer_rate_date)
+            if issuer and day and comp:
+                raw[issuer]["events"].setdefault(str(comp).strip(), []).append(day)
+
+    # 债项评级记录（评级日 + 有效截止日，带机构）
+    for batch in _batched(secodes, batch_size):
+        binds = {f"s{i}": s for i, s in enumerate(batch)}
+        placeholders = ",".join(f":s{i}" for i in range(len(batch)))
+        cur.execute(
+            f"""
+            SELECT SECODE, CREDITDATE, RATECOMNAME, RATEEXPDATE
+            FROM TQ_BD_CREDITRATE WHERE SECODE IN ({placeholders})
+            """,
+            binds,
+        )
+        for secode, credit_date, comp, rate_exp_date in cur.fetchall():
+            issuer = secode2issuer.get(str(secode))
+            day = normalize_event_date(credit_date)
+            expiry = _dm_rating_day(rate_exp_date)
+            if issuer and comp:
+                raw[issuer]["bond_ratings"].setdefault(
+                    str(comp).strip(), []
+                ).append([day, expiry])
+
+    # DM.COM_RATING 主体评级事件（按发行人公司代码批量）
+    name2code: dict[str, str] = {}
+    for batch in _batched(issuers, batch_size):
+        binds = {f"n{i}": name for i, name in enumerate(batch)}
+        placeholders = ",".join(f":n{i}" for i in range(len(batch)))
+        cur.execute(
+            f"SELECT COM_FULL_NAME, COM_UNI_CODE FROM DM.COM_INFO_OUT WHERE COM_FULL_NAME IN ({placeholders})",
+            binds,
+        )
+        for name, com_code in cur.fetchall():
+            if name and com_code:
+                name2code[str(name).strip()] = str(com_code)
+    code2name = {code: name for name, code in name2code.items()}
+    if name2code:
+        dm_rows: dict[str, list] = {}
+        for batch in _batched(sorted(set(name2code.values())), batch_size):
+            binds = {f"c{i}": code for i, code in enumerate(batch)}
+            placeholders = ",".join(f":c{i}" for i in range(len(batch)))
+            cur.execute(
+                f"""
+                SELECT COM_UNI_CODE, RATING_COM_UNI_CODE, COM_EXT_RATING_DATE
+                FROM DM.COM_RATING WHERE COM_UNI_CODE IN ({placeholders})
+                """,
+                binds,
+            )
+            for com_code, rating_comp_code, rating_date in cur.fetchall():
+                dm_rows.setdefault(str(rating_comp_code), []).append((str(com_code), rating_date))
+        agency_names: dict[str, str] = {}
+        for batch in _batched(sorted(dm_rows), batch_size):
+            binds = {f"a{i}": code for i, code in enumerate(batch)}
+            placeholders = ",".join(f":a{i}" for i in range(len(batch)))
+            cur.execute(
+                f"SELECT COM_UNI_CODE, COM_FULL_NAME FROM DM.COM_INFO_OUT WHERE COM_UNI_CODE IN ({placeholders})",
+                binds,
+            )
+            for com_code, name in cur.fetchall():
+                if name:
+                    agency_names[str(com_code)] = str(name).strip()
+        for rating_comp_code, rows in dm_rows.items():
+            agency = agency_names.get(rating_comp_code, rating_comp_code)
+            for com_code, rating_date in rows:
+                issuer = code2name.get(com_code)
+                day = _dm_rating_day(rating_date)
+                if issuer in raw and day:
+                    raw[issuer]["events"].setdefault(agency, []).append(day)
+
+    # 终止/撤销评级公告（全库，类型 + 繁简标题兜底）
+    cur.execute(
+        """
+        SELECT DISTINCT SECODE, DECLAREDATE, ANNTITLE FROM TQ_BD_ANNOUNCEMT
+        WHERE INFORMATIONTYPE LIKE '%终止评级%' OR INFORMATIONTYPE LIKE '%撤销评级%'
+           OR INFORMATIONTYPE LIKE '%終止評級%'
+           OR ANNTITLE LIKE '%终止%评级%' OR ANNTITLE LIKE '%終止%評級%'
+           OR ANNTITLE LIKE '%撤销%评级%'
+        """
+    )
+    announcement_rows = []
+    announcement_secodes: set[str] = set()
+    for secode, declare_date, title in cur.fetchall():
+        day = normalize_event_date(declare_date)
+        if day and title:
+            announcement_rows.append((str(secode), day, str(title)))
+            announcement_secodes.add(str(secode))
+    # 公告挂靠券 -> 发行人（只有 NEWESTBASICINFO 有 COMPNAME；含已兑付券）
+    announcement_comp: dict[str, str] = {}
+    for batch in _batched(sorted(announcement_secodes), batch_size):
+        binds = {f"s{i}": s for i, s in enumerate(batch)}
+        placeholders = ",".join(f":s{i}" for i in range(len(batch)))
+        cur.execute(
+            f"SELECT SECODE, COMPNAME FROM TQ_BD_NEWESTBASICINFO WHERE SECODE IN ({placeholders})",
+            binds,
+        )
+        for secode, compname in cur.fetchall():
+            if compname:
+                announcement_comp.setdefault(str(secode), str(compname).strip())
+    issuer_set = set(issuers)
+    for secode, day, title in announcement_rows:
+        issuer = announcement_comp.get(secode)
+        if issuer in issuer_set:
+            raw[issuer]["announcements"].append([day, title])
+
+    return raw
+
+
 def discover_benchmark(conn, keyword: str) -> dict | None:
     if config.BENCHMARK_CODE:
         return {"table": "CONFIG", "code": config.BENCHMARK_CODE, "name": keyword}

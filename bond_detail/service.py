@@ -1290,7 +1290,7 @@ def credit_facility_analysis(bond: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def rating_compliance_analysis(code: str) -> dict[str, Any]:
+def rating_compliance_analysis(code: str, issuer: str | None = None) -> dict[str, Any]:
     """合规630跟踪评级判定（复用二级择券工具的判定规则与评级事实缓存）。"""
     from juyuan_update.rating_compliance import evaluate_rating_compliance, load_rating_facts_cache
 
@@ -1302,6 +1302,11 @@ def rating_compliance_analysis(code: str) -> dict[str, Any]:
         verdict = {"status": "unknown", "reason": "630评级缓存中无该债券记录"}
     issuer_dates = [str(d) for d in (fact or {}).get("issuer_dates") or [] if d]
     credit_dates = [str(d) for d in (fact or {}).get("credit_dates") or [] if d]
+    rating = (fact or {}).get("issuer_rating") or {}
+    agencies: dict[str, Any] = {}
+    if issuer:
+        status = (cache.get("issuer_status") or {}).get(str(issuer).strip()) or {}
+        agencies = status.get("agencies") or {}
     return {
         "status": verdict.get("status") or "unknown",
         "reason": verdict.get("reason") or "",
@@ -1310,6 +1315,10 @@ def rating_compliance_analysis(code: str) -> dict[str, Any]:
         "issuer_rating_count": len(issuer_dates),
         "credit_rating_latest": credit_dates[-1] if credit_dates else "",
         "credit_rating_count": len(credit_dates),
+        # 主体存续有效评级（研报口径）：True/False；None=缓存无该主体信息
+        "issuer_rating_valid": rating.get("valid"),
+        "issuer_rating_note": str(rating.get("note") or ""),
+        "issuer_rating_agencies": agencies,
         "as_of": date.today().isoformat(),
         "cache_generated_at": str(cache.get("generated_at") or ""),
     }
@@ -1376,6 +1385,8 @@ def deterministic_summary(payload: dict[str, Any]) -> str:
     compliance = payload.get("rating_compliance") or {}
     if compliance.get("status") == "fail":
         sentences.append(f"注意：该券{compliance.get('reason') or '不满足合规630跟踪评级要求'}，投前请务必确认。")
+    elif compliance.get("issuer_rating_valid") is False:
+        sentences.append(f"注意：{compliance.get('issuer_rating_note') or '主体无存续有效评级'}，投前请务必确认。")
     return "".join(sentences)
 
 
@@ -1486,7 +1497,7 @@ def _build_bond_detail_uncached(
     credit_facility = credit_facility_analysis(bond)
     stages["credit_facility"] = (time.perf_counter() - stage_started) * 1000
     stage_started = time.perf_counter()
-    rating_compliance = rating_compliance_analysis(code)
+    rating_compliance = rating_compliance_analysis(code, issuer=bond.get("issuer"))
     stages["rating_compliance"] = (time.perf_counter() - stage_started) * 1000
     holding_position = holding_position_analysis(bond)
     relative = {

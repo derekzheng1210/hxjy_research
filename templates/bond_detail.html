@@ -85,7 +85,8 @@ function render(d){const b=d.bond,m=d.meta,rv=d.relative_value,ic=rv.issuer_curv
 function renderCompliance(cf,rc,hp){
  const statusMap={ok:['满足630合规','good'],fail:['不满足630要求','bad'],unknown:['待确认','warn']};
  const [statusText,statusTone]=statusMap[rc.status]||['待确认','warn'];
- badge($('complianceBadge'),statusText,statusTone);
+ const invalidRating=rc.issuer_rating_valid===false;
+ badge($('complianceBadge'),statusText,rc.status==='ok'&&invalidRating?'warn':statusTone);
  if(cf.available){
   $('creditFacility').innerHTML=metric('主体可用对手限额',num(cf.available_limit,2))
    +metric('参考内评',esc(cf.internal_rating||'—'))
@@ -95,7 +96,9 @@ function renderCompliance(cf,rc,hp){
  }
  $('ratingCompliance').innerHTML=`<div class="metric"><span>判定状态</span><b class="${rc.status==='ok'?'rich':rc.status==='fail'?'cheap':''}">${esc(statusText)}</b></div>`
   +metric('最近主体跟踪评级',esc(rc.issuer_rating_latest||'无记录'))
-  +metric('最近债项评级',esc(rc.credit_rating_latest||'无记录'));
+  +metric('最近债项评级',esc(rc.credit_rating_latest||'无记录'))
+  +(invalidRating?`<div class="metric"><span>主体评级状态</span><b style="color:var(--red)">${esc(rc.issuer_rating_note||'无存续有效评级')}</b></div>`:'')
+  +((rc.reason&&rc.status==='ok')?`<div class="metric"><span>630说明</span><b style="font-weight:400;font-size:11px">${esc(rc.reason)}</b></div>`:'');
  const ratio=hp.ratio_pct,red=!!hp.exceeds_threshold;
  const ratioHtml=ratio===null||ratio===undefined?'—':`<span${red?' style="color:var(--red)"':''}>${Number(ratio).toFixed(1)}%</span>`;
  $('holdingPosition').innerHTML=metric('占比',ratioHtml);

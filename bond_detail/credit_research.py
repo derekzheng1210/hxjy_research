@@ -799,7 +799,9 @@ def build_snapshot(bond: dict[str, Any]) -> tuple[dict, list[str]]:
         gaps.append(f"授信数据读取失败：{str(exc)[:120]}")
     compliance = {}
     try:
-        compliance = rating_compliance_analysis(str(bond.get("code") or "")) or {}
+        compliance = rating_compliance_analysis(
+            str(bond.get("code") or ""), issuer=bond.get("issuer")
+        ) or {}
     except Exception as exc:  # noqa: BLE001
         gaps.append(f"630评级合规读取失败：{str(exc)[:120]}")
 

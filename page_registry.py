@@ -44,7 +44,7 @@ PAGE_SECTIONS = (
             {"key": "strategy_dashboard", "endpoint": "strategy_dashboard", "title": "信用骑乘策略", "description": "识别当前市场占优的信用骑乘与期限策略。", "meta_key": "strategy_dashboard"},
             {"key": "spread_monitor", "endpoint": "spread_monitor", "title": "存量债利差监控", "description": "查看全市场与重点债券的利差变化。", "meta_key": "spread_monitor"},
             {"key": "credit_std_dev", "endpoint": "credit_std_dev", "title": "信用债两倍标准差", "description": "跟踪信用利差相对均值与标准差区间的位置。", "meta_key": "credit_std_dev"},
-            {"key": "bond_detail", "endpoint": "bond_detail", "title": "债券详查", "description": "集中查看单券的评级位置、主体曲线、骑乘收益、报价和利差。", "meta_key": None, "default_visible": False},
+            {"key": "bond_detail", "endpoint": "bond_detail", "title": "债券详查", "description": "集中查看单券的评级位置、主体曲线、骑乘收益、报价和利差。", "meta_key": "bond_detail", "default_visible": False},
             {"key": "fair_value_observation", "endpoint": "fair_value_observation", "title": "公允估值观察", "badge": "测试阶段", "description": "寻找估值收益率可能偏高或偏低的债券，回看历史判断与后续表现。", "meta_key": None},
         ),
     },
