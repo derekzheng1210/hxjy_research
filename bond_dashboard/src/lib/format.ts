@@ -116,7 +116,8 @@ export function bondTypeShort(typeDesc: string | null | undefined): string {
   if (!typeDesc) return "其他";
   const t = typeDesc;
   if (t.includes("超短")) return "SCP";
-  if (t.includes("短融")) return "CP";
+  // CP 口径：除"短融"外，DM 类型还有"短期融资券/短期融资券(CP)/证券公司短期融资券"
+  if (t.includes("短融") || t.includes("短期融资")) return "CP";
   if (t.includes("中期票据")) return "MTN";
   if (t.includes("定向")) return "PPN";
   if (t.includes("公司债")) return "公司债";
