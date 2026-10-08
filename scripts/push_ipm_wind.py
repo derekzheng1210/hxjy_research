@@ -75,8 +75,8 @@ def parse_args():
     parser.add_argument('--merge-local', action='store_true',
                         help='推送成功后同时合并进本机主缓存（默认不动本机缓存）')
     parser.add_argument('--http-timeout', type=int, default=120, help='HTTP 超时秒数（默认120）')
-    parser.add_argument('--max-retries', type=int, default=20, help='Wind 等待最大重试次数（默认20）')
-    parser.add_argument('--interval', type=int, default=20, help='Wind 重试间隔秒数（默认20）')
+    parser.add_argument('--max-retries', type=int, default=3, help='Wind 等待最大重试次数（默认3）')
+    parser.add_argument('--interval', type=int, default=30, help='Wind 重试间隔秒数（默认30）')
     return parser.parse_args()
 
 
@@ -96,6 +96,22 @@ def maybe_launch_wind_terminal():
     log.info(f"拉起 Wind 终端: {exe}")
     subprocess.Popen([exe], cwd=os.path.dirname(exe),
                      creationflags=subprocess.CREATE_NEW_CONSOLE if os.name == 'nt' else 0)
+
+
+def wind_terminal_running():
+    """检查 Wind 终端进程是否在运行（无人值守任务的前置判断）。
+
+    终端未运行时直接跳过推送：此时 WindPy 的 w.start() 会反复拉起
+    Wind 组件并在桌面上闪出控制台窗口（不继承隐藏状态），且必然失败。
+    """
+    try:
+        import psutil
+    except ImportError:
+        return True  # 无 psutil 时无法判断，保持旧行为
+    return any(
+        (p.info.get('name') or '').lower().startswith('wind')
+        for p in psutil.process_iter(['name'])
+    )
 
 
 def server_request(method, url, token, timeout, **kwargs):
@@ -191,6 +207,9 @@ def run_increment_push(args, server, token):
                  DEFAULT_LOOKBACK_DAYS, start_date)
 
     maybe_launch_wind_terminal()
+    if not wind_terminal_running():
+        log.warning("Wind 终端未运行，跳过本轮推送（如需推送请先打开并登录 Wind 终端后重跑）")
+        return
     wind = ipm_updater.connect_wind(args.max_retries, args.interval)
     sids = ipm_updater.load_indicator_ids()
     log.info("拉取区间 [%s, %s]，共 %d 个指标...", start_date, end_date, len(sids))
