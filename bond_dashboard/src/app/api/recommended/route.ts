@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import fs from "node:fs";
 import path from "node:path";
 import { internalRatingOf } from "@/lib/internal-ratings";
+import { issuerMetricsOf } from "@/lib/issuer-metrics";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -27,9 +28,15 @@ export async function GET() {
       const coupon = Number(x.coupon ?? 0);
       const note = coupon > 0 ? undefined : notes[name]?.note;
       const withNote = note ? { ...x, couponNote: note } : x;
-      // 主体内评富化（信评门户数据，按发行人全称匹配）
+      // 主体内评 + 质押比/YY调整富化（信评门户与 issuer_metrics 快照，按发行人全称匹配）
       const internalRating = internalRatingOf(x.issuer as string | null) || null;
-      return internalRating ? { ...withNote, internalRating } : { ...withNote, internalRating: null };
+      const metrics = issuerMetricsOf(x.issuer as string | null);
+      return {
+        ...withNote,
+        internalRating,
+        pledge: metrics?.pledge ?? null,
+        yyAdj: metrics?.yyAdj ?? null,
+      };
     });
     // 全站口径：剔除 PPN/定向工具
     const clean = list.filter((x) => {

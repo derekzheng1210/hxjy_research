@@ -32,6 +32,11 @@ from .calculator import calculate_issuer_deviations
 from .data_fetcher import fetch_new_issues
 from .db_utils import get_connection
 from .ratings import attach_internal_ratings, rating_for_issuer
+from .trends import (
+    build_trends,
+    load_province_map,
+    maybe_background_refresh_provinces,
+)
 
 # 项目根加入 sys.path，以便复用 paths.py 统一数据路径（PORTAL_DATA_ROOT 定位）
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -40,6 +45,7 @@ if _PROJECT_ROOT not in sys.path:
 from dotenv import load_dotenv
 load_dotenv(os.path.join(_PROJECT_ROOT, ".env"))
 from paths import PRIMARY_PRICING_CACHE as CACHE_DB_PATH
+from juyuan_update.unified_excel import load_bond_static
 
 pricing_bp = Blueprint("primary_market_pricing", __name__, template_folder="templates")
 
@@ -176,6 +182,55 @@ def _date_offset(date_str: str, days: int) -> str:
     return (datetime.strptime(date_str, "%Y%m%d") + timedelta(days=days)).strftime("%Y%m%d")
 
 
+# ──────────────────────────────────────────────────────
+# 债券详查可用性：新发券未进入债券详查数据池（bond_static）前不可跳详查
+# ──────────────────────────────────────────────────────
+_BOND_POOL_MIN_SIZE = 1000  # 池小于该规模视为未构建/异常，不做门禁（全部可点）
+_bond_detail_codes_lock = threading.Lock()
+_bond_detail_codes_cache: tuple[tuple, frozenset[str] | None] | None = None
+
+
+def _bond_detail_codes() -> frozenset[str] | None:
+    """债券详查数据池中的债券代码集合（裸代码）；池未构建时返回 None。"""
+    global _bond_detail_codes_cache
+    payload = load_bond_static()
+    bonds = payload.get("bonds") or []
+    signature = (payload.get("generated_at", ""), len(bonds))
+    with _bond_detail_codes_lock:
+        cached = _bond_detail_codes_cache
+        if cached and cached[0] == signature:
+            return cached[1]
+    if len(bonds) < _BOND_POOL_MIN_SIZE:
+        codes = None
+    else:
+        codes = frozenset(
+            code
+            for bond in bonds
+            for code in {str(bond.get("code") or "").strip(), str(bond.get("code") or "").split(".")[0].strip()}
+            if code
+        )
+    with _bond_detail_codes_lock:
+        _bond_detail_codes_cache = (signature, codes)
+    return codes
+
+
+def _annotate_detail_availability(bonds: list[dict]) -> None:
+    """为逐券记录标注债券详查可用性（含参考债券），前端据此决定是否渲染详查链接。"""
+    codes = _bond_detail_codes()
+    if codes is None:
+        for bond in bonds:
+            bond.setdefault("detail_available", True)
+            if bond.get("ref_bond_symbol"):
+                bond.setdefault("ref_detail_available", True)
+        return
+    for bond in bonds:
+        symbol = str(bond.get("bond_symbol") or "").strip()
+        bond["detail_available"] = bool(symbol) and symbol in codes
+        ref_symbol = str(bond.get("ref_bond_symbol") or "").strip()
+        if ref_symbol:
+            bond["ref_detail_available"] = ref_symbol in codes
+
+
 def _bond_from_cache_row(row: sqlite3.Row, use_cached_overpriced: bool = False) -> dict:
     """Normalize a cached bond row to the API shape used by the frontend."""
     columns = set(row.keys())
@@ -233,12 +288,20 @@ def _summarize_bonds(bonds: list[dict], issuer: str | None = None) -> dict:
         for b in bonds
         if b.get("issue_amount_wan") is not None
     ]
+    weighted_coupon = [
+        (float(b["coupon_rate"]), float(b["issue_amount_wan"]))
+        for b in bonds
+        if b.get("coupon_rate") is not None and b.get("issue_amount_wan") is not None
+    ]
     result = {
         "total_bonds": total_bonds,
         "issuer_count": len({b.get("issuer") for b in bonds if b.get("issuer")}),
         "issue_amount_wan": round(sum(known_amounts), 4) if known_amounts else None,
         "issue_amount_yi": round(sum(known_amounts) / 10000, 4) if known_amounts else None,
         "issue_amount_bond_count": len(known_amounts),
+        "coupon_w": round(
+            sum(c * a for c, a in weighted_coupon) / sum(a for _, a in weighted_coupon), 4
+        ) if weighted_coupon else None,
         "calculated_bonds": calculated_bonds,
         "calculable_ratio": round(calculated_bonds / total_bonds, 4) if total_bonds else 0.0,
         "non_market_count": non_market_count,
@@ -562,7 +625,7 @@ def _refresh_date_cache(issue_date: str, exclude_short: bool, only_public: bool)
 
 
 def _search_from_cache(query: str) -> list[dict] | None:
-    """从缓存中按发行人名称或债券简称搜索对应发行人。"""
+    """从缓存中按发行人名称、债券简称或债券代码搜索。"""
     cache_conn = _get_cache_conn()
     if not cache_conn:
         return None
@@ -574,27 +637,32 @@ def _search_from_cache(query: str) -> list[dict] | None:
             FROM (
                 SELECT issuer, issuer AS label, 'issuer' AS match_type, NULL AS bond_symbol
                 FROM issuer_summary
-                WHERE issuer LIKE ? AND issue_date_rule = ?
+                WHERE issuer LIKE :issuer_q AND issue_date_rule = :rule
 
                 UNION
 
                 SELECT issuer, bond_name AS label, 'bond' AS match_type, symbol AS bond_symbol
                 FROM bond_deviations
-                WHERE bond_name LIKE ? AND issue_date_rule = ?
+                WHERE (bond_name LIKE :bond_q OR symbol LIKE :bond_q)
+                  AND issue_date_rule = :rule
             )
             ORDER BY
-                CASE WHEN label = ? THEN 0
-                     WHEN label LIKE ? THEN 1
+                CASE WHEN label = :exact THEN 0
+                     WHEN bond_symbol = :exact THEN 0
+                     WHEN label LIKE :prefix THEN 1
+                     WHEN bond_symbol LIKE :prefix THEN 1
                      ELSE 2 END,
                 match_type,
                 label
             LIMIT 20
             """,
-            (
-                f"%{query}%", ISSUE_DATE_RULE_VERSION,
-                f"%{query}%", ISSUE_DATE_RULE_VERSION,
-                query, f"{query}%",
-            ),
+            {
+                "issuer_q": f"%{query}%",
+                "bond_q": f"%{query}%",
+                "rule": ISSUE_DATE_RULE_VERSION,
+                "exact": query,
+                "prefix": f"{query}%",
+            },
         ).fetchall()
         if rows:
             return [dict(row) for row in rows]
@@ -731,6 +799,182 @@ def _read_market_result_from_cache(
         cache_conn.close()
 
 
+# ──────────────────────────────────────────────────────
+# 结构与分布：类型/期限偏离分解、偏离直方图、期限分档统计
+# （期限结构散点已迁往发行看板「历史发行情况」页，此处不提供散点/曲线）
+# ──────────────────────────────────────────────────────
+
+# 期限分档（与发行看板曲线口径一致：档间取关键期限中点切分）
+TERM_BUCKETS: tuple[tuple[str, float | None], ...] = (
+    ("<=1Y", 1.5),
+    ("2Y", 2.5),
+    ("3Y", 4.0),
+    ("5Y", 6.0),
+    ("7Y", 8.5),
+    ("10Y", 12.5),
+    ("15Y", 17.5),
+    ("20Y", 25.0),
+    ("30Y", None),
+)
+BOND_TYPE_LABELS = {
+    "ordinary": "普通债",
+    "perpetual": "永续债",
+    "tier2": "二级资本债",
+    "tlac": "TLAC",
+    "broker_subordinated": "券商次级",
+}
+BOND_TYPE_ORDER = ("tier2", "tlac", "broker_subordinated", "perpetual", "ordinary")
+
+
+def _term_bucket_expr() -> str:
+    parts = [
+        f"WHEN effective_term < {upper} THEN '{label}'"
+        for label, upper in TERM_BUCKETS
+        if upper is not None
+    ]
+    parts.append(f"WHEN effective_term IS NOT NULL THEN '{TERM_BUCKETS[-1][0]}'")
+    return "CASE " + " ".join(parts) + " ELSE NULL END"
+
+
+def _ordered_buckets(rows: list[sqlite3.Row]) -> list[dict]:
+    by_label = {row["bucket"]: row for row in rows if row["bucket"]}
+    ordered = []
+    for label, _ in TERM_BUCKETS:
+        row = by_label.get(label)
+        if row is None:
+            continue
+        calc = row["calc_n"] or 0
+        ordered.append({
+            "bucket": label,
+            "count": row["count"] or 0,
+            "amount_yi": round((row["amount_wan"] or 0) / 10000, 4),
+            "coupon_w": _workpaper_round(row["coupon_w"], 4) if row["coupon_w"] is not None else None,
+            "term_w": _workpaper_round(row["term_w"], 2) if row["term_w"] is not None else None,
+            "calc_n": calc,
+            "avg_dev_bp": _workpaper_round(row["avg_dev_bp"], 2) if row["avg_dev_bp"] is not None else None,
+            "nm_n": row["nm_n"] or 0,
+            "nm_ratio": _workpaper_round((row["nm_n"] or 0) / calc, 4) if calc else None,
+            "ovr_n": row["ovr_n"] or 0,
+            "ovr_ratio": _workpaper_round((row["ovr_n"] or 0) / calc, 4) if calc else None,
+        })
+    return ordered
+
+
+def _read_structure_breakdown_from_cache(
+    start_date: str,
+    end_date: str,
+    exclude_short: bool,
+    only_public: bool,
+    exclude_perpetual: bool,
+    term_min: float | None,
+    term_max: float | None,
+) -> dict | None:
+    """类型/期限偏离分解、偏离分布直方图与期限分档统计。"""
+    cache_conn = _get_cache_conn()
+    if not cache_conn:
+        return None
+    where_sql, params = _cache_filter_sql(
+        start_date, end_date, exclude_short, only_public, exclude_perpetual,
+        term_min, term_max, apply_config_exclusions=True,
+    )
+    valid = "COALESCE(is_no_judgement, 0) = 0 AND deviation_bp IS NOT NULL"
+    group_select = f"""
+        SELECT {{dim}} AS dim,
+               COUNT(*) AS total,
+               SUM(CASE WHEN {valid} THEN 1 ELSE 0 END) AS calc_n,
+               AVG(CASE WHEN {valid} THEN deviation_bp END) AS avg_dev_bp,
+               SUM(CASE WHEN {valid} AND is_non_market = 1 THEN 1 ELSE 0 END) AS nm_n,
+               SUM(CASE WHEN {valid} AND deviation_bp > {OVERPRICED_THRESHOLD_BP} THEN 1 ELSE 0 END) AS ovr_n
+    """
+    bucket_select = f"""
+        SELECT {_term_bucket_expr()} AS bucket,
+               COUNT(*) AS count,
+               SUM(issue_amount_wan) AS amount_wan,
+               CASE WHEN SUM(issue_amount_wan) > 0
+                    THEN SUM(coupon_rate * issue_amount_wan) / SUM(issue_amount_wan)
+                    ELSE AVG(coupon_rate) END AS coupon_w,
+               CASE WHEN SUM(issue_amount_wan) > 0
+                    THEN SUM(effective_term * issue_amount_wan) / SUM(issue_amount_wan)
+                    ELSE AVG(effective_term) END AS term_w,
+               SUM(CASE WHEN {valid} THEN 1 ELSE 0 END) AS calc_n,
+               AVG(CASE WHEN {valid} THEN deviation_bp END) AS avg_dev_bp,
+               SUM(CASE WHEN {valid} AND is_non_market = 1 THEN 1 ELSE 0 END) AS nm_n,
+               SUM(CASE WHEN {valid} AND deviation_bp > {OVERPRICED_THRESHOLD_BP} THEN 1 ELSE 0 END) AS ovr_n
+    """
+    try:
+        type_rows = cache_conn.execute(f"""
+            {group_select.format(dim="COALESCE(NULLIF(TRIM(bond_type), ''), 'ordinary')")}
+            FROM bond_deviations
+            WHERE {where_sql} AND effective_term IS NOT NULL
+            GROUP BY dim
+        """, params).fetchall()
+        term_rows = cache_conn.execute(f"""
+            {group_select.format(dim=_term_bucket_expr())}
+            FROM bond_deviations
+            WHERE {where_sql} AND effective_term IS NOT NULL
+            GROUP BY dim
+        """, params).fetchall()
+        bucket_rows = cache_conn.execute(f"""
+            {bucket_select}
+            FROM bond_deviations
+            WHERE {where_sql} AND effective_term IS NOT NULL
+            GROUP BY bucket
+        """, params).fetchall()
+        hist_rows = cache_conn.execute(f"""
+            SELECT CASE WHEN deviation_bp < -10 THEN '<-10'
+                        WHEN deviation_bp < -3 THEN '-10~-3'
+                        WHEN deviation_bp <= 3 THEN '-3~3'
+                        WHEN deviation_bp <= 10 THEN '3~10'
+                        ELSE '>10' END AS bin,
+                   COUNT(*) AS count
+            FROM bond_deviations
+            WHERE {where_sql} AND {valid}
+            GROUP BY bin
+        """, params).fetchall()
+
+        def to_group(row: sqlite3.Row, label: str) -> dict:
+            calc = row["calc_n"] or 0
+            return {
+                "key": row["dim"],
+                "label": label,
+                "total": row["total"] or 0,
+                "calc_n": calc,
+                "avg_dev_bp": _workpaper_round(row["avg_dev_bp"], 2) if row["avg_dev_bp"] is not None else None,
+                "nm_n": row["nm_n"] or 0,
+                "nm_ratio": _workpaper_round((row["nm_n"] or 0) / calc, 4) if calc else None,
+                "ovr_n": row["ovr_n"] or 0,
+                "ovr_ratio": _workpaper_round((row["ovr_n"] or 0) / calc, 4) if calc else None,
+            }
+
+        by_type = {row["dim"]: row for row in type_rows}
+        type_groups = [
+            to_group(by_type[key], BOND_TYPE_LABELS.get(key, key))
+            for key in (*BOND_TYPE_ORDER, *(k for k in by_type if k not in BOND_TYPE_ORDER))
+            if key in by_type
+        ]
+        by_term = {row["dim"]: row for row in term_rows}
+        term_groups = [
+            to_group(by_term[label], label)
+            for label, _ in TERM_BUCKETS
+            if label in by_term
+        ]
+        hist_order = ('<-10', '-10~-3', '-3~3', '3~10', '>10')
+        by_bin = {row["bin"]: row["count"] or 0 for row in hist_rows}
+        return {
+            "start_date": start_date,
+            "end_date": end_date,
+            "by_type": type_groups,
+            "by_term": term_groups,
+            "histogram": [{"bin": b, "count": by_bin.get(b, 0)} for b in hist_order],
+            "buckets": _ordered_buckets(bucket_rows),
+            "_source": "cache",
+        }
+    except Exception:
+        return None
+    finally:
+        cache_conn.close()
+
+
 def _read_issuer_summary_aggregated(
     start_date: str,
     end_date: str,
@@ -755,6 +999,9 @@ def _read_issuer_summary_aggregated(
                    COUNT(*) AS total_bonds,
                    SUM(issue_amount_wan) AS issue_amount_wan,
                    COUNT(issue_amount_wan) AS issue_amount_bond_count,
+                   CASE WHEN SUM(issue_amount_wan) > 0
+                        THEN SUM(coupon_rate * issue_amount_wan) / SUM(issue_amount_wan)
+                        ELSE AVG(coupon_rate) END AS coupon_w,
                    SUM(CASE WHEN {valid} THEN 1 ELSE 0 END) AS calculated_bonds,
                    SUM(CASE WHEN {valid} AND is_non_market = 1 THEN 1 ELSE 0 END) AS non_market_count,
                    SUM(CASE WHEN {valid} AND is_overpriced = 1 THEN 1 ELSE 0 END) AS overpriced_count,
@@ -786,6 +1033,7 @@ def _read_issuer_summary_aggregated(
                 "total_bonds": total,
                 "issue_amount_yi": _workpaper_round(amount / 10000, 4) if amount is not None else None,
                 "issue_amount_bond_count": row["issue_amount_bond_count"] or 0,
+                "coupon_w": _workpaper_round(row["coupon_w"], 4) if row["coupon_w"] is not None else None,
                 "calculated_bonds": calculated,
                 "calculable_ratio": _workpaper_round(calculated / total, 4) if total else 0.0,
                 "non_market_count": non_market,
@@ -868,6 +1116,7 @@ def _issuer_rows_from_bonds(bonds: list[dict], history_lookup: dict[str, dict] |
 
 def _build_date_result(bonds: list[dict], issue_date: str, source: str) -> dict:
     """Build the API response for single-date issue queries."""
+    _annotate_detail_availability(bonds)
     result = _summarize_bonds(bonds)
     result["issue_date"] = issue_date
     result["issuers"] = _issuer_rows_from_bonds(bonds)
@@ -1153,7 +1402,8 @@ def _calculate_issue_date_from_db(
 
 @pricing_bp.route("/")
 def index():
-    return render_template("index.html")
+    # embed=1：嵌入看板 iframe 的发行人分析视图，模板将门户导航高度归零
+    return render_template("index.html", embed=request.args.get("embed") == "1")
 
 
 @pricing_bp.route("/api/cache/meta")
@@ -1208,6 +1458,94 @@ def api_market():
     return jsonify(result)
 
 
+@pricing_bp.route("/api/trends")
+def api_trends():
+    """历史趋势（原一级发行看板 /trends 迁入）：bond_deviations 缓存聚合，随每日管道自动更新。"""
+    from datetime import timedelta
+
+    today = datetime.now().strftime("%Y%m%d")
+    three_years_ago = (datetime.now() - timedelta(days=365 * 3)).strftime("%Y%m%d")
+    start_date = request.args.get("start_date") or three_years_ago
+    end_date = request.args.get("end_date") or today
+    try:
+        datetime.strptime(start_date, "%Y%m%d")
+        datetime.strptime(end_date, "%Y%m%d")
+        if start_date > end_date:
+            raise ValueError("筛选区间无效")
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    cache_conn = _get_cache_conn()
+    if not cache_conn:
+        return jsonify({"error": "缓存库尚未构建，请先在门户运行数据库更新"}), 503
+    try:
+        # 缓存键含表内最新 computed_at 与省份映射版本：每日管道刷新/映射补拉后自动失效重算
+        max_computed = cache_conn.execute(
+            "SELECT MAX(computed_at) FROM bond_deviations"
+        ).fetchone()[0] or ""
+        province_map = load_province_map()
+        result = _cached_result(
+            (
+                "trends", start_date, end_date, str(max_computed),
+                (province_map or {}).get("_generated_at", "none"),
+            ),
+            lambda: build_trends(cache_conn, start_date, end_date, province_map),
+        )
+    finally:
+        cache_conn.close()
+
+    if result is None:
+        return jsonify({"error": "缓存表无数据，请先运行数据库更新"}), 503
+    if not result.get("province_top_year") and not province_map:
+        # 区域映射缺失：触发当日一次后台补拉（不阻塞本次响应）
+        prov_conn = _get_cache_conn()
+        if prov_conn:
+            try:
+                issuers = [
+                    r[0]
+                    for r in prov_conn.execute(
+                        "SELECT DISTINCT issuer FROM bond_deviations LIMIT 20000"
+                    ).fetchall()
+                ]
+            finally:
+                prov_conn.close()
+            if issuers:
+                maybe_background_refresh_provinces(issuers)
+    return jsonify(result)
+
+
+@pricing_bp.route("/api/structure-breakdown")
+def api_structure_breakdown():
+    """类型/期限偏离分解、偏离分布直方图与期限分档统计。"""
+    start_date = request.args.get("start_date", HISTORY_START_DATE)
+    end_date = request.args.get("end_date") or _default_end_date()
+    exclude_short = request.args.get("exclude_short", "0") == "1"
+    only_public = request.args.get("only_public", "0") == "1"
+    exclude_perpetual = request.args.get("exclude_perpetual", "0") == "1"
+    try:
+        datetime.strptime(start_date, "%Y%m%d")
+        datetime.strptime(end_date, "%Y%m%d")
+        term_min = _optional_float_arg("term_min")
+        term_max = _optional_float_arg("term_max")
+        if start_date > end_date or (term_min is not None and term_max is not None and term_min > term_max):
+            raise ValueError("筛选区间无效")
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    cache_key = (
+        "breakdown", start_date, end_date, exclude_short, only_public,
+        exclude_perpetual, term_min, term_max,
+    )
+    result = _cached_result(cache_key, lambda: _read_structure_breakdown_from_cache(
+        start_date, end_date, exclude_short, only_public, exclude_perpetual,
+        term_min, term_max,
+    ))
+    return jsonify(result or {
+        "start_date": start_date, "end_date": end_date,
+        "by_type": [], "by_term": [], "histogram": [], "buckets": [], "_source": "cache_miss",
+    })
+
+
 @pricing_bp.route("/api/issuer-summary")
 def api_issuer_summary():
     """Return all-issuer aggregation from the cached issuance deviations."""
@@ -1252,7 +1590,7 @@ def api_issuer_summary():
 
     sort_by = request.args.get("sort_by", "avg_deviation_bp")
     allowed_sort = {
-        "issuer", "total_bonds", "issue_amount_yi", "calculated_bonds", "calculable_ratio",
+        "issuer", "total_bonds", "issue_amount_yi", "coupon_w", "calculated_bonds", "calculable_ratio",
         "non_market_count", "non_market_ratio", "overpriced_count", "overpriced_ratio",
         "avg_deviation_bp", "last_issue_date",
     }
@@ -1323,7 +1661,7 @@ def api_search():
                            b.SYMBOL AS bond_symbol
                     FROM TQ_BD_BASICINFO b
                     JOIN TQ_BD_NEWESTBASICINFO n ON n.SECODE = b.SECODE
-                    WHERE b.BONDSNAME LIKE :q
+                    WHERE (b.BONDSNAME LIKE :q OR b.SYMBOL LIKE :q)
                       AND b.ISVALID = 1
                       AND n.ISVALID = 1
                       AND NVL(b.BONDTYPE1, '0') NOT IN ({excluded_types})
@@ -1332,7 +1670,9 @@ def api_search():
                 )
                 WHERE issuer IS NOT NULL AND label IS NOT NULL
                 ORDER BY CASE WHEN label = :exact_query THEN 0
+                              WHEN bond_symbol = :exact_query THEN 0
                               WHEN label LIKE :prefix_query THEN 1
+                              WHEN bond_symbol LIKE :prefix_query THEN 1
                               ELSE 2 END,
                          match_type,
                          label
@@ -1392,6 +1732,7 @@ def api_issuer(issuer_name: str):
     result = _filtered_issuer_result(
         base_result, issuer_name, exclude_perpetual, term_min, term_max
     )
+    _annotate_detail_availability(result.get("bonds", []))
     result["_background_refresh"] = background_refresh
     result["_amount_pending"] = _schedule_amount_backfill(
         result.get("bonds", []), start_date, end_date

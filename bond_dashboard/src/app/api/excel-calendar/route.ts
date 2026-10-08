@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import fs from "node:fs";
 import path from "node:path";
 import { internalRatingOf } from "@/lib/internal-ratings";
+import { issuerMetricsOf } from "@/lib/issuer-metrics";
 import { getCompanyRatings, localYyOf } from "@/lib/ratings";
 
 export const runtime = "nodejs";
@@ -80,8 +81,16 @@ export async function GET(req: NextRequest) {
           : { ...b, yy: localYyOf(b.issuer) ?? dm[String(b.issuer).trim()]?.yy ?? null }
       );
     }
-    // 主体内评富化（信评门户数据，按发行人全称匹配）
-    bonds = bonds.map((b) => ({ ...b, internalRating: internalRatingOf(b.issuer) || null }));
+    // 主体内评 + 质押比/YY调整富化（信评门户与 issuer_metrics 快照，按发行人全称匹配）
+    bonds = bonds.map((b) => {
+      const metrics = issuerMetricsOf(b.issuer);
+      return {
+        ...b,
+        internalRating: internalRatingOf(b.issuer) || null,
+        pledge: metrics?.pledge ?? null,
+        yyAdj: metrics?.yyAdj ?? null,
+      };
+    });
     return NextResponse.json({ found: true, day: { ...day, bonds }, generated: cal.meta?.generated ?? "" });
   }
 

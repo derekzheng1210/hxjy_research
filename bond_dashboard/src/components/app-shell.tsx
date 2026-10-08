@@ -11,18 +11,18 @@ import {
   Trophy,
   BellRing,
   MessageSquare,
-  TrendingUp,
-  GitCompareArrows,
-  BarChart3,
   Landmark,
   Star,
-  Building2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { apiFetch } from "@/lib/base-path";
 import { UploadExcelButton } from "@/components/upload-excel-button";
 import { InstallPwaButton } from "@/components/install-pwa-button";
+import { IssuerDrilldownProvider } from "@/components/issuer-drilldown";
 
+// 2026-09-24 分析增强收缩完成：收益率曲线由门户「一级偏离统计」承接，
+// 利差榜/复盘并入「推荐个券」页；发行人分析融入偏离统计的发行人分析标签；
+// 历史趋势下线。分析增强组已清空，导航只保留核心栏目。
 const NAV = [
   { group: "核心栏目", items: [
     { href: "/", label: "总览仪表盘", icon: LayoutDashboard },
@@ -33,12 +33,6 @@ const NAV = [
     { href: "/won", label: "中标个券", icon: Trophy },
     { href: "/listing", label: "中标上市提醒", icon: BellRing },
     { href: "/exchange", label: "信息交流栏", icon: MessageSquare },
-  ]},
-  { group: "分析增强", items: [
-    { href: "/yield-curve", label: "收益率曲线", icon: TrendingUp },
-    { href: "/spread", label: "利差分析", icon: GitCompareArrows },
-    { href: "/trends", label: "历史趋势", icon: BarChart3 },
-    { href: "/issuer", label: "发行人分析", icon: Building2 },
   ]},
 ];
 
@@ -97,7 +91,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   }, [refreshUnread]);
 
   return (
-    <div className="flex min-h-screen bg-muted/30">
+    <IssuerDrilldownProvider>
+      <div className="flex min-h-screen bg-muted/30">
       {/* 侧边栏 */}
       <aside className="fixed inset-y-0 left-0 z-30 hidden w-60 flex-col border-r bg-background lg:flex">
         <div className="flex h-14 items-center gap-2 border-b px-4">
@@ -172,6 +167,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <main className="flex-1 lg:pl-60">
         <div className="px-4 pt-16 pb-10 sm:px-6 lg:px-8 lg:pt-6">{children}</div>
       </main>
-    </div>
+      </div>
+    </IssuerDrilldownProvider>
   );
 }

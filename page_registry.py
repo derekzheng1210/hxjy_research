@@ -32,7 +32,7 @@ PAGE_SECTIONS = (
         "title": "信用债一级发行",
         "pages": (
             {"key": "bond_dashboard", "endpoint": "bond_dashboard.index", "title": "一级发行看板", "description": "每日一级发行、发行结果、参与/中标、上市提醒、收益率曲线与利差分析。", "meta_key": None},
-            {"key": "primary_market_pricing", "endpoint": "primary_market_pricing.index", "title": "一级偏离统计", "description": "分析一级发行定价偏离、非市场化比例与发飞情况。", "meta_key": "primary_market_pricing"},
+            {"key": "primary_market_pricing", "endpoint": "primary_market_pricing.index", "title": "一级发行研究", "description": "分析一级发行定价偏离、非市场化比例与发飞情况。", "meta_key": "primary_market_pricing"},
         ),
     },
     {

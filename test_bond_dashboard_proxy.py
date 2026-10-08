@@ -72,14 +72,14 @@ class RegistryTests(unittest.TestCase):
         section = next(s for s in page_registry.PAGE_SECTIONS if s["key"] == "credit_primary")
         self.assertEqual(section["title"], "信用债一级发行")
         self.assertEqual(section["pages"][0]["endpoint"], "bond_dashboard.index")
-        # 一级偏离统计挪入本板块，排在一级发行看板之后
+        # 一级发行研究挪入本板块，排在一级发行看板之后
         self.assertEqual([p["key"] for p in section["pages"]], ["bond_dashboard", "primary_market_pricing"])
         credit = next(s for s in page_registry.PAGE_SECTIONS if s["key"] == "credit")
         self.assertNotIn("primary_market_pricing", [p["key"] for p in credit["pages"]])
 
-    def test_primary_market_pricing_renamed(self):
+    def test_primary_market_pricing_title(self):
         page = next(p for p in page_registry.all_pages() if p["key"] == "primary_market_pricing")
-        self.assertEqual(page["title"], "一级偏离统计")
+        self.assertEqual(page["title"], "一级发行研究")
 
     def test_dashboard_route_registered(self):
         rules = {rule.rule for rule in portal_app.url_map.iter_rules()}
@@ -129,7 +129,7 @@ class ProxyForwardTests(unittest.TestCase):
         self.assertIn("portal-nav-dashboard-adjust", html)
         # 统一导航菜单包含新板块与改名后的入口（ensure_ascii=False 原样内嵌）
         self.assertIn("信用债一级发行", html)
-        self.assertIn("一级偏离统计", html)
+        self.assertIn("一级发行研究", html)
         # 注入后丢弃上游校验器，避免 304 拿到未注入的缓存页
         self.assertNotIn("ETag", response.headers)
         self.assertEqual(response.headers.get("Cache-Control"), "private, no-cache")

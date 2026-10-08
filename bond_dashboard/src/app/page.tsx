@@ -10,7 +10,6 @@ import {
   Trophy,
   BellRing,
   PenLine,
-  TrendingUp,
   ArrowRight,
   CircleDollarSign,
   Percent,
@@ -49,7 +48,6 @@ const QUICK_LINKS = [
   { href: "/participated", label: "参与个券", desc: "记录与跟踪参与投标", icon: PenLine, accent: "violet" },
   { href: "/won", label: "中标个券", desc: "中标记录与汇总", icon: Trophy, accent: "red" },
   { href: "/listing", label: "中标上市提醒", desc: "上市日倒计时提醒", icon: BellRing, accent: "blue" },
-  { href: "/yield-curve", label: "收益率曲线", desc: "中债曲线与定价参考", icon: TrendingUp, accent: "green" },
 ] as const;
 
 /** 期限分桶（兼容 0.31Y / 3+2 / 30Y / 永续） */
@@ -292,14 +290,14 @@ export default function HomePage() {
 
           {loadingDetail && <div className="mb-4 rounded-xl border bg-background p-6 text-center text-sm text-muted-foreground">正在加载当日清单…</div>}
 
-          {!loadingDetail && detail && detail.date === date && !detail.day && (
+          {!loadingDetail && detail && detail.date === date && (!detail.day || bonds.length === 0) && (
             <div className="mb-6 rounded-xl border bg-background p-6 text-center text-sm text-muted-foreground">
               <CalendarClock className="mx-auto mb-2 h-5 w-5 opacity-60" />
-              {fmtDateShort(date)} 无发行清单（当日非发行日）
+              {detail.day ? `${fmtDateShort(date)} 当日无发行` : `${fmtDateShort(date)} 无发行清单（当日非发行日）`}
             </div>
           )}
 
-          {!loadingDetail && detail && detail.date === date && detail.day && (
+          {!loadingDetail && detail && detail.date === date && detail.day && bonds.length > 0 && (
             <>
               {/* KPI */}
               <div className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-5">
@@ -349,20 +347,6 @@ export default function HomePage() {
                     ))}
                   </div>
                 </div>
-              </div>
-
-              {/* 当日清单明细表已迁至「每日一级发行」板块 */}
-              <div className="mb-6 flex flex-wrap items-center justify-between gap-2 rounded-xl border bg-background px-4 py-3">
-                <p className="text-sm text-muted-foreground">
-                  {fmtDateShort(date)} 发行清单（{bonds.length} 只）已移至「每日一级发行」板块
-                </p>
-                <Link
-                  href="/daily"
-                  className="inline-flex h-8 items-center gap-1 rounded-lg border border-border bg-background px-2.5 text-sm font-medium transition-colors hover:bg-muted"
-                >
-                  前往查看
-                  <ArrowRight className="h-3.5 w-3.5" />
-                </Link>
               </div>
             </>
           )}

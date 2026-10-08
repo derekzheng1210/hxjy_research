@@ -92,48 +92,6 @@ export interface DmBondBasic {
   [key: string]: unknown;
 }
 
-// 收益率曲线点
-export interface YieldPoint {
-  valuation_date: string;
-  curve_term: string;
-  curve_type?: string;
-  yield: number;
-}
-
-// 趋势统计
-export interface TrendData {
-  meta: { source: string; generated: string; range: string };
-  monthly: { ym: string; cnt: number; plan: number; act: number; yield_mean: number | null }[];
-  /** 按发行期限（3/5/10/15/30Y）的月度平均票面，同图多线（2024-01 起） */
-  monthly_yield_term: {
-    ym: string;
-    t3: number | null;
-    t5: number | null;
-    t10: number | null;
-    t15: number | null;
-    t30: number | null;
-  }[];
-  /** 按债券类型的月度发行规模（2024-01 起），列 = ym + type_keys */
-  type_monthly: { ym: string; [k: string]: number | string }[];
-  type_keys: string[];
-  type_year_total: { year: string; [k: string]: number | string }[];
-  /** 按期限档的月度发行规模（2024-01 起），列 = ym + term_keys */
-  term_monthly: { ym: string; [k: string]: number | string }[];
-  term_keys: string[];
-  /** 各年票面利率直方图 + 正态拟合参数 */
-  yield_hist: {
-    year: string;
-    n: number;
-    mean: number;
-    sd: number;
-    min: number;
-    max: number;
-    bins: { ybin: number; cnt: number }[];
-  }[];
-  /** 各年区域发行规模 TOP12 */
-  province_top_year: { year: string; items: { province_name: string; cnt: number; plan: number }[] }[];
-}
-
 // ===== Excel《一级发行-信用债发行》每日清单口径 =====
 export interface ExcelBond {
   name: string; // 债券简称
@@ -147,6 +105,30 @@ export interface ExcelBond {
   payDate?: string | null; // 缴款日
   recommended?: boolean; // 是否推荐
   internalRating?: string | null; // 主体内评（信评门户数据，由 /api/excel-calendar 按发行人富化）
+  pledge?: IssuerPledgeRange | null; // 交易所质押比区间（issuer_metrics 快照，服务端富化）
+  yyAdj?: IssuerYyAdj | null; // 近五年 YY 调整（issuer_metrics 快照，服务端富化）
+}
+
+// 发行人补充指标（issuer_metrics.json，由打包者机 Python 管道生成）
+export interface IssuerPledgeRange {
+  min: number;
+  max: number;
+  n: number;
+}
+
+export interface IssuerYyAdj {
+  up: { from: string; to: string; date: string }[];
+  down: { from: string; to: string; date: string }[];
+  yyNet: {
+    dir: "up" | "down" | "flat";
+    steps: number;
+    from: string;
+    to: string;
+    firstDate: string;
+    lastDate: string;
+    moves: number;
+    firstDir: "up" | "down" | null;
+  } | null;
 }
 
 export interface ExcelCalendarDay {

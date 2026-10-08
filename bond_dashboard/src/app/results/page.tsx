@@ -18,6 +18,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { SortableHead, useTableSort } from "@/components/table-sort";
+import { StructurePanel } from "@/components/structure-panel";
 import { ratingRank, termSortKey, yyRank } from "@/lib/rating-sort";
 import { cn } from "@/lib/utils";
 import { cleanReason } from "@/lib/credit";
@@ -115,6 +116,19 @@ export default function ResultsPage() {
   );
   const { sorted, sort, onSort } = useTableSort(dayBonds, valueFns);
 
+  // 结构与分布面板（单日口径，由一级偏离统计迁入）：期限/票面/规模/类型
+  const structBonds = useMemo(
+    () =>
+      dayBonds.map((b) => ({
+        name: b.sec_short_name || "",
+        tenor: b.bond_issue_tenor ?? null,
+        coupon: b.issue_yield ?? null,
+        amountWan: b.plan_issue_amount ?? null,
+        typeDesc: b.bond_type_desc ?? null,
+      })),
+    [dayBonds],
+  );
+
   return (
     <>
       <PageHeader title="历史发行情况" description="按截标日查询历史一级发行结果：票面、利差与认购倍数">
@@ -172,7 +186,9 @@ export default function ResultsPage() {
           {!dayBonds.length ? (
             <EmptyState title={`${fmtDateShort(date)} 无已定价发行结果`} description="可能是非工作日、无发行，或清洗后无符合条件的信用债，请切换日期查看。" />
           ) : (
-            <div className="overflow-x-auto rounded-xl border">
+            <>
+              <StructurePanel bonds={structBonds} date={fmtDateShort(date)} />
+              <div className="overflow-x-auto rounded-xl border">
               <Table>
                 <TableHeader>
                   <TableRow className="bg-muted/50">
@@ -233,7 +249,8 @@ export default function ResultsPage() {
                   ))}
                 </TableBody>
               </Table>
-            </div>
+              </div>
+            </>
           )}
         </>
       )}

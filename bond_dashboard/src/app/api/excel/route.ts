@@ -21,12 +21,16 @@ export async function POST(req: NextRequest) {
 
     if (type === "daily") {
       const result = await importDailyExcel(buf, file.name);
+      const message =
+        result.total === 0
+          ? `已导入 ${result.date}：当日无发行（空表，0 只 / 0 亿）${result.dayExisted ? "，已覆盖该日旧数据" : ""}`
+          : `已导入 ${result.date}：共 ${result.total} 只 / ${result.planYi} 亿，推荐 ${result.recommendedCount} 只${result.dayExisted ? "（覆盖该日旧数据）" : ""}`;
       return NextResponse.json({
         ok: true,
         type,
         fileName: file.name,
         result,
-        message: `已导入 ${result.date}：共 ${result.total} 只 / ${result.planYi} 亿，推荐 ${result.recommendedCount} 只${result.dayExisted ? "（覆盖该日旧数据）" : ""}`,
+        message,
       });
     }
     if (type === "bids") {

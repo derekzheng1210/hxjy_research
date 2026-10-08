@@ -3,12 +3,21 @@
 import { apiFetch } from "@/lib/base-path";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Star, CircleDollarSign, Percent, Layers, RefreshCw } from "lucide-react";
+import { Star, CircleDollarSign, Percent, Layers, RefreshCw, Trophy, CircleSlash, Target } from "lucide-react";
 import { PageHeader } from "@/components/page-header";
 import { StatCard } from "@/components/stat-card";
 import { LoadingState, ErrorState, EmptyState } from "@/components/status-state";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { PledgeBadge, YYAdjBadge, YYBadge } from "@/components/rating-badges";
+import { useIssuerDrilldown } from "@/components/issuer-drilldown";
+import {
+  RecReviewSection,
+  SelfTestSection,
+  SpreadLeaderboard,
+  useSpreadRec,
+} from "@/components/rec-spread";
+import type { IssuerPledgeRange, IssuerYyAdj } from "@/lib/types";
 import {
   Table,
   TableBody,
@@ -38,12 +47,18 @@ interface RecBond {
   issuer?: string | null;
   yy?: string | null; // YY 评分（来自每日 Excel）
   internalRating?: string | null; // 主体内评（信评门户数据）
+  pledge?: IssuerPledgeRange | null; // 交易所质押比区间（issuer_metrics 快照）
+  yyAdj?: IssuerYyAdj | null; // 近五年 YY 调整（issuer_metrics 快照）
   region?: string | null;
   bond_type?: string | null;
   pay_date?: string | null;
 }
 
+// 页面视图：全部推荐（主表，默认） / 利差榜（票面 vs 上市后最新估值）
+type RecView = "all" | "spread";
+
 export default function RecommendedPage() {
+  const drillIssuer = useIssuerDrilldown();
   const [bonds, setBonds] = useState<RecBond[] | null>(null);
   const [vals, setVals] = useState<Record<string, { cb?: number | null; cs?: number | null }>>({});
   const [error, setError] = useState("");
@@ -51,6 +66,9 @@ export default function RecommendedPage() {
   const [dateTo, setDateTo] = useState("2026-08-31");
   // 默认日期跟随数据：加载后自动对齐到推荐数据的最早 ~ 最新日期（用户手动改过则不再覆盖）
   const dateTouched = useRef(false);
+  // 视图切换：全部推荐 / 利差榜；利差与复盘数据走 /api/spread/recommended（序列口径）
+  const [view, setView] = useState<RecView>("all");
+  const spread = useSpreadRec();
 
   const load = useCallback(async () => {
     setError("");
@@ -108,6 +126,15 @@ export default function RecommendedPage() {
       },
       sp_bp: (b: RecBond) => b.sp_bp,
       yy: (b: RecBond) => yyRank(b.yy),
+      yyAdj: (b: RecBond) => {
+        const net = b.yyAdj?.yyNet;
+        if (!net || net.moves <= 0) return null;
+        return net.dir === "up" ? net.steps : net.dir === "down" ? -net.steps : 0;
+      },
+      pledge: (b: RecBond) => {
+        const p = b.pledge;
+        return p && p.n > 0 ? (p.min + p.max) / 2 : null;
+      },
       issuer: (b: RecBond) => b.issuer,
       internalRating: (b: RecBond) => ratingRank(b.internalRating),
       pay_date: (b: RecBond) => b.pay_date,
@@ -187,6 +214,35 @@ export default function RecommendedPage() {
                 />
               </div>
 
+              <div className="mb-4 flex flex-wrap items-center gap-3">
+                <div className="inline-flex rounded-lg border bg-background p-0.5 text-sm">
+                  <button
+                    className={cn(
+                      "rounded-md px-3 py-1.5 font-medium transition-colors",
+                      view === "all" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"
+                    )}
+                    onClick={() => setView("all")}
+                  >
+                    全部推荐
+                  </button>
+                  <button
+                    className={cn(
+                      "rounded-md px-3 py-1.5 font-medium transition-colors",
+                      view === "spread" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"
+                    )}
+                    onClick={() => setView("spread")}
+                  >
+                    利差榜
+                  </button>
+                </div>
+                {view === "spread" && (
+                  <span className="text-xs text-muted-foreground">
+                    利差 =（最新估值 − 票面）× 100 bp，负值=上市即浮盈
+                  </span>
+                )}
+              </div>
+
+              {view === "all" ? (
               <div className="overflow-x-auto rounded-xl border">
                 <Table>
                   <TableHeader>
@@ -202,6 +258,8 @@ export default function RecommendedPage() {
                       <SortableHead sortKey="valBp" sort={sort} onSort={onSort} className="text-right">估值-票面(bp)</SortableHead>
                       <SortableHead sortKey="sp_bp" sort={sort} onSort={onSort} className="text-right">票面-预测(bp)</SortableHead>
                       <SortableHead sortKey="yy" sort={sort} onSort={onSort} className="text-center">YY评分</SortableHead>
+                      <SortableHead sortKey="yyAdj" sort={sort} onSort={onSort} className="text-center">YY调整</SortableHead>
+                      <SortableHead sortKey="pledge" sort={sort} onSort={onSort} className="text-center">质押比</SortableHead>
                       <SortableHead sortKey="issuer" sort={sort} onSort={onSort} className="min-w-[120px]">发行主体</SortableHead>
                       <SortableHead sortKey="internalRating" sort={sort} onSort={onSort} className="text-center">主体内评</SortableHead>
                       <SortableHead sortKey="pay_date" sort={sort} onSort={onSort} className="text-center">缴款日</SortableHead>
@@ -298,16 +356,27 @@ export default function RecommendedPage() {
                           )}
                         </TableCell>
                         <TableCell className="py-2 text-center text-[12px]">
-                          {b.yy ? (
-                            <span className="inline-flex rounded-md bg-violet-50 px-1.5 py-0.5 text-[11px] font-semibold text-violet-700 dark:bg-violet-950 dark:text-violet-400">
-                              {b.yy}
-                            </span>
-                          ) : (
-                            "-"
-                          )}
+                          <YYBadge yy={b.yy} />
+                        </TableCell>
+                        <TableCell className="py-2 text-center text-[12px]">
+                          <YYAdjBadge up={b.yyAdj?.up ?? []} down={b.yyAdj?.down ?? []} net={b.yyAdj?.yyNet} />
+                        </TableCell>
+                        <TableCell className="py-2 text-center text-[12px]">
+                          <PledgeBadge pledge={b.pledge} />
                         </TableCell>
                         <TableCell className="max-w-[180px] py-2">
-                          <span className="line-clamp-2 text-[12px]" title={b.issuer || ""}>{b.issuer || "-"}</span>
+                          {b.issuer ? (
+                            <button
+                              type="button"
+                              onClick={() => { if (b.issuer) drillIssuer(b.issuer); }}
+                              title="查看发行人一级发行分析"
+                              className="line-clamp-2 text-left text-[12px] text-primary/80 hover:text-primary hover:underline"
+                            >
+                              {b.issuer}
+                            </button>
+                          ) : (
+                            <span className="text-[12px]">-</span>
+                          )}
                         </TableCell>
                         <TableCell className="py-2 text-center text-[12px]">
                           {b.internalRating ? (
@@ -324,6 +393,40 @@ export default function RecommendedPage() {
                   </TableBody>
                 </Table>
               </div>
+              ) : (
+                <section className="mb-2">
+                  <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold">
+                    <Trophy className="h-4 w-4 text-amber-500" />
+                    推荐个券利差榜（全部推荐券，按（最新估值 − 票面）× 100 bp 排序）
+                  </h2>
+                  {spread.error && <ErrorState message={spread.error} onRetry={() => spread.reload()} />}
+                  <SpreadLeaderboard rec={spread.rec} loading={spread.loading} onRefresh={() => spread.reload(true)} />
+                </section>
+              )}
+
+              {spread.rec && (
+                <details className="mt-6 rounded-xl border">
+                  <summary className="cursor-pointer px-4 py-3 text-sm font-semibold">
+                    未参与复盘与一级信用自测（点击展开）
+                  </summary>
+                  <div className="space-y-6 px-4 pb-4">
+                    <section>
+                      <h3 className="mb-2 flex items-center gap-2 text-sm font-semibold">
+                        <CircleSlash className="h-4 w-4 text-sky-500" />
+                        未参与复盘：错失的浮盈 vs 躲过的亏损（全部推荐券 · 未参与口径）
+                      </h3>
+                      <RecReviewSection rec={spread.rec} />
+                    </section>
+                    <section>
+                      <h3 className="mb-2 flex items-center gap-2 text-sm font-semibold">
+                        <Target className="h-4 w-4 text-violet-500" />
+                        一级信用自测表：票面预测把握度 × 择券盈利能力
+                      </h3>
+                      <SelfTestSection rec={spread.rec} />
+                    </section>
+                  </div>
+                </details>
+              )}
             </>
           )}
         </>

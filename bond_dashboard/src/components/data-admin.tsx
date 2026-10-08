@@ -134,7 +134,7 @@ export function DataAdminDialog({ open, onOpenChange }: { open: boolean; onOpenC
               <Sheet className="h-3.5 w-3.5" /> 每日发行 Excel
             </p>
             <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
-              《一级发行-信用债发行 YYYY-MM-DD.xlsx》：更新当日发行清单与推荐个券（重复上传同一天为覆盖式，幂等）。文件名需含日期。
+              《一级发行-信用债发行 YYYY-MM-DD.xlsx》：更新当日发行清单与推荐个券（重复上传同一天为覆盖式，幂等）。文件名需含日期；空表视为当日无发行。
             </p>
             <input
               ref={dailyRef}

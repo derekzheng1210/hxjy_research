@@ -750,6 +750,9 @@ def inject_blueprint_portal_nav(response):
     active_endpoint = active_by_blueprint.get(request.blueprint)
     if not active_endpoint or not response.content_type.startswith("text/html"):
         return response
+    # embed=1（一级发行看板内嵌的发行人分析 iframe）：不注入门户导航，避免双重导航
+    if request.args.get("embed") == "1":
+        return response
     response.set_data(inject_portal_nav(response.get_data(as_text=True), active_endpoint))
     return response
 

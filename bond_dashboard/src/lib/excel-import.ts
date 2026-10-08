@@ -122,11 +122,45 @@ export interface DailyImportResult {
   dayExisted: boolean;
 }
 
+interface CalFile {
+  meta: { source?: string; generated?: string; fileCount?: number };
+  days: Record<string, { file: string; count: number; planYi: number; bonds: ExcelBond[] }>;
+}
+
+/**
+ * 空表导入=当日无发行：写入 0 只的当日条目占住该日（与有数据的上传同为
+ * 「Excel 权威」语义——DM 每日自动补数不回填该日），并清除该日旧的推荐
+ * 个券（纠错场景：先传过清单、后改判无发行）。
+ */
+function writeEmptyDay(date: string, fileName: string): DailyImportResult {
+  const cal = readJson<CalFile>("excel_calendar.json", { meta: {}, days: {} });
+  const dayExisted = !!cal.days[date];
+  cal.days[date] = { file: fileName, count: 0, planYi: 0, bonds: [] };
+  cal.meta.generated = nowStr();
+  cal.meta.fileCount = Object.keys(cal.days).length;
+  writeJsonAtomic("excel_calendar.json", cal);
+
+  const rec = readJson<Record<string, unknown>[]>("recommended.json", []);
+  const others = rec.filter((x) => String(x.date ?? "") !== date);
+  if (others.length !== rec.length) writeJsonAtomic("recommended.json", others);
+
+  return { date, total: 0, planYi: 0, recommendedCount: 0, newRecommended: 0, yyAdded: 0, dayExisted };
+}
+
 export async function importDailyExcel(buf: Buffer, fileName: string): Promise<DailyImportResult> {
   const wb = XLSX.read(buf, { type: "buffer" });
   const ws = wb.Sheets[wb.SheetNames[0]];
   const rows = XLSX.utils.sheet_to_json<unknown[]>(ws, { header: 1, defval: null, raw: false });
-  if (!rows.length) throw new Error("Excel 内容为空");
+
+  // 日期：优先文件名（微信重传会带 (1) 等后缀，正则容错），其次工作表名
+  const date = dateOf(fileName) ?? dateOf(wb.SheetNames[0] ?? "");
+  if (!date) {
+    throw new Error("无法解析发行日期：文件名/工作表名中需包含 YYYY-MM-DD");
+  }
+
+  // 空表=当日无发行：整表无任何非空单元格（含 0 行的全新空白簿）按无发行处理
+  const blankSheet = !rows.some((r) => (r ?? []).some((cell) => String(cell ?? "").trim() !== ""));
+  if (blankSheet) return writeEmptyDay(date, fileName);
 
   const head = findHeader(rows, [
     ["name", (s) => /^债券简称/.test(s)],
@@ -151,12 +185,6 @@ export async function importDailyExcel(buf: Buffer, fileName: string): Promise<D
     throw new Error("未找到表头（需包含「债券简称」列，请确认是每日发行清单文件）");
   }
   const c = head.cols;
-
-  // 日期：优先文件名（微信重传会带 (1) 等后缀，正则容错），其次工作表名
-  const date = dateOf(fileName) ?? dateOf(wb.SheetNames[0] ?? "");
-  if (!date) {
-    throw new Error("无法解析发行日期：文件名/工作表名中需包含 YYYY-MM-DD");
-  }
 
   const parsed: DailyRow[] = [];
   for (let r = head.headerRow + 1; r < rows.length; r++) {
@@ -194,13 +222,10 @@ export async function importDailyExcel(buf: Buffer, fileName: string): Promise<D
       secVal: c.secVal !== undefined ? toNum(row[c.secVal]) : null,
     });
   }
-  if (!parsed.length) throw new Error("未解析到数据行（表头下无有效「债券简称」）");
+  // 有表头但表头下无数据行 = 空表，同样视为当日无发行
+  if (!parsed.length) return writeEmptyDay(date, fileName);
 
   // ---- 1a. excel_calendar.json：当日整日覆盖（重复上传同一天幂等） ----
-  interface CalFile {
-    meta: { source?: string; generated?: string; fileCount?: number };
-    days: Record<string, { file: string; count: number; planYi: number; bonds: ExcelBond[] }>;
-  }
   const cal = readJson<CalFile>("excel_calendar.json", { meta: {}, days: {} });
   const dayExisted = !!cal.days[date];
   const bonds: ExcelBond[] = parsed.map((r) => ({

@@ -1,7 +1,9 @@
 "use client";
 
 import { useMemo } from "react";
+import { PledgeBadge, YYAdjBadge, YYBadge } from "@/components/rating-badges";
 import { SortableTh, useTableSort, type SortState } from "@/components/table-sort";
+import { useIssuerDrilldown } from "@/components/issuer-drilldown";
 import { bondTypeShort } from "@/lib/format";
 import { ratingRank, termSortKey, yyRank } from "@/lib/rating-sort";
 import type { ExcelBond } from "@/lib/types";
@@ -87,7 +89,9 @@ function GroupHeader({ sort, onSort }: { sort: SortState | null; onSort: (key: s
         <SortableTh sortKey="amountYi" sort={sort} onSort={onSort} className="px-2 py-2 text-right font-medium">规模(亿)</SortableTh>
         <SortableTh sortKey="forecast" sort={sort} onSort={onSort} className="px-2 py-2 text-right font-medium">新债预测%</SortableTh>
         <SortableTh sortKey="coupon" sort={sort} onSort={onSort} className="px-2 py-2 text-right font-medium">票面%</SortableTh>
-        <SortableTh sortKey="yy" sort={sort} onSort={onSort} className="px-2 py-2 text-right font-medium">YY</SortableTh>
+        <SortableTh sortKey="yy" sort={sort} onSort={onSort} className="px-2 py-2 text-center font-medium">YY评分</SortableTh>
+        <SortableTh sortKey="yyAdj" sort={sort} onSort={onSort} className="px-2 py-2 text-center font-medium">YY调整</SortableTh>
+        <SortableTh sortKey="pledge" sort={sort} onSort={onSort} className="px-2 py-2 text-center font-medium">质押比</SortableTh>
         <SortableTh sortKey="internalRating" sort={sort} onSort={onSort} className="px-2 py-2 text-center font-medium">主体内评</SortableTh>
         <SortableTh sortKey="payDate" sort={sort} onSort={onSort} className="px-3 py-2 text-center font-medium">缴款日</SortableTh>
       </tr>
@@ -96,14 +100,26 @@ function GroupHeader({ sort, onSort }: { sort: SortState | null; onSort: (key: s
 }
 
 function BondRow({ b }: { b: ExcelBond }) {
+  const drillIssuer = useIssuerDrilldown();
   return (
     <tr className="border-b last:border-0 hover:bg-accent/40">
       <td className="px-3 py-1.5">
         {b.recommended && <span className="mr-1 text-amber-500">★</span>}
         <span className={b.recommended ? "font-semibold" : ""}>{b.name}</span>
       </td>
-      <td className="max-w-[200px] px-2 py-1.5 text-muted-foreground">
-        <span className="line-clamp-1">{b.issuer || "-"}</span>
+      <td className="max-w-[200px] px-2 py-1.5">
+        {b.issuer ? (
+          <button
+            type="button"
+            onClick={() => { if (b.issuer) drillIssuer(b.issuer); }}
+            title="查看发行人一级发行分析"
+            className="line-clamp-1 text-left text-primary/80 hover:text-primary hover:underline"
+          >
+            {b.issuer}
+          </button>
+        ) : (
+          <span className="text-muted-foreground">-</span>
+        )}
       </td>
       <td className="px-2 py-1.5 text-muted-foreground">{b.type ? bondTypeShort(b.type) : "-"}</td>
       <td className="px-2 py-1.5 text-right tabular-nums">{b.tenor ?? "-"}</td>
@@ -122,7 +138,11 @@ function BondRow({ b }: { b: ExcelBond }) {
           b.coupon.toFixed(2)
         )}
       </td>
-      <td className="px-2 py-1.5 text-right tabular-nums">{b.yy ?? "-"}</td>
+      <td className="px-2 py-1.5 text-center"><YYBadge yy={b.yy} /></td>
+      <td className="px-2 py-1.5 text-center">
+        <YYAdjBadge up={b.yyAdj?.up ?? []} down={b.yyAdj?.down ?? []} net={b.yyAdj?.yyNet} />
+      </td>
+      <td className="px-2 py-1.5 text-center"><PledgeBadge pledge={b.pledge} /></td>
       <td className="px-2 py-1.5 text-center">
         {b.internalRating ? (
           <span className="inline-flex rounded-md bg-sky-50 px-1.5 py-0.5 text-[11px] font-semibold text-sky-700 dark:bg-sky-950 dark:text-sky-400">
@@ -164,6 +184,16 @@ export function IssueListTable({
       forecast: (b: ExcelBond) => b.forecast,
       coupon: (b: ExcelBond) => b.coupon,
       yy: (b: ExcelBond) => yyRank(b.yy),
+      yyAdj: (b: ExcelBond) => {
+        const net = b.yyAdj?.yyNet;
+        if (!net || net.moves <= 0) return null;
+        // 排序口径：净上调为正、净下调为负、flat 为 0（与徽章的调优/调差对应）
+        return net.dir === "up" ? net.steps : net.dir === "down" ? -net.steps : 0;
+      },
+      pledge: (b: ExcelBond) => {
+        const p = b.pledge;
+        return p && p.n > 0 ? (p.min + p.max) / 2 : null;
+      },
       internalRating: (b: ExcelBond) => ratingRank(b.internalRating),
       payDate: (b: ExcelBond) => b.payDate,
     }),

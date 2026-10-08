@@ -170,7 +170,14 @@ export default function DailyPage() {
         </div>
       )}
 
-      {day && (
+      {day && bonds.length === 0 && (
+        <div className="rounded-xl border bg-background p-10 text-center text-sm text-muted-foreground">
+          <CalendarClock className="mx-auto mb-2 h-5 w-5 opacity-60" />
+          {fmtDateShort(date)} 当日无发行
+        </div>
+      )}
+
+      {day && bonds.length > 0 && (
         <>
           <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-5">
             <StatCard label="发行只数" value={bonds.length} icon={CalendarDays} accent="blue" sub="当日清单合计" />

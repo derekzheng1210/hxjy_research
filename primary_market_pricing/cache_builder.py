@@ -28,7 +28,9 @@ if hasattr(sys.stdout, "reconfigure"):
     # Keep progress logging from aborting on legacy Windows GBK consoles.
     sys.stdout.reconfigure(errors="replace")
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# 追加而非插到最前：抢占 sys.path[0] 会让后续 `import app` 解析到本包的
+# app.py（相对导入报错），与门户根 app.py 的组合加载冲突（测试组合曾复现）。
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from . import config
 from .db_utils import get_connection
@@ -140,6 +142,7 @@ def init_cache_db(db_path: str = None) -> sqlite3.Connection:
             total_issuers INTEGER,
             completed_issuers INTEGER
         );
+
 
         CREATE INDEX IF NOT EXISTS idx_bond_issuer
             ON bond_deviations(issuer);
@@ -751,9 +754,30 @@ def build_cache_once(
                 f"一级发行定价缓存：完成 {stats['completed']}/{stats['total']} 家发行人",
                 100,
             )
+        _refresh_issuer_provinces(progress)
         return stats
     finally:
         builder.close()
+
+
+def _refresh_issuer_provinces(progress=None) -> None:
+    """每日顺带刷新发行人→省份映射（历史趋势区域图数据源，best-effort 不阻断）。"""
+    try:
+        import sqlite3
+
+        from .trends import refresh_provinces
+
+        conn = sqlite3.connect(CACHE_DB_PATH, timeout=5)
+        try:
+            issuers = [r[0] for r in conn.execute("SELECT DISTINCT issuer FROM bond_deviations").fetchall()]
+        finally:
+            conn.close()
+        ok, msg = refresh_provinces(issuers)
+        if progress:
+            progress(f"历史趋势区域映射：{'已更新，' if ok else '跳过，'}{msg}")
+    except Exception as exc:
+        if progress:
+            progress(f"历史趋势区域映射：跳过，{exc}")
 
 
 def run_daemon(start_date: str, end_date: str, once: bool = False):
