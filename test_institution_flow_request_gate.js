@@ -9,7 +9,8 @@ const source = fs.readFileSync(
   'utf8'
 );
 const start = source.indexOf('function createRequestGate()');
-const end = source.indexOf('\n\nvar kpiRequests', start);
+// 文件可能以 CRLF 检出（git autocrlf），双换行匹配需兼容 \r\n
+const end = start + source.slice(start).search(/\r?\n\r?\nvar kpiRequests/);
 assert(start >= 0 && end > start, 'request gate source not found');
 
 const sandbox = {

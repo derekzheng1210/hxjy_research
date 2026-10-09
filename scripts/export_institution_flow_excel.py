@@ -12,6 +12,7 @@
     （每个券种一个 sheet：行=交易日，列=期限×机构 + 当日合计）
 """
 import json
+import re
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -37,6 +38,20 @@ INST_ORDER = ["大型银行", "中小型银行", "保险公司", "理财子公�
 BOND_ORDER = ["国债", "政金债", "地方政府债", "中期票据", "企业债", "短期和超短期融资券",
               "同业存单", "资产支持证券", "其他"]
 
+# 上游把部分券种拆成「X-新券 / X-老券」作为入参，响应仍合并回 X：
+# 请求时按此映射展开，上游若回滚旧口径则原样透传
+BOND_SPLIT_RE = re.compile(r"^(.+)-(?:新券|老券)$")
+
+
+def build_bond_expand(bond_types):
+    expand = {}
+    for b in bond_types or []:
+        m = BOND_SPLIT_RE.match(b)
+        if m and b not in expand.setdefault(m.group(1), []):
+            expand[m.group(1)].append(b)
+    return expand
+
+
 session = requests.Session()
 session.headers.update({"Referer": "http://43.137.12.140:8000/jgxw/"})
 
@@ -47,12 +62,14 @@ def fetch_options():
     return r.json()
 
 
-def fetch_combo(bond, tenor, end_date):
+def fetch_combo(bond, tenor, end_date, bond_expand):
     """单券种×期限，按机构分解，返回 {inst: {date: value}}"""
     params = [
         ("institutions", inst) for inst in INST_ORDER
     ] + [
-        ("bond_types", bond), ("tenors", tenor),
+        ("bond_types", x) for x in bond_expand.get(bond, [bond])
+    ] + [
+        ("tenors", tenor),
         ("start_date", DATA_START), ("end_date", end_date),
         ("granularity", "day"), ("dimension", "institution"),
     ]
@@ -185,6 +202,9 @@ def main():
     print("1/4 拉取维度与最新日期 …")
     opt = fetch_options()
     end_date = opt["latest_date"]
+    bond_expand = build_bond_expand(opt.get("bond_types"))
+    if bond_expand:
+        print(f"    上游券种拆分口径：{json.dumps(bond_expand, ensure_ascii=False)}（请求时自动展开）")
     print(f"    上游数据最新至 {end_date}")
 
     combos = [(b, t) for b in BOND_ORDER for t in TENOR_ORDER]
@@ -203,7 +223,7 @@ def main():
         data = {}
         done = 0
         with ThreadPoolExecutor(max_workers=WORKERS) as pool:
-            futures = {pool.submit(fetch_combo, b, t, end_date): (b, t) for b, t in combos}
+            futures = {pool.submit(fetch_combo, b, t, end_date, bond_expand): (b, t) for b, t in combos}
             for fut in as_completed(futures):
                 bond, tenor, by_inst = fut.result()
                 data[(bond, tenor)] = by_inst

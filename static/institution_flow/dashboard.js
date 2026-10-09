@@ -22,6 +22,34 @@ var TENOR_GROUPS = [
   { name: '超长端', members: ['15-20年', '20-30年', '30年以上'] }
 ];
 var GROUP_ORDERS = { institution: INST_GROUPS, bond_type: BOND_GROUPS, tenor: TENOR_GROUPS };
+/* 上游 bond_types 口径适配：上游把部分券种拆成「X-新券 / X-老券」作为入参，
+ * 响应序列名仍合并回 X。前端统一使用父名 X：options 加载时折叠拆分项并构建
+ * BOND_EXPAND 映射，所有请求出参经 expandBondTypes 还原为拆分项；
+ * 上游若回滚旧口径（无拆分项），映射为空、参数原样透传，双向兼容。 */
+var BOND_EXPAND = {};   // { '国债': ['国债-新券', '国债-老券'], ... }
+var BOND_SPLIT_RE = /^(.+)-(?:新券|老券)$/;
+function collapseBondNames(list) {
+  var out = [], seen = {};
+  (list || []).forEach(function (b) {
+    var m = BOND_SPLIT_RE.exec(b);
+    if (m) {
+      var parent = m[1];
+      if (!BOND_EXPAND[parent]) BOND_EXPAND[parent] = [];
+      if (BOND_EXPAND[parent].indexOf(b) < 0) BOND_EXPAND[parent].push(b);
+      if (!seen[parent]) { seen[parent] = 1; out.push(parent); }
+    } else if (!seen[b]) {
+      seen[b] = 1; out.push(b);
+    }
+  });
+  return out;
+}
+function expandBondTypes(list) {
+  var out = [];
+  (list || []).forEach(function (b) {
+    (BOND_EXPAND[b] || [b]).forEach(function (x) { if (out.indexOf(x) < 0) out.push(x); });
+  });
+  return out;
+}
 var ALLOC_MEMBERS = INST_GROUPS[0].members.slice();
 var TRADE_MEMBERS = INST_GROUPS[1].members.slice();
 var PALETTE = ['#5470c6', '#91cc75', '#fac858', '#ee6666', '#73c0de', '#3ba272', '#fc8452', '#9a60b4', '#ea7ccc', '#48b0f0', '#ffb980', '#c4ccd3'];
@@ -181,7 +209,7 @@ function currentFilters() {
 }
 function filterParams() {
   var f = currentFilters();
-  return { institutions: f.institutions, bond_types: f.bond_types, tenors: f.tenors };
+  return { institutions: f.institutions, bond_types: expandBondTypes(f.bond_types), tenors: f.tenors };
 }
 
 /* ================= 筛选 UI ================= */
@@ -320,7 +348,7 @@ function loadKpi() {
   var f = currentFilters();
   api('dimension/', {
     institutions: options.institutions,   // KPI 口径：全部机构（沿用券种/期限筛选）
-    bond_types: f.bond_types, tenors: f.tenors,
+    bond_types: expandBondTypes(f.bond_types), tenors: f.tenors,
     start_date: start, end_date: end, granularity: 'day', dimension: 'institution'
   }, request.signal).then(function (res) {
     if (!kpiRequests.isCurrent(request.id)) return;
@@ -1482,7 +1510,7 @@ function dailyBondGroupName(bond) {
 function ensureDailyTradeDates() {
   if (dailyTradeDates) return Promise.resolve(dailyTradeDates);
   return api('dimension/', {
-    institutions: ['大型银行'], bond_types: ['国债'], tenors: ['1-3年'],
+    institutions: ['大型银行'], bond_types: expandBondTypes(['国债']), tenors: ['1-3年'],
     start_date: DATA_START, end_date: options.latest_date, granularity: 'day', dimension: 'bond_type'
   }).then(function (res) {
     var list = (res && res.data && res.data[0] && res.data[0].series) || [];
@@ -1524,7 +1552,7 @@ function loadDaily() {
 
   var jobs = insts.map(function (inst) {
     return api('dimension/', {
-      institutions: [inst], bond_types: bonds, tenors: tenors,
+      institutions: [inst], bond_types: expandBondTypes(bonds), tenors: tenors,
       start_date: date, end_date: date, granularity: 'day', dimension: 'bond_type'
     }, request.signal).then(function (res) { return { inst: inst, res: res }; });
   });
@@ -1572,7 +1600,7 @@ function loadDailyTenorDetail(bond) {
   $('dailyStatus').textContent = '加载 ' + bond + ' 期限明细…';
   var jobs = insts.map(function (inst) {
     return api('dimension/', {
-      institutions: [inst], bond_types: [bond], tenors: tenors,
+      institutions: [inst], bond_types: expandBondTypes([bond]), tenors: tenors,
       start_date: date, end_date: date, granularity: 'day', dimension: 'tenor'
     }, request.signal).then(function (res) { return { inst: inst, res: res }; });
   });
@@ -2203,6 +2231,7 @@ function init() {
   if (!window.echarts) { showErr('ECharts 加载失败，请检查网络后刷新'); return; }
   api('options/', {}).then(function (res) {
     options = res;
+    options.bond_types = collapseBondNames(res.bond_types);
     $('latestDateBadge').textContent = '数据更新至 ' + res.latest_date;
     state.endDate = res.latest_date;
     state.startDate = addMonths(res.latest_date, -12);
