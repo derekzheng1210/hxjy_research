@@ -634,6 +634,9 @@ def render_portal_template(template_name: str, active_endpoint: str, **context):
 from fair_value_observation.routes import register as register_fair_value_observation
 register_fair_value_observation(app, login_required, admin_required, render_portal_template)
 
+from broker_market.personal_holdings import register as register_personal_holdings
+register_personal_holdings(app, login_required)
+
 
 # 注入导航栏后的 HTML 缓存：仪表盘 HTML（如策略仪表盘 ~7MB）每次请求都全量读盘 +
 # 全量正则注入极其昂贵，而文件仅在"一键更新"重写后才变化。按 mtime 缓存最终结果，
