@@ -79,7 +79,7 @@ def _provider_defs() -> list[dict]:
         {
             "id": "mimo", "name": "MiMo", "kind": "公网",
             "base_url": os.environ.get("MIMO_BASE_URL", "https://api.xiaomimimo.com/v1").rstrip("/"),
-            "model": os.environ.get("MIMO_MODEL", "mimo-v2.5"),
+            "model": os.environ.get("MIMO_MODEL", "mimo-v2.6-flash"),
             "api_key": mimo_key, "configured": bool(mimo_key),
             "key_hint": "MIMO_API_KEY",
             "json_mode": True, "disable_thinking": True,

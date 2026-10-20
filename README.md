@@ -206,7 +206,7 @@ date 序列（data_source=1，次日更新），盘中时点来自 1 分钟K线�
   `LIBREOFFICE_PATH` 环境变量指定的 soffice 均可）；PDF 查看和文件下载不受影响。
 - 超级管理员密码保存在数据库中并进行哈希，可在后台“安全设置”中修改。
 - 大模型共 4 个（均 OpenAI 兼容协议）：自部署模型（阿里云网关，默认 `http://10.9.50.201:3005/v1` + `glm-5.2`）、
-  DeepSeek 内网部署（`DEEPSEEK_INTERNAL_BASE_URL`，密钥可缺省）、MiMo（小米开放平台，`mimo-v2.5`）、
+  DeepSeek 内网部署（`DEEPSEEK_INTERNAL_BASE_URL`，密钥可缺省）、MiMo（小米开放平台，`mimo-v2.6-flash`，v2.5 已于 2026-10-21 下线、官方映射为 flash）、
   DeepSeek 官方（`deepseek-chat`）。默认按上述顺序回退；顺序可在门户后台
   “大模型管理”卡片中调整（持久化到数据目录 `llm_settings.json`，即时生效），并支持一键连通性测试。
   智能补全、知识搜索、路演文本识别、路演报告自动匹配统一使用该配置；自部署模型通过
