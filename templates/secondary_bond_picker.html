@@ -85,7 +85,7 @@ button,input,select{font:inherit}.header{height:82px;background:#fff;border-bott
       <div class="panel-body emotion-grid">
         <div class="emotion-score"><div id="emotionValue" class="emotion-value flat">-</div><div><div id="emotionLabel" class="emotion-label">全市场 · 暂无数据</div><div id="emotionCount" class="emotion-note">有效双边 0 只</div></div></div>
         <div class="emotion-score secondary"><div id="tier2EmotionValue" class="emotion-value flat">-</div><div><div id="tier2EmotionLabel" class="emotion-label">二级资本债 · 暂无数据</div><div id="tier2EmotionCount" class="emotion-note">有效双边 0 只</div></div></div>
-        <div><div class="chart-toolbar" id="rangeToolbar"></div><div class="chart-wrap"><canvas id="emotionChart"></canvas></div></div>
+        <div><a style="float:right;font-size:11px;color:var(--blue)" href="{{ url_for('broker_data') }}">经纪商数据 · 详细展开 →</a><div class="chart-toolbar" id="rangeToolbar"></div><div class="chart-wrap"><canvas id="emotionChart"></canvas></div></div>
       </div>
       <div class="emotion-details" id="emotionDetails"></div>
     </section>

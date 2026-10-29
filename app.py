@@ -1277,6 +1277,29 @@ def spread_data_js():
     return send_file(SPREAD_JS, mimetype="application/javascript")
 
 
+@app.route("/broker-data")
+@login_required
+def broker_data():
+    return render_portal_template("broker_data.html", "broker_data")
+
+
+@app.route("/api/broker-data")
+@login_required
+def api_broker_data():
+    from broker_market.analytics import build_dashboard
+    try:
+        payload = build_dashboard(start=request.args.get("start"), end=request.args.get("end"),
+                                  scope=request.args.get("scope", "all"))
+        response = jsonify(payload)
+        response.headers["Cache-Control"] = "private, no-store"
+        return response
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except OSError:
+        app.logger.exception("经纪商数据读取失败")
+        return jsonify({"error": "经纪商本地数据暂不可读，请稍后重试"}), 503
+
+
 @app.route("/institution-flow")
 @login_required
 def institution_flow():

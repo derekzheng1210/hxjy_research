@@ -53,6 +53,7 @@ PAGE_SECTIONS = (
         "title": "机构行为",
         "pages": (
             {"key": "institution_flow", "endpoint": "institution_flow", "title": "机构行为监测", "description": "观察机构净买入，并叠加利率、信用收益率与利差走势。", "meta_key": "institution_flow"},
+            {"key": "broker_data", "endpoint": "broker_data", "title": "经纪商数据", "description": "展开挂盘情绪、报价偏离、成交笔数与TKN/GVN方向，并叠加曲线和利差。", "meta_key": None},
         ),
     },
     {

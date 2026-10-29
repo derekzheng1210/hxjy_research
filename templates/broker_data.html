@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>经纪商数据</title>
+<script src="{{ url_for('static', filename='vendor/echarts.min.js') }}"></script>
+<link rel="stylesheet" href="{{ url_for('static', filename='broker_data.css', v='20261029-2') }}">
+</head>
+<body><main class="page">
+<header class="header"><h1>经纪商数据</h1><span class="badge">挂盘情绪 × 成交方向 × 曲线利差</span><a href="{{ url_for('secondary_bond_picker') }}">返回二级择券 ↗</a><button id="refresh" class="btn">刷新数据</button></header>
+<div id="error" class="notice error" role="alert" hidden></div>
+<section class="card filters"><div class="filter-row"><label for="scope">观察券池</label><select id="scope"><option value="all">全部券种</option><option value="tier2">二级资本债</option></select><span class="muted">挂盘按择券券池；成交按已缓存券样本</span></div>
+<div class="filter-row"><label>历史区间</label><div id="ranges"><button data-days="30">近1月</button><button data-days="90" class="on">近3月</button><button data-days="180">近6月</button></div><input id="start" type="date" aria-label="开始日期"><span>至</span><input id="end" type="date" aria-label="结束日期"><button id="apply" class="btn ghost">应用</button></div>
+<div class="filter-row meta" id="freshness">正在读取数据…</div></section>
+<div class="section-title">最新报价快照 <span class="muted">与二级择券工具使用相同清洗口径，独立于历史区间</span></div>
+<section id="quoteKpis" class="kpis"></section>
+<div class="section-title">区间成交样本 <span class="muted">按笔数统计，非成交金额；无缓存日期不补零</span></div>
+<section id="dealKpis" class="kpis"></section>
+<div class="notice" id="coverage">正在核对成交覆盖范围…</div>
+<section class="card"><div class="card-head"><h2>情绪与价格联动</h2><span class="muted">同日最后一次情绪快照 · 独立纵轴</span></div>
+<div class="toolbar"><label>观察指标 <select id="metric"><option value="emotion">报价均值偏离（BP）</option><option value="num">成交笔数（样本）</option><option value="tkn_pct">TKN占比（%）</option><option value="gvn_pct">GVN占比（%）</option><option value="net">TKN−GVN（笔）</option></select></label><label>叠加 <select id="mode"><option value="both">收益率 + 利差</option><option value="yield">收益率</option><option value="spread">利差</option><option value="none">不叠加</option></select></label><label>曲线 <select id="curve"></select></label><label>期限 <select id="tenor"></select></label><span id="overlayStatus" class="muted"></span></div>
+<div class="toolbar processing"><label>平滑 <select id="smooth"><option value="none">原始数据</option><option value="ma5">MA5</option><option value="ma10">MA10</option><option value="ma20">MA20</option><option value="ema5">EMA5</option><option value="ema10">EMA10</option><option value="ema20">EMA20</option></select></label><label>数据处理 <select id="transform"><option value="level">原始水平</option><option value="diff">一阶变化量</option><option value="z20">滚动20期 Z-score</option></select></label><span class="muted" id="processingStatus">各序列按自身有效观测日计算，窗口不足留空</span></div>
+<div id="mainChart" class="chart" role="img" aria-label="经纪商指标与收益率利差时间序列"></div><p class="footnote" id="chartNote"></p></section>
+<section class="card"><div class="card-head"><h2>相关性与领先检验</h2><span class="muted">按共同日期配对 · 回看统计</span></div>
+<div class="toolbar"><label>价格参照 <select id="analysisTarget"><option value="yield">收益率</option><option value="spread">利差</option></select></label><label>滚动窗口 <select id="corrWindow"><option value="20">20期</option><option value="40">40期</option><option value="60">60期</option></select></label><label>领先期数 <select id="horizon"><option value="1">1期</option><option value="3">3期</option><option value="5" selected>5期</option><option value="10">10期</option><option value="20">20期</option></select></label><button id="exportAnalysis" class="btn ghost">导出配对数据</button></div>
+<div id="analysisKpis" class="kpis analysis-kpis"></div>
+<div class="two-col analysis-charts"><div><h3>滚动相关系数</h3><div id="correlationChart" class="chart small"></div></div><div><h3>指标与未来价格变化的相关性</h3><div id="leadChart" class="chart small"></div></div></div>
+<p id="analysisStatus" class="footnote"></p></section>
+<div class="two-col"><section class="card"><div class="card-head"><h2>主动方向与成交活跃度</h2><span class="muted">缓存样本 · 日度</span></div><div id="directionChart" class="chart small"></div></section><section class="card"><div class="card-head"><h2>报价偏离结构</h2><select id="dimension"><option value="implied_rating">隐含评级</option><option value="internal_rating">参考内评</option><option value="term">剩余期限</option></select></div><div id="structureChart" class="chart small"></div></section></div>
+<section class="card"><div class="card-head"><div class="tabs"><button class="on" data-view="quotes">报价偏离明细</button><button data-view="active_bonds">成交活跃券</button></div><input id="search" placeholder="搜索代码 / 简称" aria-label="搜索明细"><button id="export" class="btn ghost">导出CSV</button></div><div class="table-wrap"><table><thead id="thead"></thead><tbody id="tbody"></tbody></table></div><div class="table-foot"><span id="tableCount"></span><button id="prev">上一页</button><span id="pageNumber"></span><button id="next">下一页</button></div></section>
+
+</main><script src="{{ url_for('static', filename='broker_series.js', v='20261029-2') }}"></script><script src="{{ url_for('static', filename='broker_data.js', v='20261029-2') }}"></script></body></html>
