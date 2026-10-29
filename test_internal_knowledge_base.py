@@ -542,5 +542,191 @@ class ReportFileEndpointTests(unittest.TestCase):
         self.assertIn("application/pdf", response.headers.get("Content-Type", ""))
 
 
+class UserDeletionRetentionTests(unittest.TestCase):
+    """删除用户改为软删除：历史上传报告、评分、点赞浏览等全部保留且姓名照常显示。"""
+
+    REPORT_AUTHOR = "r-del-author"   # 离职作者上传的深度报告
+    REPORT_MEMBER = "r-del-member"   # 在职成员上传、被离职作者评过分的深度报告
+
+    def setUp(self):
+        app.config.update(TESTING=True)
+        assert_isolated_test_store()
+        with store.transaction() as conn:
+            for table in ("audit_log", "pdf_cache", "report_summaries", "engagement", "ratings",
+                          "reports", "roadshow_schedule", "qa_usage", "qa_history", "users"):
+                conn.execute(f"DELETE FROM {table}")
+        for uid, name, role in (("leader", "测试领导", "leader"),
+                                ("author", "离职作者", "member"),
+                                ("member", "在职成员", "member")):
+            store.add_user({
+                "id": uid, "name": name, "org": "固收中心", "role": role,
+                "password_hash": generate_password_hash(f"{uid}-password"),
+            })
+        store.set_admin_password_hash(generate_password_hash("admin-password"))
+        for rid, author_id, author_name in ((self.REPORT_AUTHOR, "author", "离职作者"),
+                                            (self.REPORT_MEMBER, "member", "在职成员")):
+            store.add_report({
+                "id": rid, "title": f"深度报告-{rid}", "author": author_name,
+                "authorId": author_id, "org": "固收中心", "reportType": "internal",
+                "category": "deep", "theme": "credit", "reportDate": "2026-10-20",
+                "summary": "", "tags": [], "fileUrl": "", "fileStored": False,
+                "uploadedAt": "2026-10-20T10:00:00",
+            })
+        store.add_rating({
+            "id": "rating-del-1", "reportId": self.REPORT_MEMBER, "userId": "author",
+            "inspiration": 8, "depth": 7, "utility": 9,
+            "comment": "离职前留下的点评", "updatedAt": "2026-10-21T09:00:00",
+        })
+        store.add_view(self.REPORT_MEMBER, "author")
+        self.client = app.test_client()
+
+    def _session(self, user_id=None, superadmin=False):
+        with self.client.session_transaction() as session:
+            session["authenticated"] = True
+            session["internal_knowledge_base_csrf"] = "test-csrf-token"
+            if user_id:
+                session["internal_knowledge_base_user_id"] = user_id
+            if superadmin:
+                session["internal_knowledge_base_superadmin"] = True
+
+    def _delete_author(self):
+        self._session(superadmin=True)
+        response = self.client.delete("/internal-knowledge-base/api/admin/users/author",
+                                      headers={"X-CSRF-Token": "test-csrf-token"})
+        self.assertEqual(response.status_code, 200)
+
+    def test_delete_user_keeps_reports_ratings_engagement_and_names(self):
+        self._delete_author()
+
+        # 数据库层面：评分与浏览记录仍在，用户行保留（软删除）
+        self.assertEqual(len(store.ratings()), 1)
+        self.assertIsNotNone(store.get_user("author", include_deleted=True))
+        self.assertIsNone(store.get_user("author"))
+        engagement = store.report_engagement(self.REPORT_MEMBER)
+        self.assertEqual(engagement["viewCount"], 1)
+
+        # 领导端评分列表：历史评分保留且显示原姓名，而非"已删除用户"
+        self._session(user_id="leader")
+        data = self.client.get("/internal-knowledge-base/api/ratings").get_json()
+        self.assertEqual(len(data["ratings"]), 1)
+        self.assertEqual(data["ratings"][0]["userName"], "离职作者")
+        self.assertEqual(data["ratings"][0]["comment"], "离职前留下的点评")
+        # 报告列表：离职作者的历史报告仍在，署名保留
+        reports = self.client.get("/internal-knowledge-base/api/reports").get_json()["reports"]
+        by_id = {r["id"]: r for r in reports}
+        self.assertIn(self.REPORT_AUTHOR, by_id)
+        self.assertEqual(by_id[self.REPORT_AUTHOR]["author"], "离职作者")
+        self.assertEqual(by_id[self.REPORT_AUTHOR]["authorId"], "author")
+        # 汇总统计：评分数与参与人数不因删号缩水
+        self.assertEqual(data["summary"]["totalRatings"], 1)
+        self.assertEqual(data["summary"]["participants"], 1)
+
+        # 管理后台：活跃列表不含该账号，已删除列表含删除时间
+        self._session(superadmin=True)
+        users = self.client.get("/internal-knowledge-base/api/admin/users").get_json()
+        self.assertNotIn("author", {u["id"] for u in users["users"]})
+        deleted = {u["id"]: u for u in users["deletedUsers"]}
+        self.assertIn("author", deleted)
+        self.assertTrue(deleted["author"]["deletedAt"])
+        self.assertEqual(deleted["author"]["name"], "离职作者")
+        stats = self.client.get("/internal-knowledge-base/api/admin/stats").get_json()
+        self.assertEqual(stats["ratings"], 1)
+        self.assertEqual(stats["participants"], 1)
+
+    def test_deleted_user_cannot_login_and_existing_session_dies(self):
+        self._delete_author()
+
+        client = app.test_client()
+        with client.session_transaction() as session:
+            session["authenticated"] = True
+            session["internal_knowledge_base_csrf"] = "test-csrf-token"
+        response = client.post("/internal-knowledge-base/api/login",
+                               json={"username": "author", "password": "author-password"},
+                               headers={"X-CSRF-Token": "test-csrf-token"})
+        self.assertEqual(response.status_code, 401)
+
+        self._session(user_id="author")
+        self.assertEqual(self.client.get("/internal-knowledge-base/api/me").status_code, 401)
+
+    def test_deleted_user_leaves_scorer_pool(self):
+        self._delete_author()
+
+        # 删除后不再是应评分人员：评分进度分母剔除该账号，已交评分仍计入总分
+        self._session(user_id="leader")
+        status = self.client.get(
+            f"/internal-knowledge-base/api/reports/{self.REPORT_MEMBER}/scoring-status"
+        ).get_json()
+        self.assertNotIn("author", {s["id"] for s in status["scorers"]})
+        self.assertEqual(status["total"], 2)  # 仅剩领导与在职成员
+        from internal_knowledge_base.routes import eligible_scorers
+        self.assertNotIn("author", {u["id"] for u in eligible_scorers(
+            store.get_report(self.REPORT_MEMBER))})
+
+    def test_report_authors_excludes_deleted_user(self):
+        store.add_user({
+            "id": "clerk", "name": "行政账号", "org": "行政", "role": "admin",
+            "password_hash": generate_password_hash("clerk-password"),
+        })
+        self._delete_author()
+        self._session(user_id="clerk")
+        authors = self.client.get("/internal-knowledge-base/api/report-authors").get_json()
+        self.assertNotIn("author", {u["id"] for u in authors["authors"]})
+
+    def test_restore_user_reactivates_login_with_default_password(self):
+        self._delete_author()
+        self._session(superadmin=True)
+        response = self.client.post("/internal-knowledge-base/api/admin/users/author/restore",
+                                    headers={"X-CSRF-Token": "test-csrf-token"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["user"]["name"], "离职作者")
+
+        users = self.client.get("/internal-knowledge-base/api/admin/users").get_json()
+        self.assertIn("author", {u["id"] for u in users["users"]})
+        self.assertEqual(users["deletedUsers"], [])
+
+        # 恢复后旧密码失效、默认密码 123456 可登录，历史评分仍在
+        client = app.test_client()
+        with client.session_transaction() as session:
+            session["authenticated"] = True
+            session["internal_knowledge_base_csrf"] = "test-csrf-token"
+        old_login = client.post("/internal-knowledge-base/api/login",
+                                json={"username": "author", "password": "author-password"},
+                                headers={"X-CSRF-Token": "test-csrf-token"})
+        self.assertEqual(old_login.status_code, 401)
+        new_login = client.post("/internal-knowledge-base/api/login",
+                                json={"username": "author", "password": "123456"},
+                                headers={"X-CSRF-Token": "test-csrf-token"})
+        self.assertEqual(new_login.status_code, 200)
+        self.assertEqual(len(store.ratings()), 1)
+
+    def test_create_user_rejects_id_of_deleted_account(self):
+        self._delete_author()
+        self._session(superadmin=True)
+        headers = {"X-CSRF-Token": "test-csrf-token"}
+        response = self.client.post("/internal-knowledge-base/api/admin/users",
+                                    json={"id": "author", "name": "新人", "org": "固收中心",
+                                          "role": "member"},
+                                    headers=headers)
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("已被删除", response.get_json()["error"])
+        # 恢复后同一账号回到"账号已存在"分支
+        self.client.post("/internal-knowledge-base/api/admin/users/author/restore", headers=headers)
+        response = self.client.post("/internal-knowledge-base/api/admin/users",
+                                    json={"id": "author", "name": "新人", "org": "固收中心",
+                                          "role": "member"},
+                                    headers=headers)
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.get_json()["error"], "账号已存在")
+
+    def test_summary_generator_name_survives_deletion(self):
+        from internal_knowledge_base.routes import _summary_payload
+        store.save_report_summary(self.REPORT_AUTHOR, "standard", "author",
+                                  "摘要内容", "test-model", "sha-001")
+        self._delete_author()
+        row = store.get_report_summary(self.REPORT_AUTHOR, "standard")
+        payload = _summary_payload(row, "standard", "author")
+        self.assertEqual(payload["generatedByName"], "离职作者")
+
+
 if __name__ == "__main__":
     unittest.main()

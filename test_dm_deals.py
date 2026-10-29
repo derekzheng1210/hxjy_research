@@ -191,10 +191,15 @@ class DmDealsBuildTests(DmDealsSandbox):
 
 class DmDealsCredentialTests(DmDealsSandbox):
     def test_unavailable_without_credentials(self):
+        """凭据缺失按 WIP 语义降级：不再抛 DealsUnavailable，量化标记不可用，
+        响应只含已缓存数据（空缓存即空 days），与网页端备源口径一致。"""
         self.assertFalse(dm_deals.deals_configured())
-        with self.assertRaises(dm_deals.DealsUnavailable) as ctx:
-            dm_deals.build_deal_history("102581808.IB", range_start=PAST_DAY, range_end=PAST_DAY2)
-        self.assertIn("未配置", str(ctx.exception))
+        payload = dm_deals.build_deal_history(
+            "102581808.IB", range_start=PAST_DAY, range_end=PAST_DAY2
+        )
+        self.assertFalse(payload["quant_available"])
+        self.assertEqual(payload["days"], [])
+        self.assertEqual(payload["summary"]["num"], 0)
 
 
 if __name__ == "__main__":

@@ -10,6 +10,8 @@ from juyuan_update import config
 from juyuan_update.db import _select_cnbd_yield
 from juyuan_update.oracle_bonds import (
     INCLUDED_BOND_TYPE2,
+    NEW_LISTING_WINDOW_DAYS,
+    _fetch_changed_secodes,
     _row_to_bond,
     build_incremental_oracle_universe,
     compare_bond_universes,
@@ -314,6 +316,154 @@ class ReconciliationTests(unittest.TestCase):
             self.assertFalse(result["schema_stale_forced_full"])
             self.assertEqual(result["refresh_mode"], "incremental")
             self.assertTrue(result["applied"])
+
+
+class _FakeCursor:
+    """按 SQL 关键字分发的仿游标：execute 记录参数，fetchall 返回 canned 结果。"""
+
+    def __init__(self, results_by_keyword, executed=None):
+        self._results_by_keyword = results_by_keyword
+        self._executed = executed if executed is not None else []
+        self._pending = []
+
+    def execute(self, sql, binds=None):
+        self._executed.append((sql, binds))
+        for keyword, rows in self._results_by_keyword.items():
+            if keyword in sql:
+                self._pending = rows
+                return
+        self._pending = []
+
+    def fetchall(self):
+        return self._pending
+
+
+class _FakeConn:
+    def __init__(self, cursor):
+        self._cursor = cursor
+
+    def cursor(self):
+        return self._cursor
+
+
+class ChangedSecodesTests(unittest.TestCase):
+    """DATA_DOWNLOAD_TIME 全表为 NULL 时，新发债靠上市日窗口兜底进增量重判集。"""
+
+    def test_recent_listings_join_changed_set_with_window_bind(self):
+        executed = []
+        cursor = _FakeCursor(
+            {
+                "DATA_DOWNLOAD_TIME": [("SEC_OLD",)],  # 下载时间检测（现网恒空，留兼容）
+                "LISTDATE": [("SEC_NEW1",), ("SEC_NEW2",)],
+            },
+            executed,
+        )
+        changed = _fetch_changed_secodes(_FakeConn(cursor), "2026-10-26 08:30:00")
+        self.assertEqual(changed, {"SEC_OLD", "SEC_NEW1", "SEC_NEW2"})
+        # 上市日窗口 = 水位日 - NEW_LISTING_WINDOW_DAYS，LISTDATE 为 YYYYMMDD 字符串
+        listing_calls = [(sql, binds) for sql, binds in executed if "LISTDATE" in sql]
+        self.assertEqual(len(listing_calls), 1)
+        from datetime import date as _date, timedelta as _timedelta
+        expected = (_date(2026, 10, 26) - _timedelta(days=NEW_LISTING_WINDOW_DAYS)).strftime("%Y%m%d")
+        self.assertEqual(listing_calls[0][1]["window_start"], expected)
+        # 上市日查询只看 ISVALID=1 的主表
+        self.assertIn("ISVALID = 1", listing_calls[0][0])
+        self.assertIn("TQ_BD_NEWESTBASICINFO", listing_calls[0][0])
+
+    def test_bad_watermark_keeps_download_time_results(self):
+        cursor = _FakeCursor({"DATA_DOWNLOAD_TIME": [("SEC_OLD",)]})
+        changed = _fetch_changed_secodes(_FakeConn(cursor), "not-a-date")
+        self.assertEqual(changed, {"SEC_OLD"})
+        self.assertNotIn("LISTDATE", "".join(sql for sql, _ in cursor._executed))
+
+    @staticmethod
+    def _master_row(secode, name="25测试01", symbol="184831"):
+        return (
+            symbol, "001002", secode, name, "测试公司",
+            "621", "20250101", "20280101", "", "",
+            (), None, 0, 0, "", None, 1, "1", "20",
+            "COMP1", 8.5,
+        )
+
+    def test_incremental_dedups_multi_secode_new_bond(self):
+        """同券多条 secode 主表行（跨市场/双挂）：新增时按代码去重只入池一次。"""
+        current = {"oracle_watermark": "2026-10-26 08:30:00", "bonds": []}
+        with (
+            patch("juyuan_update.oracle_bonds._fetch_changed_secodes", return_value={"S1", "S2"}),
+            patch("juyuan_update.oracle_bonds._fetch_rows_by_secode", return_value={
+                "S1": self._master_row("S1"), "S2": self._master_row("S2"),
+            }),
+            patch("juyuan_update.oracle_bonds._fetch_latest_ratings", return_value={"S1": "AA", "S2": "AA"}),
+            patch("juyuan_update.oracle_bonds._fetch_entity_types", return_value={}),
+        ):
+            bonds, counts = build_incremental_oracle_universe(object(), "20261026", current)
+        self.assertEqual([bond["code"] for bond in bonds], ["184831.SH"])
+        self.assertEqual(counts.get("upserted"), 2)
+        self.assertEqual(counts.get("code_deduped"), 1)
+
+    def test_incremental_prefers_existing_secode_for_duplicate_code(self):
+        """池内已有同码券时，另一 secode 行的新数据不顶掉池内条目。"""
+        current = {
+            "oracle_watermark": "2026-10-26 08:30:00",
+            "bonds": [{
+                "code": "184831.SH", "secode": "S1", "name": "25测试01",
+                "effective_maturity_date": "2028-01-01", "term": 1.2,
+            }],
+        }
+        with (
+            patch("juyuan_update.oracle_bonds._fetch_changed_secodes", return_value={"S2"}),
+            patch("juyuan_update.oracle_bonds._fetch_rows_by_secode", return_value={
+                "S2": self._master_row("S2", name="25测试01改"),
+            }),
+            patch("juyuan_update.oracle_bonds._fetch_latest_ratings", return_value={"S2": "AA"}),
+            patch("juyuan_update.oracle_bonds._fetch_entity_types", return_value={}),
+        ):
+            bonds, counts = build_incremental_oracle_universe(object(), "20261026", current)
+        self.assertEqual(len(bonds), 1)
+        self.assertEqual(bonds[0]["secode"], "S1")
+        self.assertEqual(bonds[0]["name"], "25测试01")
+
+
+class PickerYieldsPoolCoverageTests(unittest.TestCase):
+    """估值查询覆盖全量静态池：无内评券不在择券清单，但详查页同样需要中债估值。"""
+
+    def test_yields_query_covers_full_pool_beyond_picker_filter(self):
+        from juyuan_update import generators
+
+        picker_bonds = [{"code": "102600001.IB", "issuer": "测试AAA公司"}]
+        pool_bonds = [
+            {"code": "102600001.IB", "issuer": "测试AAA公司"},
+            {"code": "102281460.IB", "issuer": "珠海华发实业"},  # 无内评，被择券清单过滤
+        ]
+        captured = {}
+
+        class _Conn:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        def fake_fetch(conn, symbols, trade_date):
+            captured["symbols"] = list(symbols)
+            return {symbol: 1.5 for symbol in symbols}
+
+        with (
+            patch.object(generators, "get_bond_picker_bonds", return_value=picker_bonds),
+            patch.object(generators, "load_bond_static", return_value={"bonds": pool_bonds}),
+            patch.object(generators, "connect", return_value=_Conn()),
+            patch.object(generators, "latest_cnbd_valuation_date", return_value="20261026"),
+            patch.object(generators, "fetch_cnbd_yields_by_symbol", side_effect=fake_fetch),
+            patch.object(generators, "fetch_bond_rating_facts", return_value=None),
+            patch.object(generators, "fetch_issuer_rating_raw", return_value=None),
+            patch.object(
+                generators, "save_bond_picker_yields_cache",
+                return_value={"yields": {}, "trade_date": "20261026"},
+            ),
+        ):
+            generators.generate_bond_picker_yields()
+        self.assertIn("102281460.IB", captured["symbols"])
+        self.assertEqual(len(captured["symbols"]), 2)  # 池内去重，无重复入参
 
 
 class SpreadMonitorRatingFilterTests(unittest.TestCase):

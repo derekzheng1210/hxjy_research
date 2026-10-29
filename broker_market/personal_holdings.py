@@ -24,13 +24,17 @@ from requests.cookies import create_cookie
 
 from paths import DATA_ROOT
 
-UPSTREAM = "http://10.6.121.24:8600"
+# Same platform behind both addresses (shared session store); the wired-side
+# one works without WiFi, so it goes first and the WiFi-only one is a fallback.
+UPSTREAMS = ("http://10.6.8.190:8600", "http://10.6.121.24:8600")
 PAGE = "p_hold_bond"
 COOKIE = "secondary_holdings_session"
 SESSION_TTL = 30 * 86400
 CACHE_TTL = 300
 DB_PATH = DATA_ROOT / "personal_holdings" / "sessions.sqlite3"
 RESEARCH_USERS = frozenset({"zhenghongbin", "cuizhuoju", "maxiao", "zhumeng"})
+# Upstream table columns feeding the fund / asset-unit / portfolio filters.
+DIMENSION_COLUMNS = ("fund_name", "prd_name", "l4_name")
 
 
 class HoldingsError(Exception):
@@ -79,6 +83,7 @@ def normalize_holdings(result):
     dates = {str(row.get("date") or "")[:10] for row in rows} - {""}
     if len(dates) > 1:
         raise HoldingsError("内部平台返回了多个持仓日期，请检查平台的最新日期设置。")
+    dimensional = all(key in columns for key in DIMENSION_COLUMNS)
     bonds = {}
     for row in rows:
         code = str(row.get("assetid") or "").strip().upper()
@@ -90,10 +95,23 @@ def normalize_holdings(result):
                 raise InvalidOperation
         except (KeyError, InvalidOperation, ValueError):
             raise HoldingsError("内部平台包含无效的持仓数量，请联系管理员。") from None
-        bond = bonds.setdefault(code, {"code": code, "name": str(row.get("asset_name") or ""), "qty": Decimal(0)})
+        bond = bonds.setdefault(code, {"code": code, "name": str(row.get("asset_name") or ""),
+                                       "qty": Decimal(0), "details": {}})
         bond["qty"] += qty
+        if dimensional:
+            key = tuple(str(row.get(col) or "") for col in DIMENSION_COLUMNS)
+            bond["details"][key] = bond["details"].get(key, Decimal(0)) + qty
+    holdings = []
+    for bond in bonds.values():
+        if bond["qty"] == 0:
+            continue
+        item = {"code": bond["code"], "name": bond["name"], "qty": float(bond["qty"])}
+        if dimensional:
+            item["details"] = [{"fund": key[0], "unit": key[1], "portfolio": key[2], "qty": float(qty)}
+                               for key, qty in bond["details"].items() if qty != 0]
+        holdings.append(item)
     return {
-        "holdings": [{**b, "qty": float(b["qty"])} for b in bonds.values() if b["qty"] != 0],
+        "holdings": holdings,
         "holding_date": next(iter(dates), ""),
         "quantity_unit": columns["qty"].get("unit") or "",
         "source_rows": len(rows),
@@ -101,27 +119,35 @@ def normalize_holdings(result):
 
 
 def upstream_json(http, method, path, **kwargs):
-    try:
-        response = http.request(method, UPSTREAM + path, timeout=(8, 45), allow_redirects=False, **kwargs)
-        if response.status_code == 401:
-            if path == "/api/login":
+    """Try each upstream address in order. Only transport failures (host
+    unreachable, timed out) fall over to the next address; any HTTP response
+    comes from the platform itself and is treated as final."""
+    for base in UPSTREAMS:
+        try:
+            response = http.request(method, base + path, timeout=(8, 45), allow_redirects=False, **kwargs)
+        except requests.RequestException:
+            continue
+        try:
+            if response.status_code == 401:
+                if path == "/api/login":
+                    raise HoldingsError("账号或密码错误，请重新输入。", 401)
+                raise HoldingsError("内部平台登录已失效，请重新登录。", 401)
+            if response.status_code == 403:
+                raise HoldingsError("此账户没有所需持仓权限，请联系内部平台管理员。", 403)
+            if path == "/api/login" and response.status_code in {400, 422}:
                 raise HoldingsError("账号或密码错误，请重新输入。", 401)
-            raise HoldingsError("内部平台登录已失效，请重新登录。", 401)
-        if response.status_code == 403:
-            raise HoldingsError("此账户没有所需持仓权限，请联系内部平台管理员。", 403)
-        if path == "/api/login" and response.status_code in {400, 422}:
-            raise HoldingsError("账号或密码错误，请重新输入。", 401)
-        response.raise_for_status()
-        data = response.json()
-        if not isinstance(data, dict):
-            raise ValueError
-        return data
-    except HoldingsError:
-        raise
-    except requests.RequestException:
-        raise HoldingsError("暂时无法连接固收内部数据平台，请稍后重试。") from None
-    except ValueError:
-        raise HoldingsError("固收内部数据平台返回格式异常。") from None
+            response.raise_for_status()
+            data = response.json()
+            if not isinstance(data, dict):
+                raise ValueError
+            return data
+        except HoldingsError:
+            raise
+        except requests.RequestException:
+            raise HoldingsError("暂时无法连接固收内部数据平台，请稍后重试。") from None
+        except ValueError:
+            raise HoldingsError("固收内部数据平台返回格式异常。") from None
+    raise HoldingsError("暂时无法连接固收内部数据平台，请稍后重试。") from None
 
 
 def fetch_holdings(http, username):
@@ -214,7 +240,10 @@ class HoldingsStore:
         try:
             with requests.Session() as http:
                 for cookie in data["cookies"]:
-                    http.cookies.set_cookie(create_cookie(**cookie))
+                    # Both addresses are the same platform, so replay the
+                    # cookies domain-agnostically: a session created via one
+                    # address stays valid when we dial the other.
+                    http.cookies.set_cookie(create_cookie(**{**cookie, "domain": ""}))
                 payload = fetch_holdings(http, data["username"])
                 data.update(payload=payload, fetched=time.time(), cookies=self.cookies(http))
                 self.save(token, data, existing=True)

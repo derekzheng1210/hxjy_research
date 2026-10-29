@@ -27,6 +27,7 @@ from .strategy_dashboard import build_dashboard as build_strategy_dashboard
 from .unified_excel import (
     get_bond_picker_bonds,
     get_spread_monitor_bonds,
+    load_bond_static,
     load_spread_history_cache,
     save_bond_picker_yields_cache,
     save_spread_history_cache,
@@ -589,14 +590,22 @@ def generate_bond_picker_yields(progress=None) -> dict:
     bonds = get_bond_picker_bonds()
     if not bonds:
         raise RuntimeError("未找到符合 BBB- 及以上且无担保人的择券工具债券")
+    # 估值查询覆盖全量静态池而非择券过滤清单：债券详查按池服务，无内评
+    # （如 102281460 华发实业）或被担保的券同样需要中债估值展示；Oracle
+    # 估值查询整表拉取后按代码匹配，扩大入参无额外库端成本。
+    pool_codes = list(dict.fromkeys(
+        str(item.get("code") or "").strip().upper()
+        for item in load_bond_static().get("bonds") or []
+        if item.get("code")
+    )) or [b["code"] for b in bonds]
     rating_facts = None
     issuer_rating_raw = None
     rating_error = ""
     with connect() as conn:
         trade_date = latest_cnbd_valuation_date(conn)
         if progress:
-            progress(f"查询择券工具最新中债估值 {dash_date(trade_date)}", 45)
-        yields = fetch_cnbd_yields_by_symbol(conn, [b["code"] for b in bonds], trade_date)
+            progress(f"查询最新中债估值 {dash_date(trade_date)}（覆盖全量池 {len(pool_codes):,} 只）", 45)
+        yields = fetch_cnbd_yields_by_symbol(conn, pool_codes, trade_date)
         if progress:
             progress("查询债券主体/债项评级记录（合规630校验）", 60)
         try:

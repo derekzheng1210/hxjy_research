@@ -40,6 +40,9 @@ INCLUDED_BOND_TYPE2 = (
 EXCLUDED_POLICY_BANKS = ("国家开发银行", "中国进出口银行", "中国农业发展银行")
 MIN_REMAINING_TERM = float(os.environ.get("JUYUAN_BOND_MIN_REMAINING_TERM", "0.2"))
 FULL_REFRESH_DAYS = max(1, int(os.environ.get("JUYUAN_BOND_FULL_REFRESH_DAYS", "7")))
+# 增量刷新的新发债兜底窗口（自然日）：DATA_DOWNLOAD_TIME 全表为 NULL 时按
+# 上市日回看 N 天重判，覆盖聚源主表行晚于上市日生成的情况。
+NEW_LISTING_WINDOW_DAYS = max(1, int(os.environ.get("JUYUAN_BOND_NEW_LISTING_WINDOW_DAYS", "14")))
 MAX_SWITCH_DIFF_RATIO = float(os.environ.get("JUYUAN_BOND_MAX_SWITCH_DIFF_RATIO", "0.10"))
 FORCE_SWITCH = os.environ.get("JUYUAN_BOND_FORCE_SWITCH", "0") == "1"
 
@@ -403,6 +406,30 @@ def _fetch_changed_secodes(conn, watermark: str) -> set[str]:
             {"watermark": watermark},
         )
         changed.update(str(row[0]) for row in cur.fetchall() if row[0])
+    # 聚源库的 DATA_DOWNLOAD_TIME 实测全表为 NULL（两表合计 126 万行无值，
+    # 2026-10 核查），下载时间检测实际抓不到任何变更——新发债要等每周全量
+    # 重建才进池，滞后最长 7 天（详查页新券查不到/无中债估值）。按上市日
+    # 窗口兜底：水位日前 N 天内上市的券每日重新判定，上市次日即可进池；
+    # 窗口重叠重判幂等，成本为千级 secode 的批量查询。评级/余额等存量字段
+    # 变更仍靠每周全量重建。LISTDATE 为 VARCHAR2(YYYYMMDD)，定长字符串
+    # 比较与日期序一致。
+    try:
+        window_start = datetime.strptime(watermark[:10], "%Y-%m-%d").date() - timedelta(
+            days=NEW_LISTING_WINDOW_DAYS
+        )
+    except ValueError:
+        return changed
+    cur.execute(
+        """
+        SELECT SECODE
+        FROM TQ_BD_NEWESTBASICINFO
+        WHERE ISVALID = 1
+          AND LISTDATE >= :window_start
+          AND SECODE IS NOT NULL
+        """,
+        {"window_start": window_start.strftime("%Y%m%d")},
+    )
+    changed.update(str(row[0]) for row in cur.fetchall() if row[0])
     return changed
 
 
@@ -441,6 +468,7 @@ def build_incremental_oracle_universe(
         for item in current_payload.get("bonds") or []
         if item.get("secode")
     }
+    original_secodes = set(bonds_by_secode)
     # 存量券的行权窗口刚过：未行权仍有余额的，期限推进到下一行权日/到期日，
     # 而不是按过期行权日剔除；已全额行权/兑付的由 Oracle 主表重判后移除。
     passed_secodes = {
@@ -478,9 +506,24 @@ def build_incremental_oracle_universe(
             bonds_by_secode.pop(secode, None)
             counts[reason or "removed"] = counts.get(reason or "removed", 0) + 1
 
+    # 同券跨市场/多版本的 secode 行不止一个（同一 SYMBOL 两条主表行），
+    # 全量构建按代码 setdefault 去重；增量按 secode 重判后同码多行会同时
+    # 在场，出口同样按代码去重——原池已有的 secode 优先（池内条目稳定，
+    # 与上一轮全量的选择保持一致），全新券保留首见。
+    by_code: dict[str, dict] = {}
+    for bond in bonds_by_secode.values():
+        code = str(bond.get("code") or "").strip().upper()
+        existing = by_code.get(code)
+        if existing is None or (
+            str(bond.get("secode") or "") in original_secodes
+            and str(existing.get("secode") or "") not in original_secodes
+        ):
+            by_code[code] = bond
+    counts["code_deduped"] = len(bonds_by_secode) - len(by_code)
+
     # Even without Oracle changes, remaining exercise terms move every day.
     refreshed: list[dict] = []
-    for bond in bonds_by_secode.values():
+    for bond in by_code.values():
         effective = _date(bond.get("effective_maturity_date"))
         term = remaining_term(effective, as_of)
         if term is None or term < MIN_REMAINING_TERM:

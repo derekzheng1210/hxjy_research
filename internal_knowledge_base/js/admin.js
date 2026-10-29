@@ -29,6 +29,7 @@
     createUser: (data) => apiFetch('/api/admin/users', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify(data) }).then(handleJson),
     updateUser: (id, data) => apiFetch(`/api/admin/users/${id}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify(data) }).then(handleJson),
     deleteUser: (id) => apiFetch(`/api/admin/users/${id}`, { method: 'DELETE', credentials: 'same-origin' }).then(handleJson),
+    restoreUser: (id) => apiFetch(`/api/admin/users/${id}/restore`, { method: 'POST', credentials: 'same-origin' }).then(handleJson),
     resetPassword: (id, password) => apiFetch(`/api/admin/users/${id}/reset-password`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ password }) }).then(handleJson),
     clearQaHistory: (id) => apiFetch(`/api/admin/users/${id}/clear-qa-history`, { method: 'POST', credentials: 'same-origin' }).then(handleJson),
     reminderConfig: () => apiFetch('/api/admin/reminder-config', { credentials: 'same-origin' }).then(handleJson),
@@ -52,6 +53,7 @@
     view: 'overview',
     reports: [],
     users: [],
+    deletedUsers: [],
     stats: null,
     filters: { query: '', category: '', theme: '', status: 'active' },
     reminderConfig: { period: '', reportCategory: 'deep', rules: [] },
@@ -160,6 +162,7 @@
       state.stats = stats;
       state.reports = reports.reports || [];
       state.users = users.users || [];
+      state.deletedUsers = users.deletedUsers || [];
       state.reminderConfig = reminder.config || state.reminderConfig;
       state.knowledgeConfig = knowledge.config || state.knowledgeConfig;
       state.pdfCache = pdfCache || state.pdfCache;
@@ -176,6 +179,7 @@
   async function reloadUsers() {
     const data = await API.users();
     state.users = data.users || [];
+    state.deletedUsers = data.deletedUsers || [];
   }
 
   async function reloadStats() {
@@ -186,7 +190,7 @@
   function navigate(view) {
     state.view = view;
     const titles = { overview: '概览', reports: '报告管理', users: '用户管理', reminders: '工作提醒', cache: 'PDF缓存', security: '安全设置' };
-    const subs = { overview: '平台数据总览', reports: '管理在库报告、回收站与永久删除确认', users: '新建、编辑、删除用户与重置密码', reminders: '维护专题报告参数与知识搜索每日额度', cache: '永久保存的文档预览缓存', security: '修改超级管理员密码' };
+    const subs = { overview: '平台数据总览', reports: '管理在库报告、回收站与永久删除确认', users: '新建、编辑、删除与恢复用户、重置密码', reminders: '维护专题报告参数与知识搜索每日额度', cache: '永久保存的文档预览缓存', security: '修改超级管理员密码' };
     els.topbarTitle.textContent = titles[view] || '后台';
     els.topbarSub.textContent = subs[view] || '';
     document.querySelectorAll('.admin-nav-item').forEach(item => item.classList.toggle('active', item.dataset.view === view));
@@ -513,6 +517,7 @@
 
   function renderUsers() {
     const list = filteredUsers();
+    const deleted = state.deletedUsers || [];
     els.viewRoot.innerHTML = `
       <section class="admin-table-card">
         <div class="admin-table-toolbar">
@@ -530,7 +535,30 @@
             </tbody>
           </table>
         </div>
-      </section>`;
+      </section>
+      ${deleted.length ? `
+      <section class="admin-table-card admin-deleted-users">
+        <div class="admin-table-toolbar"><div><strong>已删除用户</strong><span> · 历史报告、评分等记录保留并显示原姓名；账号不可重复创建，可随时恢复</span></div></div>
+        <div class="admin-table-wrap">
+          <table class="admin-table">
+            <thead><tr><th>账号</th><th>姓名</th><th>部门</th><th>角色</th><th>删除时间</th><th style="text-align:right;">操作</th></tr></thead>
+            <tbody>
+              ${deleted.map(deletedUserRow).join('')}
+            </tbody>
+          </table>
+        </div>
+      </section>` : ''}`;
+  }
+
+  function deletedUserRow(u) {
+    return `<tr class="admin-report-deleted">
+      <td><strong>${escapeHTML(u.id)}</strong></td>
+      <td>${escapeHTML(u.name)}</td>
+      <td>${escapeHTML(u.org)}</td>
+      <td><span class="admin-role-tag ${escapeHTML(u.role)}">${escapeHTML(roleLabel(u.role))}</span></td>
+      <td>${formatDateTime(u.deletedAt)}</td>
+      <td style="text-align:right;"><button class="btn btn-secondary" data-action="restore-user" data-id="${u.id}">恢复账号</button></td>
+    </tr>`;
   }
 
   function userRow(u) {
@@ -647,7 +675,7 @@
     openModal(`<section class="modal-card">
       ${modalHeader('删除用户', u.name)}
       <div class="modal-body">
-        <div class="detail-permission"><svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.8"/><path d="M12 8v4M12 16h.01" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg><div><strong>确认删除用户 ${escapeHTML(u.name)}（${escapeHTML(u.id)}）？</strong><p>删除后该账号无法登录；其历史评分记录会保留（显示为"已删除用户"）。此操作不可撤销。</p></div></div>
+        <div class="detail-permission"><svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.8"/><path d="M12 8v4M12 16h.01" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg><div><strong>确认删除用户 ${escapeHTML(u.name)}（${escapeHTML(u.id)}）？</strong><p>删除后该账号无法登录，但其历史上传报告、评分、点赞等记录会全部保留，并继续显示原姓名。可在下方"已删除用户"列表随时恢复账号。</p></div></div>
       </div>
       <div class="modal-footer"><button type="button" class="btn btn-ghost" data-close="modal">取消</button><button type="button" class="btn btn-primary" data-action="confirm-delete-user" data-id="${id}" style="background:var(--danger);border-color:var(--danger);">确认删除</button></div>
     </section>`);
@@ -658,10 +686,34 @@
       await API.deleteUser(id);
       await reloadUsers();
       closeModal();
-      notify('用户已删除');
+      notify('用户已删除，历史记录与姓名保留');
       renderUsers();
     } catch (error) {
       notify(error.message || '删除失败', 'error');
+    }
+  }
+
+  function showUserRestoreModal(id) {
+    const u = (state.deletedUsers || []).find(x => x.id === id);
+    if (!u) return notify('用户不存在', 'error');
+    openModal(`<section class="modal-card">
+      ${modalHeader('恢复用户', u.name)}
+      <div class="modal-body">
+        <div class="detail-permission"><svg viewBox="0 0 24 24" fill="none"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg><div><strong>恢复用户 ${escapeHTML(u.name)}（${escapeHTML(u.id)}）？</strong><p>恢复后该账号可重新登录，其删除期间保留的历史报告与评分记录自动重新关联。登录密码将重置为默认密码 123456，建议提醒用户尽快修改。</p></div></div>
+      </div>
+      <div class="modal-footer"><button type="button" class="btn btn-ghost" data-close="modal">取消</button><button type="button" class="btn btn-primary" data-action="confirm-restore-user" data-id="${id}">确认恢复</button></div>
+    </section>`);
+  }
+
+  async function confirmRestoreUser(id) {
+    try {
+      await API.restoreUser(id);
+      await reloadUsers();
+      closeModal();
+      notify('用户已恢复，初始密码为默认密码');
+      renderUsers();
+    } catch (error) {
+      notify(error.message || '恢复失败', 'error');
     }
   }
 
@@ -754,6 +806,8 @@
     else if (action === 'reset-password') showResetPasswordModal(id);
     else if (action === 'delete-user') showUserDeleteModal(id);
     else if (action === 'confirm-delete-user') confirmDeleteUser(id);
+    else if (action === 'restore-user') showUserRestoreModal(id);
+    else if (action === 'confirm-restore-user') confirmRestoreUser(id);
     else if (action === 'clear-qa-history') showClearQaHistoryModal(id);
     else if (action === 'confirm-clear-qa-history') confirmClearQaHistory(id);
     else if (action === 'add-reminder-rule') addReminderRule();

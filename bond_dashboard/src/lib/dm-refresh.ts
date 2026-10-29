@@ -2,7 +2,9 @@
 // 职责（只做服务器自己能产出的部分，与 Excel 上传/同事机器管道的数据主权互不覆盖）：
 //  1. 日历补数：DM 拉近 N 日一级发行 → 填充 excel_calendar.json 中「没有 Excel 上传」的交易日
 //     （Excel 上传过的日期为权威，DM 不动）；顺带回填 recommended.json 的实际发行规模/缺失票面
-//  2. 个券估值：DM market-data/date + basic-info 重抓 valuations.json（参与/中标 + 推荐个券）
+//  2. 个券估值：DM market-data/date + basic-info 重抓 valuations.json（参与/中标 + 推荐个券）；
+//     DM 行情接口无订阅/整表失败时，用门户 8:30 任务写入的聚源中债估值
+//     （oracle_cb_fallback.json，到期口径）填补中债列，DM 恢复后自动回归
 //  3. 30Y 国债：DM 收益率曲线增量追加 gov30y.json
 //  4. 发行人评级：DM company/rating/data 全榜单刷新 → cache/issuer_ratings_live.json
 //     （issuer 页「外部评级/YY」的 issuer_ytd.json 是同事机器管道快照、重建不及时，
@@ -271,6 +273,17 @@ async function refreshValuations() {
     valMap = await fetchVals(fb);
   }
 
+  // 聚源中债估值回退：门户 8:30 每日任务查询本清单写入 oracle_cb_fallback.json
+  // （到期口径，security_id 键控）。DM 行情接口无订阅/整表失败期间 valMap 为空，
+  // 规则判定无中债值的券用它填补；DM 有值（含订阅恢复后）一律以 DM 为准。
+  const oracleFile = readJson<{ meta?: { date?: string }; yields?: Record<string, number> }>(
+    "oracle_cb_fallback.json",
+    {}
+  );
+  const oracleYields = oracleFile.yields ?? {};
+  const oracleDate = String(oracleFile.meta?.date ?? "");
+  let cbFromOracle = 0;
+
   // ③ 按场所规则提取（含权一律行权；银行间取中债、交易所取中证、双市场都取）
   const out: Record<string, ValBond> = {};
   for (const [name, b] of bonds) {
@@ -287,31 +300,51 @@ async function refreshValuations() {
     const isInterbank = market.includes("银行间");
     const isExchange = market.includes("交易所") || market.includes("证券交易");
     const isCros = cros.includes("是");
+    let entry: ValBond;
     if (isCros || (isInterbank && isExchange)) {
-      out[name] = { security_id: b.security_id, cb, cs, cb_basis: cbBasis, cs_basis: csBasis, market: market || "双市场" };
+      entry = { security_id: b.security_id, cb, cs, cb_basis: cbBasis, cs_basis: csBasis, market: market || "双市场" };
     } else if (isInterbank) {
-      out[name] = { security_id: b.security_id, cb, cs: null, cb_basis: cbBasis, cs_basis: null, market };
+      entry = { security_id: b.security_id, cb, cs: null, cb_basis: cbBasis, cs_basis: null, market };
     } else if (isExchange) {
-      out[name] = { security_id: b.security_id, cb: null, cs, cb_basis: null, cs_basis: csBasis, market };
+      entry = { security_id: b.security_id, cb: null, cs, cb_basis: null, cs_basis: csBasis, market };
     } else {
-      out[name] = { security_id: b.security_id, cb, cs, cb_basis: cbBasis, cs_basis: csBasis, market: market || "未知" };
+      entry = { security_id: b.security_id, cb, cs, cb_basis: cbBasis, cs_basis: csBasis, market: market || "未知" };
     }
+    // 回退只补规则留下的空位（如交易所券规则上不取中债），不改写 DM 判定；
+    // cb_basis 标记“聚源到期”，口径与含权行权的 DM 值可区分。
+    const fbYield = oracleYields[b.security_id];
+    if (entry.cb === null && fbYield != null && Number.isFinite(Number(fbYield))) {
+      entry.cb = Number(fbYield);
+      entry.cb_basis = "聚源到期";
+      cbFromOracle++;
+    }
+    out[name] = entry;
   }
 
+  const dmValued = valMap.size;
+  const valuedDate = dmValued > 0 ? date : cbFromOracle > 0 && oracleDate ? oracleDate : date;
   writeJsonAtomic(path.join(DATA_DIR, "valuations.json"), {
     meta: {
-      date,
+      date: valuedDate,
       generated: new Date().toISOString(),
       source: "DM market-data/date + basic-info/info（服务器每日自动刷新）",
       valuation_rule: "含权债取行权收益率(yte)，非含权取到期收益率(ytm)",
+      cb_fallback: {
+        source: "聚源中债估值（门户 8:30 任务写入 oracle_cb_fallback.json）",
+        date: oracleDate,
+        filled: cbFromOracle,
+        note: "DM 无值的券以聚源到期口径填补中债列；DM 订阅恢复后自动回归 DM 口径",
+      },
     },
     bonds: out,
   });
   return {
     bonds: out.size,
-    valuedDate: date,
+    valuedDate,
     haveCb: Object.values(out).filter((v) => v.cb !== null).length,
     haveCs: Object.values(out).filter((v) => v.cs !== null).length,
+    cbFromOracle,
+    dmValued,
   };
 }
 

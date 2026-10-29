@@ -18,6 +18,7 @@ SNAPSHOT_PATH = MARKET_DIR / "latest_snapshot.json"
 STATUS_PATH = MARKET_DIR / "scheduler_status.json"
 PREFERENCES_PATH = MARKET_DIR / "shared_preferences.json"
 EMOTION_HISTORY_PATH = MARKET_DIR / "market_emotion_history.json"
+DEALS_PATH = MARKET_DIR / "latest_deals.json"
 HISTORY_DIR = MARKET_DIR / "history"
 COUNTERPARTY_LIMITS_PATH = DATA_DIR / "counterparty_limits.json"
 LOCK_PATH = MARKET_DIR / "scheduler.lock"
@@ -248,6 +249,13 @@ def load_snapshot() -> dict[str, Any]:
     return load_json(
         SNAPSHOT_PATH,
         {"version": "", "generated_at": "", "quote_count": 0, "quotes": []},
+    )
+
+
+def load_deals() -> dict[str, Any]:
+    return load_json(
+        DEALS_PATH,
+        {"trade_date": "", "generated_at": "", "dm_account": "", "deal_count": 0, "deals": {}},
     )
 
 
@@ -608,9 +616,13 @@ def data_version(*paths: Path) -> str:
     pieces: list[str] = []
     for path in paths or (
         SNAPSHOT_PATH,
+        DEALS_PATH,
         STATUS_PATH,
         BOND_DIR / "oracle_latest_yields_cache.json",
         BOND_DIR / "rating_facts_cache.json",
+        # 债券池单独变化（如管理页强制应用候选池、池结构修复）也要失效择券缓存；
+        # 日常任务里池与估值同轮更新，此前仅靠估值文件联动失效。
+        DATA_DIR / "bond_static.json",
         EMOTION_HISTORY_PATH,
         COUNTERPARTY_LIMITS_PATH,
         PREFERENCES_PATH,

@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import unittest
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
@@ -11,7 +12,7 @@ from unittest.mock import patch
 # 落到生产数据目录（本文件曾是无沙箱根设置的测试）。
 os.environ.setdefault("PORTAL_DATA_ROOT", str(Path(__file__).resolve().parent / ".test_runtime" / "broker_market"))
 
-from broker_market import storage
+from broker_market import dm_deals, dm_trades, fetcher, storage
 from broker_market.scheduler import BROKER_TIMES, effective_success_for, latest_due, next_due
 from juyuan_update.unified_excel import parse_neiping_sheet
 from openpyxl import Workbook
@@ -170,6 +171,17 @@ class BrokerMarketStorageTests(unittest.TestCase):
         finally:
             target.unlink(missing_ok=True)
 
+    def test_deals_file_changes_picker_data_version(self):
+        target = Path.cwd() / ".test-latest-deals-version.json"
+        try:
+            with patch.object(storage, "DEALS_PATH", target):
+                target.write_text("{}", encoding="utf-8")
+                before = storage.data_version()
+                target.write_text('{"deal_count": 1}', encoding="utf-8")
+                self.assertNotEqual(storage.data_version(), before)
+        finally:
+            target.unlink(missing_ok=True)
+
     def test_empty_refresh_does_not_replace_last_success(self):
         target = Path.cwd() / ".test-latest-snapshot.json"
         history_dir = Path.cwd() / ".test-empty-refresh-history"
@@ -208,7 +220,12 @@ class BrokerSchedulerTests(unittest.TestCase):
     def test_weekend_has_no_latest_due(self):
         saturday = datetime(2026, 8, 29, 12, 0)
         self.assertIsNone(latest_due(saturday, BROKER_TIMES))
-        self.assertEqual(next_due(saturday, BROKER_TIMES), datetime(2026, 8, 31, 9, 30))
+        self.assertEqual(next_due(saturday, BROKER_TIMES), datetime(2026, 8, 31, 9, 10))
+
+    def test_first_intraday_point_is_preopen(self):
+        morning = datetime(2026, 8, 27, 9, 20)  # Thursday, between the two morning pulls
+        self.assertEqual(latest_due(morning, BROKER_TIMES), datetime(2026, 8, 27, 9, 10))
+        self.assertEqual(next_due(morning, BROKER_TIMES), datetime(2026, 8, 27, 9, 30))
 
     def test_snapshot_time_is_fallback_success_for_manual_initialization(self):
         with patch("broker_market.scheduler.load_snapshot", return_value={"generated_at": "2026-08-27 11:36:49"}):
@@ -219,6 +236,186 @@ class BrokerSchedulerTests(unittest.TestCase):
         with patch("broker_market.scheduler.load_json", return_value={"generated_at": "2026-08-27 08:31:02"}):
             value = effective_success_for("bond_picker", {"last_success_scheduled_for": ""})
         self.assertEqual(value, datetime(2026, 8, 27, 8, 31, 2))
+
+
+class _FakeTradeClient:
+    """仿 DMClient 的成交拉取面，供 dm_trades 单测使用（不触网）。"""
+
+    def __init__(self, stat_rows, bond_items):
+        self._stat_rows = stat_rows
+        self._bond_items = bond_items
+
+    def fetch_partitioned_today_trade_stats(self):
+        return self._stat_rows, []
+
+    def fetch_bond_info(self, codes):
+        wanted = set(codes)
+        return [item for item in self._bond_items if item.get("bondUniCode") in wanted]
+
+
+class TodayTradesTests(unittest.TestCase):
+    @staticmethod
+    def _row(**overrides):
+        row = {
+            "bondUniCode": 111, "priceStatus": 0, "issueTime": 1792636393000,
+            "yield": 1.90754, "netPrice": 100.20294, "fullPrice": None,
+            "stat_tradeNum": 52, "stat_gvnTradeNum": 19, "stat_tknTradeNum": 33,
+            "stat_trdTradeNum": 0, "stat_highYield": 1.915, "stat_lowYield": 1.9075,
+            "tradeYieldSubCbBp": None,
+        }
+        row.update(overrides)
+        return row
+
+    def test_build_deals_maps_codes_and_drops_cancelled_or_unmapped(self):
+        rows = [
+            self._row(),
+            # 同券重复行：保留 issueTime 最新的一条（yield 为关键字，经字典传参）
+            self._row(issueTime=1792636394000, **{"yield": 1.92}),
+            # 撤销状态不进入成交列
+            self._row(bondUniCode=222, priceStatus=2),
+            # 无法映射证券代码的行剔除
+            self._row(bondUniCode=333),
+        ]
+        deals = dm_trades.build_deals(rows, {111: "123.IB"})
+        self.assertEqual(list(deals), ["123.IB"])
+        deal = deals["123.IB"]
+        self.assertEqual(deal["yield"], 1.92)
+        self.assertEqual(deal["num"], 52)
+        self.assertEqual(deal["tkn"], 33)
+        self.assertEqual(deal["gvn"], 19)
+        self.assertEqual(deal["time"], datetime.fromtimestamp(1792636394000 / 1000).strftime("%H:%M:%S"))
+        self.assertNotIn("_ts", deal)
+
+    def test_fetch_and_save_today_trades_writes_deals_file(self):
+        target = Path.cwd() / ".test-latest-deals.json"
+        try:
+            client = _FakeTradeClient(
+                [self._row()],
+                [{"bondUniCode": 111, "bondCode": "123.IB"}, {"bondUniCode": 999, "bondCode": "999.IB"}],
+            )
+            with patch.object(dm_trades, "DEALS_PATH", target):
+                payload = dm_trades.fetch_and_save_today_trades(client, username="tester")
+            self.assertEqual(payload["deal_count"], 1)
+            self.assertEqual(payload["dm_account"], "tester")
+            self.assertEqual(payload["trade_date"], datetime.now().strftime("%Y-%m-%d"))
+            self.assertEqual(payload["deals"]["123.IB"]["tkn"], 33)
+            written = json.loads(target.read_text(encoding="utf-8"))
+            self.assertEqual(written["deals"]["123.IB"]["yield"], 1.9075)
+        finally:
+            target.unlink(missing_ok=True)
+
+    def test_deals_augmentation_isolated_from_quote_snapshot(self):
+        result = {}
+        with patch.object(dm_trades, "fetch_and_save_today_trades", return_value={"deal_count": 5}) as fake:
+            fetcher._augment_with_today_deals(object(), {"username": "u"}, result)
+            fake.assert_called_once()
+            self.assertEqual(result, {"deals_count": 5})
+        result = {}
+        with patch.object(dm_trades, "fetch_and_save_today_trades", side_effect=RuntimeError("boom")):
+            fetcher._augment_with_today_deals(object(), {"username": "u"}, result)
+            self.assertIn("RuntimeError: boom", result["deals_error"])
+            self.assertNotIn("deals_count", result)
+
+
+class DealsFallbackTests(unittest.TestCase):
+    """量化API首选、网页端备源：写入标记 / 当日降级 / 熔断 / 恢复修复。"""
+
+    def setUp(self):
+        self.deals_dir = Path.cwd() / ".test-dm-deals-fallback"
+        shutil.rmtree(self.deals_dir, ignore_errors=True)
+        patcher = patch.object(dm_deals, "_deals_dir", self.deals_dir)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.addCleanup(shutil.rmtree, self.deals_dir, ignore_errors=True)
+        dm_deals._quant_down_until = 0.0
+        dm_deals._payload_cache.clear()
+        self.addCleanup(setattr, dm_deals, "_quant_down_until", 0.0)
+        self.addCleanup(dm_deals._payload_cache.clear)
+        self.today = date.today().strftime("%Y%m%d")
+        self.yesterday = (date.today() - timedelta(days=1)).strftime("%Y%m%d")
+
+    @staticmethod
+    def _web_deal():
+        return {"num": 8, "tkn": 6, "gvn": 2, "trd": 0, "yield": 1.645, "net": 100.021,
+                "high": 1.645, "low": 1.645, "sub_cb": -1.2, "time": "10:50:58"}
+
+    def test_write_web_today_stats_marks_web_source(self):
+        written = dm_deals.write_web_today_stats({
+            "102683178.IB": self._web_deal(),
+            "000000.IB": {"num": 0},
+        })
+        self.assertEqual(written, 1)
+        data = dm_deals._read_day_cache("102683178.IB", self.today, ignore_ttl=True)
+        self.assertEqual(data["stats_source"], "web")
+        self.assertEqual(data["stats"]["num"], 8)
+        self.assertEqual(data["stats"]["tkn"], 6)
+        self.assertEqual(data["stats"]["dev_bp"], -1.2)
+        self.assertNotIn("minutes", data)
+
+    def test_today_falls_back_to_web_when_quant_down(self):
+        dm_deals.write_web_today_stats({"102683178.IB": self._web_deal()})
+        with patch.object(dm_deals, "_fetch_minutes", side_effect=dm_deals.DealsFetchError("无订阅套餐")):
+            payload = dm_deals.build_deal_history("102683178.IB", range_start=self.today, range_end=self.today)
+        self.assertEqual(payload["today_source"], "web")
+        self.assertFalse(payload["quant_available"])
+        today_row = payload["days"][-1]
+        self.assertTrue(today_row["is_today"])
+        self.assertEqual(today_row["num"], 8)
+        self.assertEqual(today_row["minutes"], [])
+
+    def test_quant_minutes_preferred_over_web_stats(self):
+        dm_deals.write_web_today_stats({"102683178.IB": self._web_deal()})
+        minutes = [{"time": "10:00", "yield": 1.7, "net_price": 100.0, "gvn": 0, "tkn": 3, "trd": 0, "num": 3}]
+        with patch.object(dm_deals, "_fetch_minutes", return_value=minutes):
+            payload = dm_deals.build_deal_history("102683178.IB", range_start=self.today, range_end=self.today)
+        self.assertEqual(payload["today_source"], "quant")
+        self.assertEqual(payload["days"][-1]["num"], 3)
+        self.assertEqual(payload["days"][-1]["minutes"], minutes)
+
+    def test_breaker_skips_quant_within_cooldown(self):
+        dm_deals.write_web_today_stats({"102683178.IB": self._web_deal()})
+        calls = []
+
+        def failing_fetch(code, day):
+            calls.append(day)
+            raise dm_deals.DealsFetchError("down")
+
+        with patch.object(dm_deals, "_fetch_minutes", side_effect=failing_fetch):
+            dm_deals.build_deal_history("102683178.IB", range_start=self.today, range_end=self.today)
+            dm_deals._payload_cache.clear()
+            dm_deals.build_deal_history("102683178.IB", range_start=self.today, range_end=self.today)
+        self.assertEqual(calls, [self.today], "breaker must skip quant retries within cooldown")
+
+    def test_web_marked_days_repaired_when_quant_returns(self):
+        dm_deals._merge_day_cache("102683178.IB", self.yesterday, stats={
+            "num": 5, "gvn": 1, "tkn": 4, "trd": 0, "close_yield": 2.0,
+            "high_yield": 2.1, "low_yield": 1.9, "cb_yield": None, "dev_bp": None,
+        }, stats_set=True, stats_source=True)
+        official = {self.yesterday: {
+            "num": 6, "gvn": 2, "tkn": 4, "trd": 0, "close_yield": 2.01,
+            "high_yield": 2.1, "low_yield": 1.95, "cb_yield": 2.0, "dev_bp": 1.0,
+        }}
+        with patch.object(dm_deals, "_fetch_stats_range", return_value=official) as fetch_stats, \
+             patch.object(dm_deals, "_fetch_minutes", return_value=[]):
+            payload = dm_deals.build_deal_history("102683178.IB", range_start=self.yesterday, range_end=self.yesterday)
+        fetch_stats.assert_called_once()
+        expected_date = f"{self.yesterday[:4]}-{self.yesterday[4:6]}-{self.yesterday[6:]}"
+        day = next(d for d in payload["days"] if d["date"] == expected_date)
+        self.assertEqual(day["num"], 6)
+        stored = dm_deals._read_day_cache("102683178.IB", self.yesterday)
+        self.assertNotIn("stats_source", stored, "official stats must clear the web marker")
+        self.assertEqual(stored["stats"]["num"], 6)
+
+    def test_quant_down_serves_cached_history_only(self):
+        cached = {"num": 3, "gvn": 0, "tkn": 3, "trd": 0, "close_yield": 2.0,
+                  "high_yield": 2.0, "low_yield": 2.0, "cb_yield": None, "dev_bp": None}
+        dm_deals._merge_day_cache("102683178.IB", self.yesterday, stats=cached, stats_set=True)
+        older = (date.today() - timedelta(days=2)).strftime("%Y%m%d")
+        with patch.object(dm_deals, "_fetch_stats_range", side_effect=dm_deals.DealsFetchError("down")), \
+             patch.object(dm_deals, "_fetch_minutes", side_effect=dm_deals.DealsFetchError("down")):
+            payload = dm_deals.build_deal_history("102683178.IB", range_start=older, range_end=self.yesterday)
+        self.assertFalse(payload["quant_available"])
+        self.assertEqual(len(payload["days"]), 1, "only cached days are served while quant is down")
 
 
 if __name__ == "__main__":

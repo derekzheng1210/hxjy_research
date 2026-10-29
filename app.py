@@ -72,6 +72,7 @@ from broker_market import (
     data_version as bond_picker_data_version,
     dm_accounts,
     ensure_directories as ensure_broker_directories,
+    load_deals,
     load_emotion_history,
     load_preferences as load_broker_preferences,
     load_snapshot as load_broker_snapshot,
@@ -956,7 +957,8 @@ def api_bond_quote_history(code):
 @app.route("/api/bond-deal-history/<path:code>")
 @login_required
 def api_bond_deal_history(code):
-    """单券经纪商成交（DM量化API）：日度统计+盘中分钟时点，区间与报价历史一致。"""
+    """单券经纪商成交：量化API首选（日度统计+盘中分钟时点），不可用时当日
+    降级为经纪商抓取落盘的网页端备源汇总；区间与报价历史一致。"""
     from bond_detail import resolve_quote_history_selection
     from broker_market.dm_deals import DealsFetchError, DealsUnavailable, build_deal_history
 
@@ -1184,6 +1186,14 @@ def bond_picker_market_meta(include_emotion=True):
         "valuation_scheduled_for": valuation_state.get("scheduled_for") or "",
         "rating_compliance": rating_compliance_status(),
     }
+    # 成交列数据：只下发当日文件，隔日/尚未首次抓取的文件不下发（页面显示为无成交）。
+    deals_payload = load_deals()
+    if deals_payload.get("trade_date") == datetime.now().strftime("%Y-%m-%d"):
+        payload["deals"] = deals_payload.get("deals") or {}
+        payload["deals_generated_at"] = deals_payload.get("generated_at") or ""
+    else:
+        payload["deals"] = {}
+        payload["deals_generated_at"] = ""
     if include_emotion:
         history = _ensure_latest_emotion(snapshot)
         points = history.get("points") or []

@@ -5,6 +5,7 @@ from .storage import (
     calculate_market_emotion,
     data_version,
     ensure_directories,
+    load_deals,
     load_emotion_history,
     load_preferences,
     load_snapshot,
@@ -30,7 +31,7 @@ def trigger_update(*args, **kwargs):
 
 __all__ = [
     "EMOTION_HISTORY_PATH", "MARKET_DIR", "calculate_market_emotion", "calculate_ofr_movers",
-    "data_version", "ensure_directories", "load_emotion_history",
+    "data_version", "ensure_directories", "load_deals", "load_emotion_history",
     "load_preferences", "load_snapshot", "merge_bond_rows",
     "record_market_emotion", "public_status", "save_preferences",
     "start_scheduler", "trigger_update",

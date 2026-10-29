@@ -193,6 +193,7 @@ class SQLiteStore:
             )
             self._ensure_roadshow_columns(conn)
             self._ensure_qa_history_columns(conn)
+            self._ensure_users_columns(conn)
             self._set_default(conn, "reminder_config", self._reminder_default)
             self._set_default(conn, "knowledge_config", {"memberLimit": 10, "leaderLimit": 100})
             self._set_default(conn, "schema_version", 1)
@@ -309,18 +310,33 @@ class SQLiteStore:
     def _decode_payload(row):
         return json.loads(row["payload"]) if row else None
 
-    # Users
-    def users(self):
-        with self.connect() as conn:
-            return [dict(row) for row in conn.execute(
-                "SELECT id,name,org,role,password_hash FROM users ORDER BY id"
-            )]
+    @staticmethod
+    def _ensure_users_columns(conn: sqlite3.Connection) -> None:
+        """为 users 表补充软删除标记列（幂等）。
 
-    def get_user(self, uid):
+        删除用户改为软删除：评分/点赞/浏览等历史记录靠外键关联用户行，
+        物理删除会级联清掉这些数据，因此删除只打标记、行保留，姓名可继续解析。
+        """
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(users)")}
+        if not columns:
+            return
+        if "deleted_at" not in columns:
+            conn.execute("ALTER TABLE users ADD COLUMN deleted_at TEXT")
+
+    # Users
+    def users(self, include_deleted=False):
+        sql = "SELECT id,name,org,role,password_hash,deleted_at FROM users"
+        if not include_deleted:
+            sql += " WHERE deleted_at IS NULL"
         with self.connect() as conn:
-            row = conn.execute(
-                "SELECT id,name,org,role,password_hash FROM users WHERE id=?", (uid,)
-            ).fetchone()
+            return [dict(row) for row in conn.execute(sql + " ORDER BY id")]
+
+    def get_user(self, uid, include_deleted=False):
+        sql = "SELECT id,name,org,role,password_hash,deleted_at FROM users WHERE id=?"
+        if not include_deleted:
+            sql += " AND deleted_at IS NULL"
+        with self.connect() as conn:
+            row = conn.execute(sql, (uid,)).fetchone()
             return dict(row) if row else None
 
     def find_user_by_login(self, username):
@@ -351,8 +367,23 @@ class SQLiteStore:
         return self.get_user(uid)
 
     def delete_user(self, uid):
+        """软删除：只打 deleted_at 标记，保留用户行以维系评分/报告等历史数据的
+        外键关联与姓名展示。物理删除由数据库维护工具处理，业务接口不再提供。"""
         with self.transaction() as conn:
-            cursor = conn.execute("DELETE FROM users WHERE id=?", (uid,))
+            cursor = conn.execute(
+                "UPDATE users SET deleted_at=?,updated_at=? WHERE id=? AND deleted_at IS NULL",
+                (now_iso(), now_iso(), uid),
+            )
+            return cursor.rowcount > 0
+
+    def restore_user(self, uid, password_hash):
+        """恢复软删除的用户；密码同时重置，避免离职期间的旧密码悄然复活。"""
+        with self.transaction() as conn:
+            cursor = conn.execute(
+                "UPDATE users SET deleted_at=NULL,password_hash=?,updated_at=? "
+                "WHERE id=? AND deleted_at IS NOT NULL",
+                (password_hash, now_iso(), uid),
+            )
             return cursor.rowcount > 0
 
     # Reports

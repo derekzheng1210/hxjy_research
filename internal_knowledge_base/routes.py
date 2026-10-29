@@ -859,7 +859,8 @@ def _valid_summary_cache(report, style):
 
 
 def _summary_payload(row, style, user_id):
-    generator = store.get_user(user_id) if user_id else None
+    # 含已删除用户：摘要生成人姓名在账号删除后仍可追溯
+    generator = store.get_user(user_id, include_deleted=True) if user_id else None
     return {
         "style": style,
         "summary": row["content"],
@@ -3266,7 +3267,8 @@ def api_ratings_list():
 
     is_leader = user.get("role") == "leader"
     if is_leader:
-        users_by_id = {u["id"]: u for u in store.users()}
+        # 含已删除用户：评分记录按人名保留，删除账号后历史评分仍显示原姓名
+        users_by_id = {u["id"]: u for u in store.users(include_deleted=True)}
         visible_ratings = []
         for rating in all_ratings:
             item = dict(rating)
@@ -3296,7 +3298,8 @@ def api_ratings_list():
         "reportScores": report_scores,
         "summary": {
             "totalRatings": len(all_ratings),
-            "participants": len({r.get("userId") for r in all_ratings if r.get("userId") in scorer_ids_global}),
+            # 参与人数按实际交过评分的人计（含已删除账号，与后台统计口径一致）
+            "participants": len({r.get("userId") for r in all_ratings}),
             "ratedReports": len({r.get("reportId") for r in all_ratings}),
             "totalScorers": len(scorer_ids_global),
         },
@@ -3737,14 +3740,20 @@ def api_admin_reset_scores(rid):
 def api_admin_users():
     if not require_admin():
         return json_error("未登录后台", 401)
-    users = store.users()
     out = []
-    for u in users:
-        out.append({
+    deleted = []
+    for u in store.users(include_deleted=True):
+        item = {
             "id": u["id"], "name": u["name"], "org": u["org"], "role": u["role"],
             "defaultPassword": check_password_hash(u.get("password_hash", ""), DEFAULT_USER_PASSWORD),
-        })
-    return jsonify({"users": out})
+        }
+        if u.get("deleted_at"):
+            item["deletedAt"] = u["deleted_at"]
+            deleted.append(item)
+        else:
+            out.append(item)
+    deleted.sort(key=lambda item: item["deletedAt"], reverse=True)
+    return jsonify({"users": out, "deletedUsers": deleted})
 
 
 @app.route("/api/admin/users", methods=["POST"])
@@ -3765,7 +3774,11 @@ def api_admin_user_create():
         return json_error("部门无效", 400)
     if role not in ("leader", "admin", "member"):
         return json_error("角色无效", 400)
-    if store.get_user(uid):
+    existing = store.get_user(uid, include_deleted=True)
+    if existing:
+        if existing.get("deleted_at"):
+            return json_error("该账号已被删除（历史报告与评分保留中），不能重复创建；"
+                              "如需找回请在用户管理的已删除列表中恢复", 400)
         return json_error("账号已存在", 400)
     user = {"id": uid, "name": name, "org": org, "role": role,
             "password_hash": generate_password_hash(password)}
@@ -3804,6 +3817,21 @@ def api_admin_user_delete(uid):
         return json_error("用户不存在", 404)
     store.delete_user(uid)
     return jsonify({"ok": True})
+
+
+@app.route("/api/admin/users/<uid>/restore", methods=["POST"])
+def api_admin_user_restore(uid):
+    """恢复已删除用户。历史数据本就保留，恢复只是重新允许登录；
+    密码同时重置为默认密码，避免删除前的旧密码悄然生效。"""
+    if not require_admin():
+        return json_error("未登录后台", 401)
+    existing = store.get_user(uid, include_deleted=True)
+    if not existing:
+        return json_error("用户不存在", 404)
+    if not existing.get("deleted_at"):
+        return json_error("该用户未被删除", 400)
+    store.restore_user(uid, generate_password_hash(DEFAULT_USER_PASSWORD))
+    return jsonify({"ok": True, "user": public_user(store.get_user(uid, include_deleted=True))})
 
 
 @app.route("/api/admin/users/<uid>/reset-password", methods=["POST"])

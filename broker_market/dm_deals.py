@@ -8,10 +8,17 @@
 - 当日：date 序列次日才有，直接拉分钟线并在本地汇总日度统计（估值偏离由前端用
   报价历史的当日估值补算）。
 
+量化API为首选；不可用（订阅失效/网络异常，熔断期内不再重试）时降级：
+- 当日：使用经纪商抓取时经 ``write_web_today_stats`` 增量写入的网页端今日成交
+  汇总（stats 带 stats_source="web" 标记，无分钟时点）；
+- 历史日：仅返回已缓存日期，不报错；量化恢复后 web 标记日随一次区间重取被
+  官方数据覆盖修复（此后永久缓存，不重复抓取）。
+
 缓存：PORTAL_DATA_ROOT/data/dm_deals/{bare_code}/{YYYYMMDD}.json，
-内容 {"stats": 日度统计|null, "minutes": 分钟列表|null}。
-历史日永久有效；当日文件按 TTL 过期重取。凭据 INNO_APP_KEY/INNO_APP_SECRET 走
-.env / 环境变量，缺失时功能整体不可用（页面其余模块不受影响）。
+内容 {"stats": 日度统计|null, "minutes": 分钟列表|null, "stats_source"?: "web"}。
+历史日永久有效；当日文件按 TTL 过期重取（web 来源的 stats 读取不受 TTL 限制，
+由经纪商抓取节奏刷新）。凭据 INNO_APP_KEY/INNO_APP_SECRET 走
+.env / 环境变量，缺失时同样降级到网页端备源。
 """
 from __future__ import annotations
 
@@ -36,6 +43,8 @@ DM_DEALS_TIMEOUT_SECONDS = max(10, int(os.environ.get("DM_DEALS_TIMEOUT_SECONDS"
 DM_DEALS_MAX_WORKERS = max(1, int(os.environ.get("DM_DEALS_MAX_WORKERS", "4")))
 # date序列单次区间上限（自然日，含首尾），超出自动分段。
 DATE_SERIES_CHUNK_DAYS = 90
+# 量化API失败后的熔断时长：期间直接走网页端备源，到期自动回归量化首选。
+QUANT_COOLDOWN_SECONDS = max(30, int(os.environ.get("DM_DEALS_QUANT_COOLDOWN_SECONDS", "300")))
 
 _DATE_PATH = "/dm-quant-func-service/api/v1/bond/market-data/date"
 _BARS_PATH = "/dm-quant-func-service/api/v1/bond/market-data/bars"
@@ -46,6 +55,24 @@ _deals_dir: Path = DATA_DIR / "dm_deals"
 _payload_lock = threading.RLock()
 _payload_cache: dict[tuple[str, str, str], tuple[str, dict[str, Any]]] = {}
 _PAYLOAD_CACHE_MAX_ENTRIES = 48
+
+# 日缓存读改写串行化：调度器网页端写入与页面视图的量化写入可能并发触碰同一文件。
+_cache_write_lock = threading.Lock()
+
+# 量化API熔断：失败后 _quant_down_until 内不再尝试，备源顶上；到期重试自动回归。
+_breaker_lock = threading.Lock()
+_quant_down_until = 0.0
+
+
+def _quant_usable() -> bool:
+    return time.time() >= _quant_down_until
+
+
+def _mark_quant_down() -> None:
+    global _quant_down_until
+    with _breaker_lock:
+        _quant_down_until = time.time() + QUANT_COOLDOWN_SECONDS
+
 
 # SDK client 非线程安全（共享 requests.Session）：每线程独立实例。
 _thread_local = threading.local()
@@ -107,7 +134,7 @@ def _day_cache_path(code: str, day: str) -> Path:
     return _deals_dir / bare_code(code) / f"{day}.json"
 
 
-def _read_day_cache(code: str, day: str) -> dict[str, Any] | None:
+def _read_day_cache(code: str, day: str, *, ignore_ttl: bool = False) -> dict[str, Any] | None:
     path = _day_cache_path(code, day)
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -115,7 +142,7 @@ def _read_day_cache(code: str, day: str) -> dict[str, Any] | None:
         return None
     if not isinstance(data, dict):
         return None
-    if day == date.today().strftime("%Y%m%d"):
+    if day == date.today().strftime("%Y%m%d") and not ignore_ttl:
         fetched_at = data.get("fetched_at") or 0
         if not isinstance(fetched_at, (int, float)) or time.time() - fetched_at > TODAY_TTL_SECONDS:
             return None  # 当日数据过期，重取
@@ -135,14 +162,50 @@ def _write_day_cache(code: str, day: str, data: dict[str, Any]) -> None:
         _logger.warning("DM成交缓存写入失败 %s", path, exc_info=True)
 
 
-def _merge_day_cache(code: str, day: str, stats=None, minutes=None, *, stats_set=False, minutes_set=False) -> dict[str, Any]:
-    cached = _read_day_cache(code, day) or {}
-    if stats_set:
-        cached["stats"] = stats
-    if minutes_set:
-        cached["minutes"] = minutes
-    _write_day_cache(code, day, cached)
-    return cached
+def _merge_day_cache(code: str, day: str, stats=None, minutes=None, *, stats_set=False, minutes_set=False, stats_source=False) -> dict[str, Any]:
+    with _cache_write_lock:
+        # ignore_ttl：当日文件即使过期也保留既有字段，只覆盖本次写入的部分。
+        cached = _read_day_cache(code, day, ignore_ttl=True) or {}
+        if stats_set:
+            cached["stats"] = stats
+            if stats_source:
+                cached["stats_source"] = "web"
+            else:
+                cached.pop("stats_source", None)
+        if minutes_set:
+            cached["minutes"] = minutes
+        _write_day_cache(code, day, cached)
+        return cached
+
+
+def write_web_today_stats(deals: dict[str, dict[str, Any]]) -> int:
+    """把网页端今日成交按券增量写入日缓存 stats（量化API的备源）。
+
+    ``deals`` 为 ``dm_trades`` 落盘的当日成交映射（债券代码 -> 汇总）。写入带
+    stats_source="web" 标记：量化恢复后这些日期随一次区间重取被官方数据覆盖；
+    分钟时点始终以量化API为准，此处不写 minutes。
+    """
+    day = date.today().strftime("%Y%m%d")
+    written = 0
+    for code, deal in deals.items():
+        if not isinstance(deal, dict):
+            continue
+        stats = {
+            "num": int(deal.get("num") or 0),
+            "gvn": int(deal.get("gvn") or 0),
+            "tkn": int(deal.get("tkn") or 0),
+            "trd": int(deal.get("trd") or 0),
+            "close_yield": deal.get("yield"),
+            "high_yield": deal.get("high"),
+            "low_yield": deal.get("low"),
+            "cb_yield": None,
+            "dev_bp": deal.get("sub_cb"),
+        }
+        if stats["num"] <= 0:
+            continue
+        _merge_day_cache(code, day, stats=stats, stats_set=True, stats_source=True)
+        written += 1
+    return written
 
 
 # ---------------------------------------------------------------- API 字段清洗
@@ -272,6 +335,11 @@ def build_deal_history(
 
     ``range_start``/``range_end`` 为 YYYYMMDD；区间与债券解析由调用方
     （bond_detail.service.resolve_quote_history_selection）完成，保证与报价历史同区间。
+
+    量化API为首选：可用时行为与历史版本一致（当日分钟线、历史日统计、
+    web 备源日被官方数据覆盖修复）。量化不可用（订阅失效/网络异常，熔断期内
+    不重试）时降级：当日用网页端备源汇总（无分钟时点），历史日仅返回已缓存
+    日期，payload 以 today_source / quant_available 标注数据来源。
     """
     today = date.today().strftime("%Y%m%d")
     if range_start > range_end:
@@ -286,19 +354,28 @@ def build_deal_history(
     stats_span_end = min(range_end, _prev_day(today))  # date序列不含当日
     day_cache: dict[str, dict[str, Any]] = {}
     if stats_span_start <= stats_span_end:
-        missing = [
-            day for day in _days_between(stats_span_start, stats_span_end)
-            if _read_day_cache(code, day) is None or "stats" not in (_read_day_cache(code, day) or {})
-        ]
-        if missing:
-            fetched = _fetch_stats_range(code, stats_span_start, stats_span_end)
-            for day in _days_between(stats_span_start, stats_span_end):
-                if day in fetched:
-                    _merge_day_cache(code, day, stats=fetched[day], stats_set=True)
-                else:
-                    _merge_day_cache(code, day, stats=None, stats_set=True)
-        for day in _days_between(stats_span_start, stats_span_end):
-            day_cache[day] = _read_day_cache(code, day) or {}
+        span_days = _days_between(stats_span_start, stats_span_end)
+        # web 备源标记日视为缺失：量化恢复后随一次区间重取修复为官方口径。
+        missing = []
+        for day in span_days:
+            cached_day = _read_day_cache(code, day)
+            day_cache[day] = cached_day or {}
+            if cached_day is None or "stats" not in cached_day or cached_day.get("stats_source") == "web":
+                missing.append(day)
+        if missing and _quant_usable():
+            try:
+                fetched = _fetch_stats_range(code, stats_span_start, stats_span_end)
+            except (DealsUnavailable, DealsFetchError):
+                # 量化不可用：缺失日留空，仅返回已缓存日期，不阻断整个响应。
+                _mark_quant_down()
+            else:
+                for day in span_days:
+                    if day in fetched:
+                        _merge_day_cache(code, day, stats=fetched[day], stats_set=True)
+                    else:
+                        _merge_day_cache(code, day, stats=None, stats_set=True)
+                for day in span_days:
+                    day_cache[day] = _read_day_cache(code, day) or {}
 
     # 需要分钟时点的日：历史有成交日 + 当日（当日序列无统计，直接拉分钟线）
     deal_days = [day for day in sorted(day_cache) if (day_cache[day].get("stats") or {}).get("num", 0) > 0]
@@ -309,10 +386,13 @@ def build_deal_history(
         cached_day = _read_day_cache(code, day)
         if cached_day is not None and cached_day.get("minutes") is not None:
             return
+        if not _quant_usable():
+            return  # 量化不可用：该日无分钟时点，日度汇总照常展示
         try:
             minutes = _fetch_minutes(code, day)
-        except DealsFetchError:
-            raise
+        except (DealsUnavailable, DealsFetchError):
+            _mark_quant_down()
+            return
         _merge_day_cache(code, day, minutes=minutes, minutes_set=True)
 
     if minute_days:
@@ -333,13 +413,34 @@ def build_deal_history(
         for key in totals:
             totals[key] += int(stats.get(key) or 0)
         days_payload.append({"date": _fmt_day(day), **stats, "minutes": minutes})
+
+    today_source = ""
+    today_entry: dict[str, Any] | None = None
     if include_today:
-        minutes = (_read_day_cache(code, today) or {}).get("minutes") or []
-        if minutes:
-            stats = _summary_from_minutes(minutes)
+        # 当日首选量化分钟线；量化不可用时回退经纪商抓取写入的网页端当日汇总。
+        fresh_today = _read_day_cache(code, today)
+        today_minutes = fresh_today.get("minutes") if fresh_today else None
+        if today_minutes is None and _quant_usable():
+            try:
+                today_minutes = _fetch_minutes(code, today)
+                _merge_day_cache(code, today, minutes=today_minutes, minutes_set=True)
+            except (DealsUnavailable, DealsFetchError):
+                _mark_quant_down()
+                today_minutes = None
+        if today_minutes:
+            stats = _summary_from_minutes(today_minutes)
+            today_entry = {"date": _fmt_day(today), **stats, "minutes": today_minutes, "is_today": True}
+            today_source = "quant"
+        else:
+            cached_today = _read_day_cache(code, today, ignore_ttl=True) or {}
+            web_stats = cached_today.get("stats") if cached_today.get("stats_source") == "web" else None
+            if web_stats and web_stats.get("num", 0) > 0:
+                today_entry = {"date": _fmt_day(today), **web_stats, "minutes": [], "is_today": True}
+                today_source = "web"
+        if today_entry:
             for key in totals:
-                totals[key] += int(stats.get(key) or 0)
-            days_payload.append({"date": _fmt_day(today), **stats, "minutes": minutes, "is_today": True})
+                totals[key] += int(today_entry.get(key) or 0)
+            days_payload.append(today_entry)
 
     payload = {
         "code": code,
@@ -347,6 +448,8 @@ def build_deal_history(
         "range": {"start": _fmt_day(range_start), "end": _fmt_day(range_end), "trading_days": trading_days},
         "summary": {**totals, "days": len(days_payload)},
         "days": days_payload,
+        "today_source": today_source,
+        "quant_available": _quant_usable(),
         "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
     version = _version_token(code, range_start, range_end, today)

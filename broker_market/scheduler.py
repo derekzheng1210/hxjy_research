@@ -22,14 +22,14 @@ from .storage import (
 
 
 BROKER_TIMES = (
-    time(9, 30), time(10, 0), time(10, 30), time(11, 0),
+    time(9, 10), time(9, 30), time(10, 0), time(10, 30), time(11, 0),
     time(13, 0), time(13, 30), time(14, 0), time(14, 30),
     time(15, 0), time(15, 30), time(16, 0),
 )
 DAILY_TIME = time(8, 30)
 # 8:30 每日任务覆盖除利率债三模块（已有各自调度器）外的全部自动数据模块，
 # bond_picker 排首位保证择券工具数据最先就绪；与经纪商抓取共用任务锁，
-# 若全量更新超过 1 小时会顺延（不会丢失）9:30 首次抓取。
+# 若全量更新超过 40 分钟会顺延（不会丢失）9:10 首次抓取。
 DAILY_MODULES = (
     "bond_picker", "spread_monitor", "strategy_dashboard",
     "credit_std_dev", "institution_flow_rates",
@@ -55,6 +55,14 @@ def run_daily_data_update() -> dict:
     from primary_market_pricing.cache_builder import build_cache_once
 
     results["primary_market_pricing"] = build_cache_once()
+    # 看板个券中债估值回退源（聚源）：DM 量化API 订阅失效期间供看板 dm-refresh
+    # 填补中债列。失败只记录不阻断每日任务（看板未部署时该步骤自跳过）。
+    try:
+        from juyuan_update.dashboard_valuations import refresh_dashboard_cb_fallback
+
+        results["dashboard_valuations"] = refresh_dashboard_cb_fallback()
+    except Exception as exc:
+        results["dashboard_valuations"] = f"failed: {type(exc).__name__}: {exc}"[:300]
     return results
 
 
@@ -306,6 +314,8 @@ class BondTradingScheduler:
                     "last_error": "",
                     "attempt": attempt,
                     "result_count": int(result.get("quote_count", 0)) if isinstance(result, dict) else 0,
+                    "deals_count": int(result.get("deals_count", 0)) if isinstance(result, dict) else 0,
+                    "deals_error": str(result.get("deals_error") or "") if isinstance(result, dict) else "",
                 })
                 save_status(status)
                 return

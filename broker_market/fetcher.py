@@ -21,6 +21,21 @@ def make_client(client_type,account,timeout=45):
     return client_type(account["username"],account["password"],**kwargs)
 
 
+def _augment_with_today_deals(client: Any, account: dict[str, Any], result: dict[str, Any]) -> None:
+    """报价快照保存成功后，用同一 DM 会话顺带拉今日成交。
+
+    成交拉取失败只记入 result["deals_error"]，绝不影响报价快照与账号
+    成功标记；当日无成交保存空 deals，属正常状态。
+    """
+    from . import dm_trades
+
+    try:
+        payload = dm_trades.fetch_and_save_today_trades(client, username=account.get("username") or "")
+        result["deals_count"] = int(payload.get("deal_count") or 0)
+    except Exception as exc:  # noqa: BLE001 - 成交列缺数据不应连累报价抓取
+        result["deals_error"] = f"{type(exc).__name__}: {exc}"[:300]
+
+
 def _fetch_with_account(account: dict[str, Any], timeout: int) -> dict:
     """用指定账号完成一次完整快照抓取并原子替换缓存。"""
     # dm_client_local 含接口逆向细节且被 .gitignore 排除，保持延迟导入，
@@ -43,7 +58,9 @@ def _fetch_with_account(account: dict[str, Any], timeout: int) -> dict:
             except (TypeError, ValueError):
                 continue
         enrich_market_rows(quotes, bonds_by_code)
-        return save_snapshot(quotes, datetime.now())
+        result = save_snapshot(quotes, datetime.now())
+        _augment_with_today_deals(client, account, result)
+        return result
     finally:
         # 回写本次设备标识，账号池下次沿用同一“设备”
         dm_accounts.update_device_id(account["username"], client.device_id)
