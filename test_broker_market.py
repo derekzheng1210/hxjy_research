@@ -254,6 +254,17 @@ class _FakeTradeClient:
 
 
 class TodayTradesTests(unittest.TestCase):
+    def setUp(self):
+        # 显式隔离日缓存目录：模块级沙箱依赖 import 顺序（组合跑测试时
+        # broker_market 可能已被未设沙箱的测试按生产路径导入），
+        # write_web_today_stats 的副作用曾因此把 "123" 写进生产 dm_deals。
+        self.deals_dir = Path.cwd() / ".test-today-trades-cache"
+        shutil.rmtree(self.deals_dir, ignore_errors=True)
+        patcher = patch.object(dm_deals, "_deals_dir", self.deals_dir)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.addCleanup(shutil.rmtree, self.deals_dir, ignore_errors=True)
+
     @staticmethod
     def _row(**overrides):
         row = {
@@ -276,9 +287,9 @@ class TodayTradesTests(unittest.TestCase):
             # 无法映射证券代码的行剔除
             self._row(bondUniCode=333),
         ]
-        deals = dm_trades.build_deals(rows, {111: "123.IB"})
-        self.assertEqual(list(deals), ["123.IB"])
-        deal = deals["123.IB"]
+        deals = dm_trades.build_deals(rows, {111: "232680045.IB"})
+        self.assertEqual(list(deals), ["232680045.IB"])
+        deal = deals["232680045.IB"]
         self.assertEqual(deal["yield"], 1.92)
         self.assertEqual(deal["num"], 52)
         self.assertEqual(deal["tkn"], 33)
@@ -286,21 +297,30 @@ class TodayTradesTests(unittest.TestCase):
         self.assertEqual(deal["time"], datetime.fromtimestamp(1792636394000 / 1000).strftime("%H:%M:%S"))
         self.assertNotIn("_ts", deal)
 
+    def test_build_deals_drops_non_bond_code_shapes(self):
+        # 债券信息偶发返回内部短码（如 "123"）：形态不过关的映射整行剔除
+        rows = [self._row(bondUniCode=code) for code in (111, 222, 333, 444)]
+        mapping = {111: "123.IB", 222: "123", 333: "01100.IB", 444: "232680046.IB"}
+        deals = dm_trades.build_deals(rows, mapping)
+        self.assertEqual(list(deals), ["232680046.IB"])
+
     def test_fetch_and_save_today_trades_writes_deals_file(self):
         target = Path.cwd() / ".test-latest-deals.json"
         try:
             client = _FakeTradeClient(
                 [self._row()],
-                [{"bondUniCode": 111, "bondCode": "123.IB"}, {"bondUniCode": 999, "bondCode": "999.IB"}],
+                [{"bondUniCode": 111, "bondCode": "232680045.IB"}, {"bondUniCode": 999, "bondCode": "242480015.IB"}],
             )
             with patch.object(dm_trades, "DEALS_PATH", target):
                 payload = dm_trades.fetch_and_save_today_trades(client, username="tester")
             self.assertEqual(payload["deal_count"], 1)
             self.assertEqual(payload["dm_account"], "tester")
             self.assertEqual(payload["trade_date"], datetime.now().strftime("%Y-%m-%d"))
-            self.assertEqual(payload["deals"]["123.IB"]["tkn"], 33)
+            self.assertEqual(payload["deals"]["232680045.IB"]["tkn"], 33)
             written = json.loads(target.read_text(encoding="utf-8"))
-            self.assertEqual(written["deals"]["123.IB"]["yield"], 1.9075)
+            self.assertEqual(written["deals"]["232680045.IB"]["yield"], 1.9075)
+            # 日缓存写入落在沙箱目录，不触生产 dm_deals
+            self.assertTrue((self.deals_dir / "232680045").is_dir())
         finally:
             target.unlink(missing_ok=True)
 

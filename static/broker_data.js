@@ -1,6 +1,6 @@
 (() => {
 'use strict';
-const $=id=>document.getElementById(id), charts={}, state={data:null,meta:null,view:'quotes',page:1,seq:0,ovlSeq:0};
+const $=id=>document.getElementById(id), charts={}, state={data:null,meta:null,seq:0,ovlSeq:0};
 const fmt=(v,d=2)=>v==null||!Number.isFinite(Number(v))?'—':Number(v).toLocaleString('zh-CN',{minimumFractionDigits:d,maximumFractionDigits:d});
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 async function api(url){const r=await fetch(url,{headers:{Accept:'application/json'}});if(r.redirected)throw new Error('登录已失效，请重新登录门户');const p=await r.json();if(!r.ok)throw new Error(p.error||'读取失败');return p;}
@@ -10,15 +10,15 @@ function kpi(label,value,unit,note,color=''){return `<div class="kpi"><div class
 function render(){
  const d=state.data,q=d.quote_summary,s=d.deal_summary;
  $('start').value=d.range.start;$('end').value=d.range.end;
- $('freshness').textContent=`报价快照 ${d.snapshot_at||'暂无'}${d.stale?' · 非今日快照':''} ｜ 成交缓存更新 ${d.deal_cache_updated||'暂无'}${d.snapshot_in_range?'':' ｜ 当前报价快照不在所选历史区间内'}`;
+ $('freshness').textContent=`报价快照 ${d.snapshot_at||'暂无'}${d.stale?' · 非今日快照':''} ｜ 盘面日报更新 ${d.report_updated||'暂无'}（成交至上一交易日）${d.snapshot_in_range?'':' ｜ 当前报价快照不在所选历史区间内'}`;
  $('quoteKpis').innerHTML=kpi('双边报价均值偏离',fmt(q.mid_dev),'BP',`Bid偏离 ${fmt(q.bid_dev)} / Ofr偏离 ${fmt(q.ofr_dev)} BP`,'blue')+kpi('平均买卖价差',fmt(q.width),'BP','有效双边逐券等权，观察报价宽窄')+kpi('有效报价券数',fmt(q.quoted,0),'只',`双边 ${fmt(q.two_sided,0)} 只 / 当前估值券池 ${fmt(q.pool,0)} 只`)+kpi('有效报价覆盖率',fmt(q.coverage_pct),'%','有单边或双边报价券 / 当前估值券池');
- $('dealKpis').innerHTML=kpi('样本成交笔数',s.bonds?fmt(s.num,0):'—','笔',`覆盖 ${fmt(s.bonds,0)} 只券 · ${fmt(s.days,0)} 个有成交日期`)+kpi('TKN占比 · 主动买入',fmt(s.tkn_pct),'%',`${fmt(s.tkn,0)} 笔 / 样本总成交笔数`,'red')+kpi('GVN占比 · 主动卖出',fmt(s.gvn_pct),'%',`${fmt(s.gvn,0)} 笔 / 样本总成交笔数`,'green')+kpi('净主动成交笔数',s.bonds?fmt(s.net,0):'—','笔',`TKN−GVN ｜ TRD及未分类 ${fmt(s.other_pct)}%`);
- $('coverage').textContent=s.bonds?`成交为已缓存券样本，共 ${s.bonds} 只，非全市场成交统计。已有成交日期：${d.deals[0]?.date} 至 ${d.deals.at(-1)?.date}；比例按合计笔数加权，样本会随查询缓存变化。${d.skipped?`已排除 ${d.skipped} 条无效记录。`:''}`:'所选区间暂无有效成交缓存，成交笔数与方向占比暂不可用。可在债券详查读取单券成交历史后刷新本页。';
- renderDirection();renderStructure();state.page=1;renderTable();renderMain();
+ $('dealKpis').innerHTML=kpi('区间成交笔数',s.days?fmt(s.num,0):'—','笔',`DM盘面日报全市场口径 · ${fmt(s.days,0)} 个交易日`)+kpi('TKN占比 · 主动买入',fmt(s.tkn_pct),'%',`${fmt(s.tkn,0)} 笔 / 区间总成交笔数`,'red')+kpi('GVN占比 · 主动卖出',fmt(s.gvn_pct),'%',`${fmt(s.gvn,0)} 笔 / 区间总成交笔数`,'green')+kpi('净主动成交笔数',s.days?fmt(s.net,0):'—','笔',`TKN−GVN ｜ 未分类 ${fmt(s.other_pct)}%`);
+ $('coverage').textContent=s.days?`成交笔数与 TKN/GVN 占比来自 DM 信用债盘面日报（经纪商来源、全部信用券种）：交易日盘后发布，本页每日晨自动补齐至上一交易日。历史覆盖 ${d.report_range?.first||'—'} 至 ${d.report_range?.last||'—'}，本区间 ${fmt(s.days,0)} 个交易日${d.deals.length?`，最新一日 ${d.deals.at(-1).date} 成交 ${fmt(d.deals.at(-1).num,0)} 笔`:''}。`:`所选区间暂无盘面日报成交数据，历史覆盖 ${d.report_range?.first||'—'} 至 ${d.report_range?.last||'—'}，可调整区间后重试。`;
+ renderDirection();renderStructure();renderMain();
 }
 function renderDirection(){
- const rows=state.data.deals;if(!rows.length)return noData('directionChart','所选区间暂无成交缓存');
- chart('directionChart',{tooltip:{trigger:'axis',confine:true},legend:{top:8},grid:{left:55,right:55,top:52,bottom:55},dataZoom:[{type:'inside'},{type:'slider',height:15,bottom:10}],xAxis:{type:'category',data:rows.map(x=>x.date)},yAxis:[{type:'value',name:'占比 %',min:0,max:100},{type:'value',name:'成交笔数',minInterval:1}],series:[{name:'TKN',type:'bar',stack:'direction',data:rows.map(x=>x.tkn_pct),itemStyle:{color:'#f56c6c'}},{name:'GVN',type:'bar',stack:'direction',data:rows.map(x=>x.gvn_pct),itemStyle:{color:'#67c23a'}},{name:'TRD及未分类',type:'bar',stack:'direction',data:rows.map(x=>x.other_pct),itemStyle:{color:'#c0c4cc'}},{name:'成交笔数',type:'line',yAxisIndex:1,data:rows.map(x=>x.num),itemStyle:{color:'#5470c6'}}]});
+ const rows=state.data.deals.filter(x=>!isWeekend(x.date));if(!rows.length)return noData('directionChart','所选区间暂无盘面日报成交');
+ chart('directionChart',{tooltip:{trigger:'axis',confine:true},legend:{top:8},grid:{left:55,right:55,top:52,bottom:55},dataZoom:[{type:'inside'},{type:'slider',height:15,bottom:10}],xAxis:{type:'category',data:rows.map(x=>x.date)},yAxis:[{type:'value',name:'占比 %',min:0,max:100},{type:'value',name:'成交笔数',minInterval:1}],series:[{name:'TKN',type:'bar',stack:'direction',data:rows.map(x=>x.tkn_pct),itemStyle:{color:'#f56c6c'}},{name:'GVN',type:'bar',stack:'direction',data:rows.map(x=>x.gvn_pct),itemStyle:{color:'#67c23a'}},{name:'未分类',type:'bar',stack:'direction',data:rows.map(x=>x.other_pct),itemStyle:{color:'#c0c4cc'}},{name:'成交笔数',type:'line',yAxisIndex:1,data:rows.map(x=>x.num),itemStyle:{color:'#5470c6'}}]});
 }
 function renderStructure(){
  if(!state.data)return;const rows=(state.data.breakdown[$('dimension').value]||[]).slice().sort((a,b)=>b.value-a.value);
@@ -28,6 +28,7 @@ function renderStructure(){
 async function initMeta(){try{state.meta=await api('/institution-flow/api/overlay/meta');const m=state.meta,options={...m.rate_curves,...m.credit_curves};$('curve').innerHTML=Object.keys(options).map(n=>`<option>${esc(n)}</option>`).join('');if(options['中短票AAA'])$('curve').value='中短票AAA';setTenors();}catch(e){$('overlayStatus').textContent=`曲线选项不可用：${e.message}`;}}
 function setTenors(){const m=state.meta;if(!m)return;const c=$('curve').value,info=m.credit_curves[c]||m.rate_curves[c],previous=$('tenor').value;$('tenor').innerHTML=(info?.tenors||[]).map(t=>`<option>${esc(t)}</option>`).join('');if(info?.tenors.includes(previous))$('tenor').value=previous;else if(info?.tenors.includes('3Y'))$('tenor').value='3Y';}
 const TS=window.BrokerSeries, overlayCache=new Map();
+const isWeekend=d=>{const t=new Date(d+'T00:00:00Z').getUTCDay();return t===0||t===6;};
 function cachedOverlay(url){if(!overlayCache.has(url)){const promise=api(url).catch(e=>{overlayCache.delete(url);throw e;});overlayCache.set(url,promise);}return overlayCache.get(url);}
 function prepareSeries(points,isYield=false){
  const result=TS.prepare(points,$('smooth').value,$('transform').value);
@@ -35,28 +36,27 @@ function prepareSeries(points,isYield=false){
 }
 async function renderMain(){
  if(!state.data)return;const token=++state.ovlSeq,d=state.data,metric=$('metric').value,mode=$('mode').value,curve=$('curve').value,tenor=$('tenor').value;
- const base=(metric==='emotion'?d.emotion:d.deals).map(x=>({date:x.date,value:metric==='emotion'?x.value:x[metric]}));
+ const base=(metric==='emotion'?d.emotion:d.deals).map(x=>({date:x.date,value:metric==='emotion'?x.value:x[metric]})).filter(p=>!isWeekend(p.date));
  let y=null,s=null,notes=[];const info=state.meta?.credit_curves[curve],jobs=[];
  const getSeries=(kind,url)=>cachedOverlay(url).then(p=>{if(kind==='y')y=p;else s=p;}).catch(e=>notes.push(e.message));
  if(mode!=='none'&&curve&&tenor){if(mode==='both'||mode==='yield')jobs.push(getSeries('y',`/institution-flow/api/overlay/yield?curve=${encodeURIComponent(curve)}&tenor=${encodeURIComponent(tenor)}`));if(mode==='both'||mode==='spread'){if(info?.spread)jobs.push(getSeries('s',`/institution-flow/api/overlay/spread?category=${encodeURIComponent(info.spread)}&tenor=${encodeURIComponent(tenor)}`));else notes.push('该曲线无对应信用利差，请选择信用曲线');}}
  await Promise.all(jobs);if(token!==state.ovlSeq)return;
- const native=(p,mult)=>p?p.dates.map((date,i)=>({date,value:typeof p.values[i]==='number'&&Number.isFinite(p.values[i])?p.values[i]*mult:null})).filter(p=>p.date>=d.range.start&&p.date<=d.range.end):[];
+ // 类目横轴只含交易日（周六周日含调休不展示），柱状图连续无周末空档；
+ // 各序列缺日置 null 且连线跨过，互不打洞。
+ const native=(p,mult)=>p?p.dates.map((date,i)=>({date,value:typeof p.values[i]==='number'&&Number.isFinite(p.values[i])?p.values[i]*mult:null})).filter(p=>p.date>=d.range.start&&p.date<=d.range.end&&!isWeekend(p.date)):[];
  const rawYield=native(y,1),rawSpread=native(s,100),signal=prepareSeries(base),yieldPoints=prepareSeries(rawYield,true),spreadPoints=prepareSeries(rawSpread);
  state.analysis={signal,yieldPoints,spreadPoints,rawYield:rawYield.map(p=>({...p,value:p.value==null?null:p.value*100})),rawSpread,curve,tenor};
  const dates=[...new Set([...base,...rawYield,...rawSpread].map(p=>p.date))].sort();
  const transformed=$('transform').value,z=transformed==='z20',diff=transformed==='diff',smoothing=$('smooth').value,tag=(smoothing==='none'?'':` · ${smoothing.toUpperCase()}`)+(z?' · Z20':diff?' · Δ':'');
  const signalUnit=z?'Z-score':metric==='emotion'?'BP':metric.includes('pct')?(diff?'百分点':'%'):'笔',yieldUnit=z?'Z-score':diff?'BP':'%';
  $('processingStatus').textContent=`${smoothing==='none'?'不平滑':smoothing.toUpperCase()} → ${$('transform').selectedOptions[0].textContent} · 仅使用当期及历史数据`;
- $('chartNote').textContent='各序列按自身观测日计算，显式缺值会中断窗口；窗口不足留空。平滑后再求变化量或标准化，日期按同日匹配。'+(diff?'收益率变化换算为BP，占比变化为百分点。':'');
+ $('chartNote').textContent='横轴为各序列交易日并集（周六周日含调休不展示）；某序列缺日时连线跨过、不打洞，显式缺值会中断平滑窗口，窗口不足留空。平滑后再求变化量或标准化，日期按同日匹配。'+(diff?'收益率变化换算为BP，占比变化为百分点。':'');
  const series=[];
- function add(points,label,axis,color,type){const map=new Map(points.map(p=>[p.date,p.value]));series.push({name:label+tag,type,yAxisIndex:z?0:axis,data:dates.map(day=>map.get(day)??null),connectNulls:false,showSymbol:false,itemStyle:{color},lineStyle:{width:2}});}
- add(signal,`${$('metric').selectedOptions[0].textContent.replace(/（.*?）/g,'')}（${signalUnit}）`,0,'#409eff',metric==='num'||metric==='net'?'bar':'line');
+ function add(points,label,axis,color,type){const map=new Map(points.filter(p=>p.value!=null).map(p=>[p.date,p.value]));if(!map.size)notes.push(label+'在当前处理下无有效值');series.push({name:label+tag,type,yAxisIndex:z?0:axis,data:dates.map(day=>map.get(day)??null),connectNulls:true,showSymbol:false,itemStyle:{color},lineStyle:{width:2}});}
+ add(signal,`${$('metric').selectedOptions[0].textContent.replace(/（.*?）/g,'')}（${signalUnit}）`,0,'#409eff',metric==='emotion'?'line':'bar');
  if(y)add(yieldPoints,`${curve} ${tenor}（${yieldUnit}）`,1,'#1565c0','line');
  if(s)add(spreadPoints,`${info?.spread} ${tenor}（${z?'Z-score':'BP'}）`,2,'#8e24aa','line');
- if(!signal.some(p=>p.value!=null))notes.push('当前指标经处理后样本不足');
- if(y&&!yieldPoints.some(p=>p.value!=null))notes.push('收益率在当前处理下无有效值');
- if(s&&!spreadPoints.some(p=>p.value!=null))notes.push('利差在当前处理下无有效值');
- $('overlayStatus').textContent=notes.join('；')||'同日匹配 · 缺失不填充';
+ $('overlayStatus').textContent=notes.join('；')||'交易日横轴 · 缺日连线跨过 · 周末不展示';
  if(dates.length)chart('mainChart',{tooltip:{trigger:'axis',confine:true,valueFormatter:v=>fmt(v,3)},legend:{top:5,type:'scroll'},grid:{left:65,right:z?35:s?140:75,top:65,bottom:65},dataZoom:[{type:'inside'},{type:'slider',height:18,bottom:12}],xAxis:{type:'category',data:dates},yAxis:[{type:'value',name:signalUnit,scale:true,splitLine:{lineStyle:{color:'#ebeef5'}}},{type:'value',name:`收益率 ${yieldUnit}`,position:'right',scale:true,show:!!y&&!z,splitLine:{show:false}},{type:'value',name:'利差 BP',position:'right',offset:y?72:0,scale:true,show:!!s&&!z,splitLine:{show:false}}],series});
  else noData('mainChart','所选区间暂无数据');
  renderAnalysis();
@@ -84,10 +84,6 @@ function exportAnalysis(){
  const u=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'})),el=document.createElement('a');el.href=u;el.download='经纪商领先检验配对数据.csv';el.click();setTimeout(()=>URL.revokeObjectURL(u),1000);
 }
 
-const columns={quotes:[['code','代码'],['name','简称'],['term','期限(年)',2],['rating','隐含评级'],['valuation','中债(%)',4],['bid','Bid(%)',4],['ofr','Ofr(%)',4],['mid_dev','报价均值偏离(BP)',2],['width','买卖价差(BP)',2]],active_bonds:[['code','代码'],['name','简称'],['num','成交笔数',0],['tkn','TKN笔数',0],['gvn','GVN笔数',0],['tkn_pct','TKN占比(%)',2],['gvn_pct','GVN占比(%)',2],['net','净主动笔数',0],['days','有成交天数',0]]};
-function filtered(){const query=$('search').value.trim().toLowerCase();return (state.data?.[state.view]||[]).filter(r=>(r.code+' '+r.name).toLowerCase().includes(query));}
-function renderTable(){const rows=filtered(),cols=columns[state.view],pages=Math.max(1,Math.ceil(rows.length/50));state.page=Math.min(state.page,pages);$('thead').innerHTML='<tr>'+cols.map(c=>`<th>${c[1]}</th>`).join('')+'</tr>';$('tbody').innerHTML=rows.slice((state.page-1)*50,state.page*50).map(r=>'<tr>'+cols.map(c=>`<td>${c[0]==='code'?`<a href="/bond-detail?code=${encodeURIComponent(r.code)}" target="_blank" rel="noopener">${esc(r.code)}</a>`:c.length>2?fmt(r[c[0]],c[2]):esc(r[c[0]])}</td>`).join('')+'</tr>').join('')||`<tr><td class="empty" colspan="${cols.length}">暂无匹配数据</td></tr>`;$('tableCount').textContent=`共 ${rows.length} 只 · ${state.view==='quotes'?'最新报价，按绝对偏离排序':'区间缓存样本，按成交笔数排序'}`;$('pageNumber').textContent=`${state.page} / ${pages}`;$('prev').disabled=state.page<=1;$('next').disabled=state.page>=pages;}
-function exportCSV(){const cols=columns[state.view],cell=v=>'"'+String(v??'').replace(/^[=+@\-]/,"'$&").replace(/"/g,'""')+'"';const csv='\uFEFF'+[cols.map(c=>cell(c[1])).join(','),...filtered().map(r=>cols.map(c=>cell(r[c[0]])).join(','))].join('\r\n');const u=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'})),a=document.createElement('a');a.href=u;a.download=`经纪商数据_${state.view}_${state.data.range.end}.csv`;a.click();setTimeout(()=>URL.revokeObjectURL(u),1000);}
 async function load(initial=false){
  const params=new URLSearchParams({scope:$('scope').value});if(!initial){if(!$('start').value||!$('end').value){$('error').hidden=false;$('error').textContent='请选择完整的起止日期';return;}params.set('start',$('start').value);params.set('end',$('end').value);}
  const token=++state.seq;state.ovlSeq++;$('error').hidden=true;$('refresh').disabled=true;document.querySelector('main').setAttribute('aria-busy','true');
@@ -95,7 +91,6 @@ async function load(initial=false){
 }
 $('refresh').onclick=()=>{overlayCache.clear();load();};$('apply').onclick=()=>{document.querySelectorAll('#ranges button').forEach(b=>b.classList.remove('on'));load();};$('scope').onchange=()=>load();
 document.querySelectorAll('#ranges button').forEach(b=>b.onclick=()=>{if(!state.data)return;const end=state.data.snapshot_at?.slice(0,10)||state.data.range.end,dt=new Date(end+'T00:00:00Z');dt.setUTCDate(dt.getUTCDate()-Number(b.dataset.days));$('end').value=end;$('start').value=dt.toISOString().slice(0,10);document.querySelectorAll('#ranges button').forEach(x=>x.classList.toggle('on',x===b));load();});
-for(const id of ['metric','mode','tenor','smooth','transform'])$(id).onchange=renderMain;$('curve').onchange=()=>{setTenors();renderMain();};$('dimension').onchange=renderStructure;for(const id of ['analysisTarget','corrWindow','horizon'])$(id).onchange=renderAnalysis;$('exportAnalysis').onclick=exportAnalysis;
-document.querySelectorAll('[data-view]').forEach(b=>b.onclick=()=>{state.view=b.dataset.view;state.page=1;document.querySelectorAll('[data-view]').forEach(x=>x.classList.toggle('on',x===b));renderTable();});$('search').oninput=()=>{state.page=1;renderTable();};$('prev').onclick=()=>{state.page--;renderTable();};$('next').onclick=()=>{state.page++;renderTable();};$('export').onclick=exportCSV;window.addEventListener('resize',()=>Object.values(charts).forEach(c=>c.resize()));
+for(const id of ['metric','mode','tenor','smooth','transform'])$(id).onchange=renderMain;$('curve').onchange=()=>{setTenors();renderMain();};$('dimension').onchange=renderStructure;for(const id of ['analysisTarget','corrWindow','horizon'])$(id).onchange=renderAnalysis;$('exportAnalysis').onclick=exportAnalysis;window.addEventListener('resize',()=>Object.values(charts).forEach(c=>c.resize()));
 Promise.all([initMeta(),load(true)]).then(renderMain);
 })();

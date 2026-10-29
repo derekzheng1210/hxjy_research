@@ -36,6 +36,23 @@ def _augment_with_today_deals(client: Any, account: dict[str, Any], result: dict
         result["deals_error"] = f"{type(exc).__name__}: {exc}"[:300]
 
 
+def _augment_with_daily_report(client: Any, result: dict[str, Any]) -> None:
+    """盘面日报约 17:30 发布，次日晨首次经纪商抓取时补齐昨日及缺失日期。
+
+    成交笔数/TKN/GVN 以日报为权威来源，这里的历史缺口补齐失败只记入
+    result["report_error"]，绝不影响报价快照。
+    """
+    from . import dm_report
+
+    try:
+        if not dm_report.history_needs_update():
+            return
+        summary = dm_report.update_history(client)
+        result["report_fetched"] = int(summary.get("fetched") or 0)
+    except Exception as exc:  # noqa: BLE001 - 日报缺数据不应连累报价抓取
+        result["report_error"] = f"{type(exc).__name__}: {exc}"[:300]
+
+
 def _fetch_with_account(account: dict[str, Any], timeout: int) -> dict:
     """用指定账号完成一次完整快照抓取并原子替换缓存。"""
     # dm_client_local 含接口逆向细节且被 .gitignore 排除，保持延迟导入，
@@ -60,6 +77,7 @@ def _fetch_with_account(account: dict[str, Any], timeout: int) -> dict:
         enrich_market_rows(quotes, bonds_by_code)
         result = save_snapshot(quotes, datetime.now())
         _augment_with_today_deals(client, account, result)
+        _augment_with_daily_report(client, result)
         return result
     finally:
         # 回写本次设备标识，账号池下次沿用同一“设备”

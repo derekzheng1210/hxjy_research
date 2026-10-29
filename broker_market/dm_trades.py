@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from typing import Any
 
@@ -16,6 +17,15 @@ from .storage import DEALS_PATH, atomic_write_json
 
 # DM priceStatus：2=撤销，不进入成交列。
 PRICE_STATUS_CANCELLED = 2
+
+# 证券代码形态：6 位以上纯数字，可带交易所后缀。债券信息接口偶发对个别
+# bondUniCode 返回内部短码（如 "123"），校验不过的映射整行跳过，避免脏码
+# 进入成交列与逐券日缓存（该券本场快照缺成交，下场抓取自愈）。
+CODE_PATTERN = re.compile(r"^\d{6,}(\.(IB|SH|SZ|BJ))?$")
+
+
+def valid_bond_code(code: Any) -> bool:
+    return isinstance(code, str) and bool(CODE_PATTERN.match(code))
 
 
 def _round(value: Any, digits: int = 4) -> float | None:
@@ -61,7 +71,7 @@ def build_deals(stat_rows: list[dict[str, Any]], codes_by_unicode: dict[int, str
         except (TypeError, ValueError):
             continue
         code = codes_by_unicode.get(unicode_key)
-        if not code:
+        if not code or not valid_bond_code(code):
             continue
         previous = deals.get(code)
         if previous is not None and str(row.get("issueTime") or 0) <= previous.get("_ts", ""):
