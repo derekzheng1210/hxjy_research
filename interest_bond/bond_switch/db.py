@@ -10,6 +10,12 @@ from typing import Iterator
 from . import config
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS local_valuation_points (
+    trade_date TEXT NOT NULL,
+    code TEXT NOT NULL,
+    yield REAL NOT NULL,
+    PRIMARY KEY(code, trade_date)
+);
 CREATE TABLE IF NOT EXISTS bond_snapshots (
     as_of_date        TEXT NOT NULL,
     code              TEXT NOT NULL,

@@ -5,7 +5,7 @@ import logging
 
 from flask import Blueprint, current_app, jsonify, render_template, request
 
-from . import config, db, scheduler, services, updater
+from . import config, db, local_bonds, scheduler, services, updater
 
 log = logging.getLogger("bond_switch")
 bp = Blueprint("bond_switch", __name__, url_prefix="/bond-switch")
@@ -43,6 +43,21 @@ def api_series():
 @bp.get("/api/tax-spread")
 def api_tax_spread():
     return jsonify(services.tax_spread(request.args.get("range", "1y"), _db_path()))
+
+
+@bp.get("/api/local-dashboard")
+def api_local_dashboard():
+    payload = local_bonds.dashboard(_db_path())
+    payload["update_status"] = updater.status()
+    return jsonify(payload)
+
+
+@bp.get('/api/local-series')
+def api_local_series():
+    try:
+        return jsonify(local_bonds.history(request.args.get('group', 'good'), request.args.get('range', '3m'), _db_path()))
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
 
 
 def init_app() -> None:

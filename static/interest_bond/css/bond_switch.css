@@ -44,6 +44,9 @@
 .role-card .yield-row { display: flex; align-items: baseline; gap: 8px; margin: 10px 0; }
 .role-card .yield-row b { font-size: 24px; font-variant-numeric: tabular-nums; }
 .role-card .yield-row span { color: var(--muted); font-size: 11px; }
+.role-spreads { display: grid; gap: 7px; margin-bottom: 12px; padding-bottom: 12px; border-bottom: 1px solid var(--border); }
+.role-spreads > span { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; color: var(--muted); font-size: 11px; }
+.role-spreads b { flex-shrink: 0; color: var(--ink-2); font-size: 13px; font-variant-numeric: tabular-nums; }
 .role-metrics { display: grid; grid-template-columns: repeat(2, 1fr); gap: 7px 12px; }
 .role-metrics span { color: var(--muted); font-size: 11px; }
 .role-metrics b { display: block; color: var(--ink-2); font-size: 13px; margin-top: 2px; font-variant-numeric: tabular-nums; }
@@ -118,3 +121,47 @@
   .ma-toggles { margin-left: 0; width: 100%; }
   #bondSpreadChart { height: 500px; }
 }
+
+/* 30年地方债：沿用共享深蓝、灰白配色。 */
+.local-card { margin-bottom: 16px; }
+.local-benchmark { color: var(--muted); font-size: 11px; text-align: right; }
+.local-notice { background: var(--primary-soft); border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; margin-bottom: 14px; color: var(--primary); }
+.local-table-scroll { width: 100%; overflow-x: auto; }
+.local-table { width: 100%; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.local-table th { background: var(--primary); color: white; font-weight: 600; padding: 12px 14px; text-align: right; }
+.local-table th:first-child, .local-table td:first-child { text-align: left; }
+.local-table td { padding: 13px 14px; border-bottom: 1px solid var(--border-soft); text-align: right; }
+.local-table tbody > tr:nth-child(4n+1) { background: var(--primary-soft); }
+.local-table small { display: block; color: var(--muted); font-size: 10px; margin-top: 3px; }
+.local-group-toggle { border: 0; background: none; color: var(--primary); font: 600 13px var(--font); padding: 3px 0; cursor: pointer; }
+.local-chevron { display: inline-block; font-size: 9px; transition: transform .15s; }
+.local-group-toggle[aria-expanded="true"] .local-chevron { transform: rotate(90deg); }
+.local-table td.local-detail-cell { padding: 12px; background: var(--bg); }
+.local-detail-table { background: var(--surface); }
+.local-detail-table th { color: var(--ink-2); background: #e3eaf4; }
+.local-detail-table th:nth-child(2) { text-align: left; }
+.local-table .local-bond-name { text-align: left; }
+.local-table .local-missing { text-align: left; color: var(--muted); }
+.local-comparison-grid { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 12px; align-items: start; }
+.local-comparison { border: 1px solid var(--border); border-top: 3px solid var(--primary); border-radius: 8px; background: var(--surface); min-width: 0; }
+.local-comparison summary { list-style: none; cursor: pointer; padding: 14px; color: var(--primary); font-weight: 600; }
+.local-comparison summary::-webkit-details-marker { display: none; }
+.local-expand { float: right; color: var(--muted); font-size: 11px; font-weight: 400; }
+.local-spread-values { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 12px; }
+.local-spread-values small { display: block; color: var(--muted); font-size: 10px; font-weight: 400; }
+.local-spread-values strong { display: block; font-size: 21px; margin: 4px 0; font-variant-numeric: tabular-nums; }
+.local-comparison[open] { grid-column: 1 / -1; }
+.local-comparison-detail { padding: 0 14px 14px; }
+.local-comparison-detail th { background: var(--primary-soft); color: var(--ink-2); }
+.local-comparison-detail td { text-align: left; }
+.local-comparison-detail th { text-align: left; }
+@media(max-width: 900px) { .local-comparison-grid { grid-template-columns: 1fr; } .local-benchmark { text-align: left; } .local-spread-values strong { font-size: 20px; } }
+.local-table small.local-quote-warning { color: var(--warn); }
+.page-head .subline[hidden] { display: none; }
+.local-bond-code { display: block; margin-top: 3px; }
+.local-spread-values span, .local-expand { font-size: 13px; font-weight: 400; }
+.local-history-toolbar { display: flex; justify-content: space-between; gap: 12px; align-items: center; margin: 4px 0 10px; flex-wrap: wrap; }
+.local-history-toolbar h3 { font-size: 14px; margin: 0; }
+.local-history-chart { width: 100%; height: 340px; margin-bottom: 12px; }
+.local-history-status { color: var(--muted); font-size: 13px; }
+@media(max-width: 600px) { .local-history-chart { height: 300px; } }

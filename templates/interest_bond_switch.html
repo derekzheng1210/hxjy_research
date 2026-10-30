@@ -68,14 +68,17 @@
 </section>
 
 <section id="localPanel" class="switch-panel hidden">
-  <div class="coming-card">
-    <div class="coming-icon">地</div>
-    <h2>地方债新老券利差</h2>
-    <p>敬请期待</p>
+  <div class="section-title-row">
+    <h2>30年地方债区域利差</h2>
+    <button class="btn btn-outline" id="localReload" type="button">重新加载</button>
   </div>
+  <div id="localStatus" role="status" aria-live="polite"></div>
+  <div id="localComparisons"></div>
+  <div id="localTables"></div>
 </section>
 
 <script>
 </script>
 <script src="{{ url_for('static', filename='interest_bond/js/bond_switch.js') }}"></script>
+<script src="{{ url_for('static', filename='interest_bond/js/local_bonds.js') }}"></script>
 {% endblock %}

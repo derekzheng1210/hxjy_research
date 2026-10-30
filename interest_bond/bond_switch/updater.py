@@ -6,7 +6,7 @@ import threading
 import traceback
 from datetime import date, datetime, timedelta
 
-from . import config, db, oracle_source, services
+from . import config, db, local_bonds, oracle_source, services
 
 log = logging.getLogger("bond_switch")
 
@@ -31,6 +31,14 @@ def _run(mode: str, db_path=None) -> dict:
         _state.update(running=True, mode=mode, stage="开始", started_at=datetime.now().isoformat(timespec="seconds"), finished_at=None, message="", rows=0)
         db.initialize(db_path)
         run_id = db.start_update_run(mode, db_path)
+        # 地方债快照独立保存；其数据异常不覆盖旧快照，也不阻断国债更新。
+        local_error = ""
+        try:
+            local_bonds.refresh(db_path, _progress)
+        except Exception as exc:
+            local_error = f"地方债更新失败：{exc}"
+            log.exception(local_error)
+            db.set_meta("local_error", local_error[:800], db_path)
         valuation_date, quote_date = oracle_source.latest_available_dates()
         if not valuation_date or not quote_date:
             raise RuntimeError("Oracle中未找到近期中债估值或银行间成交数据")
@@ -74,9 +82,11 @@ def _run(mode: str, db_path=None) -> dict:
         db.upsert_daily_quotes(quote_rows, db_path)
         db.replace_snapshot(valuation_date, candidates, roles, db_path)
         db.set_meta("quote_date", quote_date, db_path)
-        db.finish_update_run(run_id, "success", "ok", valuation_date, rows, db_path)
+        db.finish_update_run(run_id, "success", local_error or "ok", valuation_date, rows, db_path)
         _state.update(running=False, stage="完成", message=f"更新{len(candidates)}只候选券，写入{rows}条估值、{len(quote_rows)}条逐日成交", rows=rows, finished_at=datetime.now().isoformat(timespec="seconds"))
-        return {"ok": True, "as_of": valuation_date, "quote_date": quote_date, "rows": rows, "quote_rows": len(quote_rows), "candidates": len(candidates), "roles": roles}
+        if local_error:
+            _state["message"] += "；" + local_error
+        return {"ok": True, "as_of": valuation_date, "quote_date": quote_date, "rows": rows, "quote_rows": len(quote_rows), "candidates": len(candidates), "roles": roles, "local_error": local_error}
     except Exception as exc:
         detail = "".join(traceback.format_exception_only(type(exc), exc)).strip()
         if run_id is not None:
@@ -105,6 +115,9 @@ def run_async(mode: str = "incremental") -> dict:
 
 
 def is_stale(days: int = 2) -> bool:
+    local_date = local_bonds.dashboard().get("as_of_date")
+    if not local_date or (date.today() - date(int(local_date[:4]), int(local_date[4:6]), int(local_date[6:8]))).days >= days:
+        return True
     latest = db.latest_snapshot_date()
     if not latest:
         return True

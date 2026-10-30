@@ -73,6 +73,19 @@
     return '<span>' + label + '<b>' + value + '</b></span>';
   }
 
+  function activeSpreads(item) {
+    if (item.role !== 'active') return '';
+    var rows = ['secondary', 'tertiary'].map(function (role, index) {
+      var target = (DASH.roles || []).find(function (entry) { return entry.role === role; });
+      var left = item.bond.valuation_yield;
+      var right = target && target.bond.valuation_yield;
+      var spread = left != null && right != null ? (left - right) * 100 : null;
+      var label = index === 0 ? '活跃券−次活跃券利差' : '活跃券−次次活跃券利差';
+      return metric(label, fmt(spread, 2) + ' BP');
+    }).join('');
+    return '<div class="role-spreads">' + rows + '</div>';
+  }
+
   function renderDashboard() {
     if (!DASH.as_of_date) {
       $('headMeta').textContent = '暂无缓存数据';
@@ -92,6 +105,7 @@
       html += '<article class="role-card" style="--role:' + roleColor(item.role) + '">' +
         '<div class="role-tag">' + esc(roleTitle(item)) + '</div><h3>' + esc(b.short_name) + '</h3><div class="bond-code">' + esc(b.code) + ' · 到期 ' + esc(b.maturity_date) + '</div>' +
         '<div class="yield-row"><b>' + fmt(b.valuation_yield, 4) + '</b><span>% 中债估值</span></div>' +
+        activeSpreads(item) +
         '<div class="role-metrics">' + metrics + '</div></article>';
     });
     $('roleGrid').innerHTML = html || '<div class="empty-state">未形成角色券</div>';
