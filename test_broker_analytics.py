@@ -12,13 +12,16 @@ from broker_market import analytics, dm_report, storage
 
 class BrokerAnalyticsTests(unittest.TestCase):
     def setUp(self):
-        self.base = [['1.IB','测试二级资本债',2,'AAA','主体',2.0,'','','','','AA'], ['2.IB','测试债',4,'AA','主体',2.0,'','','','','A']]
+        # 第 12 列为财汇 BONDTYPE2 券种码（load_current_bond_rows 追加列）
+        self.base = [['1.IB','测试二级资本债',2,'AAA','主体',2.0,'','','','','AA','523'], ['2.IB','测试债',4,'AA','主体',2.0,'','','','','A','641']]
         self.snapshot = {'generated_at':'2026-10-16 15:30:00','quotes':[
             {'code':'1.IB','bid_yield':2.02,'ofr_yield':1.98},
             {'code':'2.IB','bid_yield':2.4,'ofr_yield':2.01}]}
         self.history={'points':[
             {'observed_at':'2026-10-15 09:30:00','value':-1,'count':1,'tier2_capital':{'value':-2,'count':1}},
-            {'observed_at':'2026-10-15 15:30:00','value':-3,'count':2,'tier2_capital':{'value':-4,'count':1}}]}
+            {'observed_at':'2026-10-15 15:30:00','value':-3,'count':2,
+             'breakdown':{'implied_rating':[{'label':'AA','value':-3,'count':2}]},
+             'tier2_capital':{'value':-4,'count':1,'breakdown':{'term':[{'label':'1-3Y','value':-4,'count':1}]}}}]}
         # 盘面日报历史：成交笔数/TKN/GVN 的权威来源
         self.report={'version':1,'updated_at':'2026-10-16 09:00:00','days':{
             '2026-10-14':{'num':200,'tkn':120,'gvn':70,'trd':0,'sectors':{}},
@@ -32,22 +35,45 @@ class BrokerAnalyticsTests(unittest.TestCase):
         for p in reversed(self.patches):p.stop()
     def build(self,**kw):
         return analytics.build_dashboard(base_rows=self.base,start='2026-10-01',end='2026-10-16',**kw)
-    def test_quote_cleaning_and_daily_last_observation(self):
-        p=self.build();q=p['quote_summary']
-        self.assertEqual(q['two_sided'],1);self.assertEqual(q['quoted'],2)
-        self.assertEqual(q['width'],4);self.assertEqual(q['mid_dev'],0)
+    def test_removed_sections_not_in_payload(self):
+        # 最新报价快照与区间成交KPI已下线：载荷不再携带两个汇总块
+        p=self.build()
+        self.assertNotIn('quote_summary',p);self.assertNotIn('deal_summary',p)
+    def test_breakdown_enriched_with_bond_type_and_side_metrics(self):
+        p=self.build()
+        by_label={g['label']:g for g in p['breakdown']['bond_type']}
+        self.assertEqual(set(by_label),{'银行次级债','中票'})
+        # 券1：bid 2.02/ofr 1.98 vs 估值 2.0 → bid偏离+2 / ofr偏离-2 / 中枢0 / 价差(bid-ofr)+4
+        bank=by_label['银行次级债']
+        self.assertEqual(bank['count'],1);self.assertEqual(bank['pool'],1)
+        self.assertEqual(bank['bid'],2);self.assertEqual(bank['ofr'],-2)
+        self.assertEqual(bank['value'],0);self.assertEqual(bank['width'],4)
+        # 券2 ofr 偏离 1BP 超 30BP 阈值? 未超（1BP），bid 2.4 偏离+40BP 被剔除 → 仅单边有效
+        note=by_label['中票']
+        self.assertEqual(note['count'],0);self.assertEqual(note['bid_n'],0)
+        self.assertEqual(note['ofr'],1);self.assertEqual(note['ofr_n'],1)
+        self.assertIsNone(note['value']);self.assertIsNone(note['width'])
+        for dim in ('implied_rating','internal_rating','term'):
+            self.assertTrue(p['breakdown'][dim])
+    def test_emotion_daily_carries_breakdown(self):
+        p=self.build()
         self.assertEqual(p['emotion'][0]['value'],-3)
-        self.assertEqual(self.build(scope='tier2')['emotion'][0]['value'],-4)
+        self.assertEqual(p['emotion'][0]['breakdown']['implied_rating'],[{'label':'AA','value':-3,'count':2}])
+        # tier2 口径取细分点位自带的分组
+        t=self.build(scope='tier2')['emotion'][0]
+        self.assertEqual(t['value'],-4)
+        self.assertEqual(t['breakdown']['term'],[{'label':'1-3Y','value':-4,'count':1}])
     def test_deals_series_from_daily_report(self):
-        p=self.build();s=p['deal_summary']
+        p=self.build()
         self.assertEqual(p['deals_source'],'dm_report')
         self.assertEqual([r['date'] for r in p['deals']],['2026-10-14','2026-10-15'])
-        self.assertEqual(s['num'],300);self.assertEqual(s['tkn'],180);self.assertEqual(s['tkn_pct'],60.0)
-        self.assertEqual(s['days'],2);self.assertEqual(p['report_updated'],'2026-10-16 09:00:00')
+        self.assertEqual(sum(r['num'] for r in p['deals']),300)
+        self.assertEqual(sum(r['tkn'] for r in p['deals']),180)
+        self.assertEqual(p['report_updated'],'2026-10-16 09:00:00')
         self.assertEqual(p['report_range'],{'first':'2026-10-14','last':'2026-10-20'})
         # tier2 只取银行二永债细分
-        t=self.build(scope='tier2')['deal_summary']
-        self.assertEqual(t['num'],30);self.assertEqual(t['tkn'],20);self.assertEqual(t['tkn_pct'],66.67)
+        t=[r for r in self.build(scope='tier2')['deals']]
+        self.assertEqual(sum(r['num'] for r in t),30);self.assertEqual(sum(r['tkn'] for r in t),20)
     def test_no_per_bond_tables_in_payload(self):
         # 报价偏离明细与成交活跃券表已下线：载荷不再携带逐券明细
         p=self.build()
@@ -56,8 +82,7 @@ class BrokerAnalyticsTests(unittest.TestCase):
     def test_empty_report_history_keeps_series_empty(self):
         with patch.object(dm_report,'load_history',return_value={'days':{}}):
             p=self.build()
-        self.assertEqual(p['deals'],[]);self.assertEqual(p['deal_summary']['num'],0)
-        self.assertIsNone(p['deal_summary']['tkn_pct'])
+        self.assertEqual(p['deals'],[])
         self.assertIsNone(p['report_range']['first'])
     def test_invalid_dates_and_scope(self):
         with self.assertRaises(ValueError):self.build(scope='bad')

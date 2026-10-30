@@ -129,9 +129,9 @@ class BrokerMarketStorageTests(unittest.TestCase):
 
     def test_market_emotion_is_equal_weighted_and_has_breakdowns(self):
         base = [
-            ["1.IB", "24甲行二级资本债01", 0.8, "AA+", "主体甲", 2.10, "国企", "否", "是", "", "AA"],
-            ["2.IB", "弱", 4.0, "AA", "主体乙", 2.00, "国企", "否", "否", "", "BBB"],
-            ["3.IB", "24券商次级01", 3.0, "AA", "主体丙", 2.00, "国企", "否", "是", "", "AA"],
+            ["1.IB", "24甲行二级资本债01", 0.8, "AA+", "主体甲", 2.10, "国企", "否", "是", "", "AA", "523"],
+            ["2.IB", "弱", 4.0, "AA", "主体乙", 2.00, "国企", "否", "否", "", "BBB", "641"],
+            ["3.IB", "24券商次级01", 3.0, "AA", "主体丙", 2.00, "国企", "否", "是", "", "AA", ""],
         ]
         snapshot = {"quotes": [
             {"code": "1.IB", "bid_yield": 2.05, "ofr_yield": 2.07},
@@ -142,7 +142,16 @@ class BrokerMarketStorageTests(unittest.TestCase):
         self.assertEqual(result["value"], 0.67)
         self.assertEqual(result["count"], 3)
         self.assertEqual({x["label"] for x in result["breakdown"]["term"]}, {"≤1Y", "1-3Y", "3-5Y"})
-        self.assertEqual(result["tier2_capital"], {"value": -4.0, "count": 1})
+        # 券种维度：BONDTYPE2 映射，缺码归「其他」
+        by_label = {x["label"]: x for x in result["breakdown"]["bond_type"]}
+        self.assertEqual(set(by_label), {"银行次级债", "中票", "其他"})
+        self.assertEqual(by_label["银行次级债"]["pool"], 1)
+        self.assertEqual(by_label["银行次级债"]["count"], 1)
+        self.assertEqual(by_label["银行次级债"]["width"], -2)
+        # 全市场中枢口径与二级资本债细分各自携带分组
+        self.assertEqual(result["tier2_capital"]["value"], -4.0)
+        self.assertEqual(result["tier2_capital"]["count"], 1)
+        self.assertTrue(result["tier2_capital"]["breakdown"]["bond_type"])
 
     def test_emotion_history_keeps_intraday_scheduled_points(self):
         target = Path.cwd() / ".test-market-emotion-history.json"

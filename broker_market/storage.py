@@ -483,6 +483,22 @@ def _term_bucket(term: float | None) -> str:
     return ">7Y"
 
 
+# 财汇 BONDTYPE2 → 页面券种标签；池内旧记录缺该列时归入「其他」。
+BOND_TYPE2_LABELS = {
+    "311": "汇金债", "321": "铁道债",
+    "521": "银行普通债", "523": "银行次级债",
+    "531": "保险普通债", "532": "保险次级债",
+    "541": "券商普通债", "542": "券商次级债",
+    "543": "券商短融", "590": "其他金融债",
+    "611": "企业债", "612": "企业债",
+    "621": "公司债", "631": "短融", "632": "超短融", "641": "中票",
+}
+
+
+def _bond_type_label(bond_type2: Any) -> str:
+    return BOND_TYPE2_LABELS.get(str(bond_type2 or "").strip(), "其他")
+
+
 def _is_tier2_capital_bond(row: list[Any]) -> bool:
     """Identify bank Tier-2 capital bonds from the standardized short name."""
     return "二级资本债" in str(row[1] or "").replace(" ", "")
@@ -495,50 +511,87 @@ def calculate_market_emotion(
 
     ``merge_bond_rows`` performs the 30bp side-level outlier cleaning first.
     A negative reading means quotes are through valuation (stronger sentiment).
+    分组（breakdown）在 ``value``/``count`` 双边口径之外，另带各边单独
+    可用的 Bid/Ofr 偏离、双边价差与池内券数，供报价偏离结构页消费；
+    二级资本债细分同样携带分组，供 tier2 口径的趋势视图。
     """
     merged = merge_bond_rows(base_rows, snapshot)
+    dimension_keys = ("implied_rating", "internal_rating", "term", "bond_type")
+
+    def _new_bucket() -> dict[str, Any]:
+        return {"pool": 0, "mid": [], "bid": [], "ofr": [], "width": []}
+
     values: list[float] = []
-    tier2_capital_values: list[float] = []
-    dimensions: dict[str, dict[str, list[float]]] = {
-        "implied_rating": {}, "internal_rating": {}, "term": {},
-    }
-    for row in merged:
-        ytm = finite_number(row[5])
-        bid = valid_yield(row[13])
-        ofr = valid_yield(row[14])
-        if ytm is None or bid is None or ofr is None:
-            continue
-        value = ((bid + ofr) / 2 - ytm) * 100
-        values.append(value)
-        if _is_tier2_capital_bond(row):
-            tier2_capital_values.append(value)
+    tier2_values: list[float] = []
+    dimensions: dict[str, dict[str, dict]] = {k: {} for k in dimension_keys}
+    tier2_dimensions: dict[str, dict[str, dict]] = {k: {} for k in dimension_keys}
+    for row, source in zip(merged, base_rows):
+        bond_type2 = source[11] if len(source) > 11 else ""
+        is_tier2 = _is_tier2_capital_bond(row)
         labels = {
             "implied_rating": str(row[3] or "未评级"),
             "internal_rating": str(row[10] or "未评级"),
             "term": _term_bucket(finite_number(row[2])),
+            "bond_type": _bond_type_label(bond_type2),
         }
+        buckets = []
         for dimension, label in labels.items():
-            dimensions[dimension].setdefault(label, []).append(value)
+            bucket = dimensions[dimension].setdefault(label, _new_bucket())
+            bucket["pool"] += 1
+            buckets.append(bucket)
+            if is_tier2:
+                tier2_dimensions[dimension].setdefault(label, _new_bucket())["pool"] += 1
+        ytm = finite_number(row[5])
+        if ytm is None:
+            continue
+        bid = valid_yield(row[13])
+        ofr = valid_yield(row[14])
+        bd = (bid - ytm) * 100 if bid is not None else None
+        od = (ofr - ytm) * 100 if ofr is not None else None
+        for bucket in buckets:
+            if bd is not None:
+                bucket["bid"].append(bd)
+            if od is not None:
+                bucket["ofr"].append(od)
+            if bd is not None and od is not None:
+                bucket["mid"].append((bd + od) / 2)
+                bucket["width"].append((bid - ofr) * 100)
+        if bd is not None and od is not None:
+            mid = (bd + od) / 2
+            values.append(mid)
+            if is_tier2:
+                tier2_values.append(mid)
 
-    breakdown = {}
-    for dimension, groups in dimensions.items():
-        breakdown[dimension] = [
-            {"label": label, "value": _average(group), "count": len(group)}
-            for label, group in groups.items()
-        ]
+    def _dimension_breakdown(groups: dict[str, dict[str, dict]]) -> dict[str, list]:
+        return {
+            dimension: [
+                {"label": label, "value": _average(b["mid"]), "count": len(b["mid"]),
+                 "pool": b["pool"], "bid": _average(b["bid"]), "bid_n": len(b["bid"]),
+                 "ofr": _average(b["ofr"]), "ofr_n": len(b["ofr"]),
+                 "width": _average(b["width"])}
+                for label, b in groups[dimension].items()
+            ]
+            for dimension in dimension_keys
+        }
+
     return {
         "value": _average(values),
         "count": len(values),
-        "breakdown": breakdown,
+        "breakdown": _dimension_breakdown(dimensions),
         "tier2_capital": {
-            "value": _average(tier2_capital_values),
-            "count": len(tier2_capital_values),
+            "value": _average(tier2_values),
+            "count": len(tier2_values),
+            "breakdown": _dimension_breakdown(tier2_dimensions),
         },
     }
 
 
 def load_current_bond_rows() -> list[list[Any]]:
-    """Build the same 11-field CNBD base rows used by the picker without Flask."""
+    """Build the same 11-field CNBD base rows used by the picker without Flask.
+
+    第 12 列为财汇 BONDTYPE2 券种码，仅经纪商分析消费；``BASE_FIELD_COUNT``
+    仍为 11，择券合并行的市场字段下标不受影响。
+    """
     from juyuan_update.unified_excel import get_bond_picker_bonds, load_bond_picker_yields_cache
 
     static_bonds = get_bond_picker_bonds()
@@ -558,6 +611,7 @@ def load_current_bond_rows() -> list[list[Any]]:
             finite_number(ytm), bond.get("entity") or "", bond.get("ct") or "",
             bond.get("sub") or "", bond.get("tech") or "",
             bond.get("internal_rating") or "",
+            bond.get("bond_type2") or "",
         ])
     return rows
 

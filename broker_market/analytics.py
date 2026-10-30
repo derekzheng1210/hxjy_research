@@ -10,10 +10,6 @@ from datetime import date, datetime, timedelta
 from . import dm_report, storage
 
 
-def _mean(values):
-    return round(sum(values) / len(values), 3) if values else None
-
-
 def _ratios(row):
     n = row["num"]
     return {**row, "tkn_pct": round(row["tkn"] / n * 100, 2) if n else None,
@@ -60,42 +56,25 @@ def build_dashboard(*, start=None, end=None, scope="all", base_rows=None):
         raise ValueError("开始日期不能晚于结束日期")
     base = base_rows if base_rows is not None else storage.load_current_bond_rows()
     base = [r for r in base if scope == "all" or storage._is_tier2_capital_bond(r)]
-    merged = storage.merge_bond_rows(base, snapshot)
-    quoted, bid_dev, ofr_dev, mids, widths = 0, [], [], [], []
-    for r in merged:
-        bid, ofr, val = r[13], r[14], storage.finite_number(r[5])
-        if bid is None and ofr is None:
-            continue
-        quoted += 1
-        bd = (bid - val) * 100 if bid is not None and val is not None else None
-        od = (ofr - val) * 100 if ofr is not None and val is not None else None
-        mid = (bd + od) / 2 if bd is not None and od is not None else None
-        width = (bid - ofr) * 100 if bid is not None and ofr is not None else None
-        for value, arr in ((bd, bid_dev), (od, ofr_dev), (mid, mids), (width, widths)):
-            if value is not None:
-                arr.append(value)
+    # 报价偏离结构（breakdown）基于最新快照实时计算；情绪逐日序列携带当日
+    # 分组，供结构图的区间趋势视图使用（tier2 取细分点位自带的分组）。
     emotion = storage.calculate_market_emotion(base, snapshot)
     daily = {}
     for p in sorted(history, key=lambda x: x.get("observed_at") or x.get("scheduled_for") or ""):
         day = str(p.get("observed_at") or p.get("scheduled_for") or "")[:10]
         if start <= day <= end:
             v = (p.get("tier2_capital") or {}) if scope == "tier2" else p
-            daily[day] = {"date": day, "value": v.get("value"), "count": v.get("count", 0)}
+            daily[day] = {"date": day, "value": v.get("value"), "count": v.get("count", 0),
+                          "breakdown": v.get("breakdown") or {}}
     # 成交序列：盘面日报为权威来源（num/tkn/gvn，全市场经纪商口径）。
     report_history = dm_report.load_history()
     report_rows = _report_deals(report_history, start, end, scope)
-    report_totals = {k: sum(r[k] for r in report_rows) for k in ("num", "tkn", "gvn", "trd")}
     history_days = sorted(report_history.get("days") or {})
     return {"range": {"start": start, "end": end}, "scope": scope,
             "snapshot_at": snapshot.get("generated_at"), "snapshot_in_range": start <= anchor <= end,
             "stale": anchor < date.today().isoformat(),
-            "quote_summary": {"pool": len(base), "quoted": quoted, "two_sided": len(mids),
-                              "coverage_pct": round(quoted / len(base) * 100, 2) if base else None,
-                              "mid_dev": _mean(mids), "bid_dev": _mean(bid_dev), "ofr_dev": _mean(ofr_dev),
-                              "width": _mean(widths)},
             "breakdown": emotion["breakdown"], "emotion": list(daily.values()),
             "deals": report_rows,
-            "deal_summary": _ratios({**report_totals, "days": len(report_rows)}),
             "deals_source": "dm_report",
             "report_updated": report_history.get("updated_at"),
             "report_range": {"first": history_days[0] if history_days else None,
