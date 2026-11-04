@@ -112,11 +112,10 @@ class ProxyForwardTests(unittest.TestCase):
             session["authenticated"] = True
         StubUpstreamHandler.last_request = None
 
-    def test_unauthenticated_request_redirects_to_login(self):
+    def test_anonymous_request_opens_dashboard_without_portal_password(self):
         client = portal_app.test_client()
         response = client.get("/bond-dashboard/")
-        self.assertEqual(response.status_code, 302)
-        self.assertTrue(response.headers["Location"].startswith("/login"))
+        self.assertEqual(response.status_code, 200)
 
     def test_html_response_injects_portal_nav_loader_and_adjust(self):
         response = self.client.get("/bond-dashboard/")

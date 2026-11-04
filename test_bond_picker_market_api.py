@@ -17,10 +17,7 @@ class BondPickerMarketApiTests(unittest.TestCase):
         with self.client.session_transaction() as session:
             session["authenticated"] = True
 
-    def test_data_api_requires_login_and_supports_etag(self):
-        response = self.client.get("/api/bond-picker/data")
-        self.assertEqual(response.status_code, 302)
-        self.authenticate()
+    def test_data_api_supports_etag(self):
         response = self.client.get("/api/bond-picker/data")
         self.assertEqual(response.status_code, 200)
         self.assertIn("meta", response.get_json())
@@ -75,11 +72,8 @@ class BondPickerMarketApiTests(unittest.TestCase):
         self.assertIn("收益率倒挂挖掘工具", text)
         self.assertNotIn('id="pane-normal"', text)
 
-    def test_secondary_data_alias_requires_login(self):
-        anonymous = portal.app.test_client().get("/api/secondary-bond-picker/data")
-        self.assertEqual(anonymous.status_code, 302)
-        self.authenticate()
-        response = self.client.get("/api/secondary-bond-picker/data")
+    def test_secondary_data_alias_opens_without_login(self):
+        response = portal.app.test_client().get("/api/secondary-bond-picker/data")
         self.assertEqual(response.status_code, 200)
         self.assertIn("emotion_history", response.get_json()["meta"])
         self.assertIn("ofr_movers", response.get_json()["meta"])

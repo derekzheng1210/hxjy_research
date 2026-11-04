@@ -70,10 +70,9 @@ class InternalKnowledgeBaseTest(unittest.TestCase):
         self.assertIsNotNone(match)
         return match.group(1).decode()
 
-    def test_portal_gate_and_namespaced_login(self):
+    def test_portal_gate_removed_and_namespaced_login(self):
         response = self.client.get("/internal-knowledge-base/")
-        self.assertEqual(response.status_code, 302)
-        self.portal_session()
+        self.assertEqual(response.status_code, 200)
         token = self.csrf()
         missing_csrf = self.client.post("/internal-knowledge-base/api/login", json={
             "username": "member", "password": "member-password",
@@ -85,7 +84,6 @@ class InternalKnowledgeBaseTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         with self.client.session_transaction() as session:
             self.assertEqual(session["internal_knowledge_base_user_id"], "member")
-            self.assertTrue(session["authenticated"])
 
     def test_database_starts_without_business_records_and_password_is_hashed(self):
         self.assertEqual(store.reports(), [])

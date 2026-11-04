@@ -197,6 +197,15 @@ def admin_required(func):
 
 
 @app.before_request
+def auto_portal_access():
+    # 第一道门户访问密码已取消：所有访客直接进入界面，无需再输全站密码。
+    # 后台上传(/admin)与知识库管理员等敏感操作仍保留各自的密码门禁；
+    # 如需恢复原门禁，删除本钩子即可。
+    if not session.get("authenticated"):
+        session["authenticated"] = True
+
+
+@app.before_request
 def protect_blueprint_pages():
     protected_blueprints = {
         pricing_bp.name,
