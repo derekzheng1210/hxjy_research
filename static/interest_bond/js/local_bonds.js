@@ -11,7 +11,7 @@
   function bondName(b) { return b ? esc(b.short_name) + '<span class="local-bond-code">' + esc(b.code) + '.IB</span>' : '—'; }
   function table(headers, body, cls) { return '<div class="local-table-scroll"><table class="local-table ' + (cls || '') + '"><thead><tr>' + headers.map(function (h) { return '<th>' + esc(h) + '</th>'; }).join('') + '</tr></thead><tbody>' + body + '</tbody></table></div>'; }
   function details(provinces, kind) {
-    var reason = kind === 'inactive' ? '无符合活跃度及久期匹配条件的券' : '无符合期限、税制且近5日有成交的券';
+    var reason = '无符合期限、税制且近5日有成交的券';
     return table(['省份 / 发行地区', '选用债券 / 代码', '规模（亿元）', '首次发行日', '剩余期限', '修正久期', '中债估值', '近5日平均笔数'], provinces.map(function (r) {
       var b = r.bond;
       if (!b) return '<tr><td>' + esc(r.province) + '</td><td colspan="7" class="local-missing">' + reason + '</td></tr>';
@@ -23,8 +23,8 @@
     charts = {}; chartRequests = {};
     var benchmark = data.benchmark;
     document.getElementById('localComparisons').innerHTML = '<section class="card local-card"><div class="section-title-row compact"><div><h2>区域利差概览</h2></div></div><div class="local-comparison-grid">' + data.comparisons.map(function (g) {
-      return '<details class="local-comparison" data-group="' + esc(g.key) + '"><summary><span>' + esc(g.label) + '</span><span class="local-expand">展开走势与省份</span><div class="local-spread-values"><div><span>活跃 − 不活跃</span><strong>' + bp(g.liquidity_bp) + '</strong></div><div><span>活跃新税券 − 免税券</span><strong>' + bp(g.tax_bp) + '</strong></div></div></summary><div class="local-comparison-detail"><div class="local-history-toolbar"><h3>当前选券历史利差（bp）</h3><div class="range-bar">' + [['1m', '1月'], ['3m', '3月'], ['6m', '6月'], ['1y', '1年']].map(function (item) { return '<button type="button" class="range-btn' + (item[0] === (chartRanges[g.key] || '3m') ? ' active' : '') + '" data-range="' + item[0] + '">' + item[1] + '</button>'; }).join('') + '</div></div><div class="local-history-status" role="status"></div><div class="local-history-chart" id="localHistory-' + esc(g.key) + '"></div>' + table(['省份', '活跃新税券', '不活跃新税券', '免税券', '活跃−不活跃', '新税−免税'], g.details.map(function (r) {
-        return '<tr><td>' + esc(r.province) + '</td><td>' + bondName(r.active) + '</td><td>' + bondName(r.inactive) + '</td><td>' + bondName(r.exempt) + '</td><td>' + bp(r.liquidity_bp) + '</td><td>' + bp(r.tax_bp) + '</td></tr>';
+      return '<details class="local-comparison" data-group="' + esc(g.key) + '"><summary><span>' + esc(g.label) + '</span><span class="local-expand">展开走势与省份</span><div class="local-spread-values"><div><span>活跃新税券 − 免税券</span><strong>' + bp(g.tax_bp) + '</strong><small>过去一年分位 ' + (g.tax_percentile_1y == null ? '—' : g.tax_percentile_1y.toFixed(1) + '%') + '</small></div></div></summary><div class="local-comparison-detail"><div class="local-history-toolbar"><h3>当前选券历史利差（bp）</h3><div class="range-bar">' + [['1m', '1月'], ['3m', '3月'], ['6m', '6月'], ['1y', '1年']].map(function (item) { return '<button type="button" class="range-btn' + (item[0] === (chartRanges[g.key] || '3m') ? ' active' : '') + '" data-range="' + item[0] + '">' + item[1] + '</button>'; }).join('') + '</div></div><div class="local-history-status" role="status"></div><div class="local-history-chart" id="localHistory-' + esc(g.key) + '"></div>' + table(['省份', '活跃新税券', '免税券', '新税−免税'], g.details.map(function (r) {
+        return '<tr><td>' + esc(r.province) + '</td><td>' + bondName(r.active) + '</td><td>' + bondName(r.exempt) + '</td><td>' + bp(r.tax_bp) + '</td></tr>';
       }).join('')) + '</div></details>';
     }).join('') + '</div></section>';
     document.querySelectorAll('.local-comparison').forEach(function (panel) {
@@ -76,7 +76,7 @@
       var available = data.series.some(function (s) { return s.values.some(function (v) { return v != null; }); });
       node.textContent = data.history_error ? '历史数据更新异常，显示已有记录。' : !available ? '该区间暂无有效配对数据。' : data.dates.length < 2 ? '历史数据尚未补齐，当前仅有单日记录。' : '';
       chart.setOption({
-        color: ['#1f4e8c', '#16845b'],
+        color: ['#1f4e8c'],
         tooltip: {trigger: 'axis', formatter: function (items) {
           if (!items.length) return '';
           return esc(items[0].axisValueLabel) + items.map(function (item) {
@@ -87,12 +87,9 @@
         legend: {top: 5, textStyle: {fontSize: 13}},
         grid: {left: 65, right: 65, top: 65, bottom: 65},
         xAxis: {type: 'category', boundaryGap: false, data: data.dates.map(date)},
-        yAxis: [
-          {type: 'value', name: '活跃−不活跃(bp)', scale: true, nameTextStyle: {color: '#1f4e8c', fontSize: 13}, axisLabel: {color: '#1f4e8c'}, splitLine: {lineStyle: {color: '#e8edf4'}}},
-          {type: 'value', name: '新税−免税(bp)', scale: true, nameTextStyle: {color: '#16845b', fontSize: 13}, axisLabel: {color: '#16845b'}, splitLine: {show: false}}
-        ],
+        yAxis: {type: 'value', name: '新税−免税(bp)', scale: true, nameTextStyle: {color: '#1f4e8c', fontSize: 13}, axisLabel: {color: '#1f4e8c'}, splitLine: {lineStyle: {color: '#e8edf4'}}},
         dataZoom: [{type: 'inside'}, {type: 'slider', bottom: 5, height: 20}],
-        series: data.series.map(function (s, i) { return {name: s.name, type: 'line', yAxisIndex: i, data: s.values, connectNulls: false, showSymbol: true, symbolSize: 4, lineStyle: {width: 2}}; })
+        series: data.series.map(function (s) { return {name: s.name, type: 'line', data: s.values, connectNulls: false, showSymbol: true, symbolSize: 4, lineStyle: {width: 2}}; })
       }, true);
     } catch (err) {
       if (chartRequests[group] === request && panel.isConnected) { chart.clear(); node.textContent = '走势图加载失败：' + err.message; }

@@ -47,7 +47,7 @@ def api_tax_spread():
 
 @bp.get("/api/local-dashboard")
 def api_local_dashboard():
-    payload = local_bonds.dashboard(_db_path())
+    payload = local_bonds.dashboard(_db_path(), with_percentile=True)
     payload["update_status"] = updater.status()
     return jsonify(payload)
 

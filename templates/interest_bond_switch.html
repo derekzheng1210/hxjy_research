@@ -73,12 +73,12 @@
     <button class="btn btn-outline" id="localReload" type="button">重新加载</button>
   </div>
   <div id="localStatus" role="status" aria-live="polite"></div>
-  <div id="localComparisons"></div>
   <div id="localTables"></div>
+  <div id="localComparisons"></div>
 </section>
 
 <script>
 </script>
 <script src="{{ url_for('static', filename='interest_bond/js/bond_switch.js') }}"></script>
-<script src="{{ url_for('static', filename='interest_bond/js/local_bonds.js') }}"></script>
+<script src="{{ url_for('static', filename='interest_bond/js/local_bonds.js') }}?v=20261104"></script>
 {% endblock %}

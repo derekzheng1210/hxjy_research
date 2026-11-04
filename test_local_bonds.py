@@ -25,8 +25,11 @@ class LocalBondTests(unittest.TestCase):
         self.assertEqual(len(lb.PROVINCES), len(set(lb.PROVINCES)))
         self.assertIn('青海', lb.BAD)
         self.assertIn('甘肃', lb.BAD)
-        self.assertNotIn('青海', dict((g[0], g[2]) for g in lb.GROUPS)['middle'])
-        self.assertNotIn('甘肃', dict((g[0], g[2]) for g in lb.GROUPS)['middle'])
+        self.assertIn('内蒙古', lb.BAD)
+        middle = dict((g[0], g[2]) for g in lb.GROUPS)['middle']
+        self.assertNotIn('青海', middle)
+        self.assertNotIn('甘肃', middle)
+        self.assertNotIn('内蒙古', middle)
 
     def test_tax_boundary_and_activity(self):
         p = self.payload([bond("before", issue="20250807", deals=20), bond("on", issue="20250808", deals=8), bond("unknown", issue="", deals=100)])
@@ -35,28 +38,16 @@ class LocalBondTests(unittest.TestCase):
         self.assertEqual(g["exempt"]["code"], "before")
         self.assertEqual(g["tax_bp"], 0)
 
-    def test_inactive_duration_and_tax_constraints(self):
-        p = self.payload([bond("active"), bond("eligible", deals=1, yld=2.3),
-                          bond("far-duration", deals=0, duration=19), bond("far-term", deals=0, rem=27),
-                          bond("exempt", issue="20250701", deals=0), bond("busy", deals=5)])
-        g = p["comparisons"][0]
-        self.assertEqual(g["details"][0]["inactive"]["code"], "eligible")
-        self.assertEqual(g["liquidity_bp"], -10)
-        self.assertEqual(g["liquidity_pairs"], 1)
-
     def test_equal_deals_prefer_size_for_each_role(self):
         small = bond("small-active", outstanding_amount=20)
         small['volume_5d'] = 100000
         large = bond("large-active", outstanding_amount=100)
         old_small = bond("small-exempt", issue="20250101", outstanding_amount=10)
         old_large = bond("large-exempt", issue="20250101", outstanding_amount=90)
-        quiet_small = bond("small-inactive", deals=1, outstanding_amount=20)
-        quiet_large = bond("large-inactive", deals=1, duration=23, outstanding_amount=80)
-        p = self.payload([small, large, old_small, old_large, quiet_small, quiet_large])
+        p = self.payload([small, large, old_small, old_large])
         picks = p['comparisons'][0]['details'][0]
         self.assertEqual(picks['active']['code'], 'large-active')
         self.assertEqual(picks['exempt']['code'], 'large-exempt')
-        self.assertEqual(picks['inactive']['code'], 'large-inactive')
         self.assertEqual(picks['active']['outstanding_amount'], 100)
 
     def test_deals_take_priority_over_size_without_rounding(self):
@@ -66,11 +57,13 @@ class LocalBondTests(unittest.TestCase):
         self.assertEqual(p['comparisons'][0]['details'][0]['active']['code'], 'more-deals')
 
     def test_pairwise_mean_excludes_unmatched_provinces(self):
-        p = self.payload([bond("gd"), bond("gd-old", deals=1, yld=2.4),
+        p = self.payload([bond("gd"), bond("gd-exempt", issue="20250101", deals=1, yld=2.4),
                           bond("js", province="江苏", yld=3), bond("zj", province="浙江", yld=2.5),
-                          bond("zj-old", province="浙江", deals=1, yld=2.6)])
-        self.assertEqual(p["comparisons"][0]["liquidity_bp"], -15)
-        self.assertEqual(p["comparisons"][0]["liquidity_pairs"], 2)
+                          bond("zj-exempt", province="浙江", issue="20250101", deals=1, yld=2.6)])
+        self.assertEqual(p["comparisons"][0]["tax_bp"], -15)
+        self.assertEqual(p["comparisons"][0]["tax_pairs"], 2)
+        self.assertNotIn("liquidity_bp", p["comparisons"][0])
+        self.assertNotIn("inactive", p["comparisons"][0]["details"][0])
 
     def test_no_trade_is_excluded_from_transaction_range(self):
         a = bond("active")
@@ -105,56 +98,105 @@ class LocalBondTests(unittest.TestCase):
             p = client.get('/bond-switch/api/local-dashboard').json
             self.assertEqual(p['as_of_date'], '20261028')
             self.assertEqual(p['update_error'], 'network failed')
-            self.assertIsNone(p['comparisons'][0]['liquidity_bp'])
+            self.assertIsNone(p['comparisons'][0]['tax_bp'])
+            self.assertEqual(len(p['tables']), 2)
 
     def test_history_pairs_missing_data_and_final_snapshot(self):
         import json
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / 'history.db'
             db.initialize(path)
-            p = self.payload([bond('gd-active', yld=2.2), bond('gd-inactive', deals=1, yld=2.3),
+            p = self.payload([bond('gd-active', yld=2.2),
                               bond('gd-exempt', issue='20250101', yld=2),
                               bond('js-active', province='江苏', yld=2.4),
-                              bond('js-inactive', province='江苏', deals=1, yld=2.5)])
+                              bond('gd-quiet', deals=1, yld=2.3)])
             db.set_meta('local_dashboard', json.dumps(p), path)
             with db.transaction(path) as conn:
                 conn.executemany('INSERT INTO local_valuation_points VALUES(?,?,?)', [
-                    ('20261026', 'gd-active', 2.1), ('20261026', 'gd-inactive', 2.3),
-                    ('20261026', 'js-active', 2.4), # 缺右侧，不能加入均值
-                    ('20261027', 'gd-exempt', 2), # 缺左侧，不得向前填充
+                    ('20261026', 'gd-active', 2.1), # 缺免税侧，不能加入均值
+                    ('20261026', 'gd-quiet', 2.3), # 低成交新税券不再选用，其历史点不得混入
+                    ('20261027', 'gd-exempt', 2), # 缺活跃侧，不得向前填充
                     ('20261028', 'gd-active', 9), # 末日必须使用最新快照
                 ])
             h = lb.history('good', '1m', path)
             self.assertEqual(h['dates'], ['20261026', '20261027', '20261028'])
-            self.assertEqual(h['series'][0]['values'], [-20, None, -10])
-            self.assertEqual(h['series'][0]['pair_counts'], [1, 0, 2])
-            self.assertEqual(h['series'][1]['values'], [None, None, 20])
-            self.assertEqual(h['series'][0]['values'][-1], p['comparisons'][0]['liquidity_bp'])
+            self.assertEqual(len(h['series']), 1)
+            self.assertEqual(h['series'][0]['key'], 'tax')
+            self.assertEqual(h['series'][0]['values'], [None, None, 20])
+            self.assertEqual(h['series'][0]['pair_counts'], [0, 0, 1])
+            self.assertEqual(h['series'][0]['values'][-1], p['comparisons'][0]['tax_bp'])
             app = Flask(__name__)
-            app.config['BOND_SWITCH_DB'] = path
+            app.config["BOND_SWITCH_DB"] = path
             app.register_blueprint(bp)
             client = app.test_client()
             self.assertEqual(client.get('/bond-switch/api/local-series?group=bad&range=1y').status_code, 200)
             self.assertEqual(client.get('/bond-switch/api/local-series?group=unknown').status_code, 400)
             self.assertEqual(client.get('/bond-switch/api/local-series?range=all').status_code, 400)
 
-    def test_old_snapshot_regroups_qinghai_and_gansu(self):
+    def test_old_snapshot_regroups_qinghai_gansu_and_neimenggu(self):
         import json
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / 'old.db'
             db.initialize(path)
-            p = self.payload([bond('qh', province='青海'), bond('gs', province='甘肃')])
+            p = self.payload([bond('qh', province='青海'), bond('gs', province='甘肃'),
+                              bond('nm', province='内蒙古')])
             p.pop('region_version')
-            # 模拟旧快照：两个省的代表券仍存放在中地区。
+            # 模拟旧快照：三个省的代表券仍存放在中地区。
             for table in p['tables']:
-                table['groups'][1]['details'].extend([r for r in table['groups'][2]['details'] if r['province'] in ('青海', '甘肃')])
-                table['groups'][2]['details'] = [r for r in table['groups'][2]['details'] if r['province'] not in ('青海', '甘肃')]
+                table['groups'][1]['details'].extend([r for r in table['groups'][2]['details'] if r['province'] in ('青海', '甘肃', '内蒙古')])
+                table['groups'][2]['details'] = [r for r in table['groups'][2]['details'] if r['province'] not in ('青海', '甘肃', '内蒙古')]
             db.set_meta('local_dashboard', json.dumps(p), path)
             new = lb.dashboard(path)
             bad = new['tables'][0]['groups'][2]
-            self.assertEqual(bad['covered'], 2)
-            self.assertEqual(bad['total'], 9)
-            self.assertEqual(new['tables'][0]['groups'][1]['total'], 21)
+            self.assertEqual(bad['covered'], 3)
+            self.assertEqual(bad['total'], 10)
+            self.assertEqual(new['tables'][0]['groups'][1]['total'], 20)
+            self.assertIn('内蒙古', [r['province'] for r in bad['details']])
+
+    def test_dashboard_percentile_over_past_year(self):
+        import json
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'pct.db'
+            db.initialize(path)
+            p = self.payload([bond('gd-active', yld=2.2), bond('gd-exempt', issue='20250101', yld=2.0)])
+            db.set_meta('local_dashboard', json.dumps(p), path)
+            with db.transaction(path) as conn:
+                conn.executemany('INSERT INTO local_valuation_points VALUES(?,?,?)', [
+                    ('20260401', 'gd-active', 2.5), ('20260401', 'gd-exempt', 2.0),  # 50bp
+                    ('20260801', 'gd-active', 2.1), ('20260801', 'gd-exempt', 2.0),  # 10bp
+                ])
+            # 逐日税差 50/10/20bp，当前(快照末日)20bp 分位 = 2/3。
+            d = lb.dashboard(path, with_percentile=True)
+            self.assertEqual(d['comparisons'][0]['tax_percentile_1y'], 66.7)
+            self.assertIsNone(lb.dashboard(path)['comparisons'][0].get('tax_percentile_1y'))
+            app = Flask(__name__)
+            app.config['BOND_SWITCH_DB'] = path
+            app.register_blueprint(bp)
+            self.assertEqual(app.test_client().get('/bond-switch/api/local-dashboard').json['comparisons'][0]['tax_percentile_1y'], 66.7)
+
+    def test_dashboard_percentile_without_history(self):
+        import json
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'pct-empty.db'
+            db.initialize(path)
+            p = self.payload([bond('gd-active', yld=2.2), bond('gd-exempt', issue='20250101', yld=2.0)])
+            db.set_meta('local_dashboard', json.dumps(p), path)
+            d = lb.dashboard(path, with_percentile=True)
+            # 无历史点位时末日仍有快照值，分位为100%。
+            self.assertEqual(d['comparisons'][0]['tax_percentile_1y'], 100.0)
+            empty = self.payload([])
+            db.set_meta('local_dashboard', json.dumps(empty), path)
+            d = lb.dashboard(path, with_percentile=True)
+            self.assertIsNone(d['comparisons'][0]['tax_percentile_1y'])
+
+    def test_history_windows_cover_range_without_gaps(self):
+        windows = lb._history_windows('20251101', '20261101')
+        self.assertEqual(windows[0][0], '20251101')
+        self.assertEqual(windows[-1][1], '20261101')
+        for (_, end), (next_start, _) in zip(windows, windows[1:]):
+            self.assertEqual(int(next_start) - int(end), 1)
+        for start, end in windows:
+            self.assertLessEqual(start, end)
 
 
 if __name__ == '__main__':

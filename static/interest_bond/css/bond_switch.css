@@ -147,8 +147,8 @@
 .local-comparison summary { list-style: none; cursor: pointer; padding: 14px; color: var(--primary); font-weight: 600; }
 .local-comparison summary::-webkit-details-marker { display: none; }
 .local-expand { float: right; color: var(--muted); font-size: 11px; font-weight: 400; }
-.local-spread-values { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 12px; }
-.local-spread-values small { display: block; color: var(--muted); font-size: 10px; font-weight: 400; }
+.local-spread-values { display: grid; grid-template-columns: 1fr; gap: 10px; margin-top: 12px; }
+.local-spread-values small { display: block; color: var(--muted); font-size: 11px; font-weight: 400; margin-top: 2px; font-variant-numeric: tabular-nums; }
 .local-spread-values strong { display: block; font-size: 21px; margin: 4px 0; font-variant-numeric: tabular-nums; }
 .local-comparison[open] { grid-column: 1 / -1; }
 .local-comparison-detail { padding: 0 14px 14px; }
