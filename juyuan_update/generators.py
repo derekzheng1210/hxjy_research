@@ -589,10 +589,10 @@ def generate_bond_picker_yields(progress=None) -> dict:
         progress("读取择券工具债券清单", 5)
     bonds = get_bond_picker_bonds()
     if not bonds:
-        raise RuntimeError("未找到符合 BBB- 及以上且无担保人的择券工具债券")
-    # 估值查询覆盖全量静态池而非择券过滤清单：债券详查按池服务，无内评
-    # （如 102281460 华发实业）或被担保的券同样需要中债估值展示；Oracle
-    # 估值查询整表拉取后按代码匹配，扩大入参无额外库端成本。
+        raise RuntimeError("未找到择券工具债券清单")
+    # 择券清单已全量展示（不再按内评/担保过滤），估值与评级查询继续以
+    # 全量静态池为基准：债券详查按池服务，Oracle 估值查询整表拉取后按代码
+    # 匹配，扩大入参无额外库端成本。
     pool_codes = list(dict.fromkeys(
         str(item.get("code") or "").strip().upper()
         for item in load_bond_static().get("bonds") or []

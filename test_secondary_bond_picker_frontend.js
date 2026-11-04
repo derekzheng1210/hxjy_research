@@ -37,6 +37,8 @@ assert(!ratingEligible({...base,ir:'BBB-',term:5}));
 assert(ratingEligible({...base,ir:'BBB-',term:3}));
 assert(!ratingEligible({...base,ir:'BBB-',term:3.01}));
 assert(!ratingEligible({...base,ir:''}));
+assert(!ratingEligible({...base,ir:'无内评'}));
+assert(!ratingEligible({...base,ir:'BB+'}));
 assert(recommendationEligible(base));
 assert(!recommendationEligible({...base,ofrVol:999}));
 assert(!recommendationEligible({...base,ytm:1.64}));
@@ -72,6 +74,15 @@ const bond = toBond(row);
 assert.strictEqual(bond.rating630, 'fail');
 assert.strictEqual(bond.rating630Note, '缺少2026年1月1日-6月30日的主体跟踪评级');
 assert.strictEqual(toBond(new Array(28).fill(null)).rating630, 'unknown');
+
+// ---- 内评归一：全量池展示后，无内评券统一为「无内评」标签，可被内评筛选命中 ----
+assert(source.includes("ir:a[F.IR]||'无内评'"));
+const unratedRow = new Array(32).fill(null);
+unratedRow[10] = '';
+assert.strictEqual(toBond(unratedRow).ir, '无内评');
+const ratedRow = new Array(32).fill(null);
+ratedRow[10] = 'BB+';
+assert.strictEqual(toBond(ratedRow).ir, 'BB+');
 
 eval(functionSource('compareSort', 'sortBy'));
 assert.strictEqual(compareSort(null, 1, 'asc'), 1);
@@ -174,6 +185,11 @@ assert(!matches(ibBond, { ...noFilter, market: '交易所' }));
 const shBond = { ...ibBond, code: '245902.SH', market: '交易所' };
 assert(matches(shBond, { ...noFilter, market: '交易所' }));
 assert(!matches(shBond, { ...noFilter, market: '银行间' }));
+// 无内评券：勾选「无内评」可见，勾选具体内评档位时排除
+const unratedBond = { ...ibBond, ir: '无内评' };
+assert(matches(unratedBond, { ...noFilter, ir: ['无内评'] }));
+assert(!matches(unratedBond, { ...noFilter, ir: ['BBB+'] }));
+assert(matches({ ...ibBond, ir: 'BB+' }, { ...noFilter, ir: ['BB+', 'BBB-'] }));
 
 // ---- 单券持仓占比展示：占比文本与悬停明细 ----
 eval(functionSource('holdingTitle', 'renderMoverTable'));

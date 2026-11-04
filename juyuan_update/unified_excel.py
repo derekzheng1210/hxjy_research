@@ -89,19 +89,10 @@ def normalize_rating(value) -> str:
     return text
 
 
-def rating_at_least(value, floor: str = "BBB-") -> bool:
-    rank = RATING_RANK.get(normalize_rating(value))
-    return rank is not None and rank >= RATING_RANK[floor]
-
-
 def rating_below(value, floor: str) -> bool:
     """已知评级且严格低于floor；空/未知评级不算低（去留由调用方另行判断）。"""
     rank = RATING_RANK.get(normalize_rating(value))
     return rank is not None and rank < RATING_RANK[floor]
-
-
-def is_blank(value) -> bool:
-    return normalize_text(value) == ""
 
 
 _json_cache: dict[Path, tuple[float, float, object]] = {}
@@ -199,14 +190,17 @@ def apply_portal_metadata(bonds: list[dict]) -> int:
 
 
 def get_bond_picker_bonds() -> list[dict]:
+    """二级择券债券清单：全量静态池 + 门户内评/持仓覆盖，不再按内评/担保过滤。
+
+    此前仅保留内评 BBB- 及以上且无担保人的券，导致无内评或内评偏低、
+    被担保的券（如 25泰城G1）即使有经纪商报价也不出现在择券工具中；
+    重点关注推荐等口径由前端/各功能自行判断，清单本身全量展示。
+    """
     import copy
 
     bonds = copy.deepcopy(load_bond_static().get("bonds", []))
     apply_portal_metadata(bonds)
-    return [
-        bond for bond in bonds
-        if rating_at_least(bond.get("internal_rating")) and is_blank(bond.get("guarantor"))
-    ]
+    return bonds
 
 
 # 利差监控清单下限：隐含评级低于CCC（违约/深度高风险，利差动辄上万bp）不进监控。

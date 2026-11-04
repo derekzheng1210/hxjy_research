@@ -22,8 +22,8 @@ from juyuan_update.oracle_bonds import (
 )
 from juyuan_update.fund_index_mysql import refresh_fund_index
 from juyuan_update.unified_excel import (
+    get_bond_picker_bonds,
     get_spread_monitor_bonds,
-    rating_at_least,
     rating_below,
 )
 
@@ -508,13 +508,36 @@ class SpreadMonitorRatingFilterTests(unittest.TestCase):
         self.assertFalse(rating_below("", "CCC"))
         self.assertFalse(rating_below("#N/A", "CCC"))
 
-    def test_rating_at_least_keeps_picker_floor_after_scale_extension(self):
-        # 评级表扩展到C档后，择券口径不变：未知与低评级仍低于 BBB-
-        self.assertTrue(rating_at_least("AA(2)"))
-        self.assertTrue(rating_at_least("BBB-"))
-        self.assertFalse(rating_at_least("BB+"))
-        self.assertFalse(rating_at_least("CC"))
-        self.assertFalse(rating_at_least(""))
+
+class PickerUniverseTests(unittest.TestCase):
+    """二级择券清单不再按内评/担保过滤：全量池展示，低内评/无内评/被担保券均保留。
+
+    此前 25泰城G1（内评 BB+）等券即使有经纪商报价也不出现在择券工具中。
+    """
+
+    @staticmethod
+    def _pool_payload():
+        return {
+            "source_file": "oracle:test",
+            "bonds": [
+                {"code": "102600001.IB", "name": "26测试MTN001", "term": 3.0, "internal_rating": "AAA"},
+                {"code": "243448.SH", "name": "25泰城G1", "term": 3.76, "internal_rating": ""},
+                {"code": "111112.SH", "name": "26测试低内评", "term": 2.0, "internal_rating": "BB+"},
+                {"code": "222223.SH", "name": "26测试担保债", "term": 2.0, "internal_rating": "AA", "guarantor": "测试担保公司"},
+            ],
+        }
+
+    def test_picker_list_keeps_unrated_guaranteed_and_low_rated_bonds(self):
+        with tempfile.TemporaryDirectory(dir=Path.cwd()) as directory:
+            bond_json = Path(directory) / "bond.json"
+            bond_json.write_text(json.dumps(self._pool_payload(), ensure_ascii=False), encoding="utf-8")
+            with (
+                patch.object(config, "BOND_STATIC_JSON", bond_json),
+                patch("juyuan_update.unified_excel.apply_portal_metadata", lambda bonds: 0),
+            ):
+                bonds = get_bond_picker_bonds()
+            codes = {bond["code"] for bond in bonds}
+            self.assertEqual(codes, {"102600001.IB", "243448.SH", "111112.SH", "222223.SH"})
 
 
 class FundIndexMysqlTests(unittest.TestCase):
