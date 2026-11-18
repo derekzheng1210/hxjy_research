@@ -234,6 +234,12 @@ async function load(initial=false){
  try{const data=await api('/api/broker-data?'+params);if(token!==state.seq)return;state.data=data;render();}catch(e){if(token!==state.seq)return;$('error').hidden=false;$('error').textContent=`读取失败：${e.message}。${state.data?'下方保留上次成功结果，尚未应用本次筛选。':''}`;}finally{if(token===state.seq){$('refresh').disabled=false;document.querySelector('main').removeAttribute('aria-busy');}}
 }
 $('refresh').onclick=()=>{overlayCache.clear();load();};$('apply').onclick=()=>{document.querySelectorAll('#ranges button').forEach(b=>b.classList.remove('on'));load();};$('scope').onchange=()=>load();
+
+/* ── 报价快照下载：最新 / 指定历史时点 / 自定义区间（每日最后快照，跨度≤31天） ── */
+const dlState={byDate:{}};
+async function initDownload(){try{const h=await api('/api/broker-download/history');dlState.byDate=h.by_date||{};const sel=$('dlDate');for(const day of h.dates||[])sel.add(new Option(day,day.replace(/-/g,'')));}catch(e){/* 历史列表不可用时仍可下载最新快照 */}finally{$('dlDate').add(new Option('自定义区间…','range'));}}
+$('dlDate').onchange=()=>{const day=$('dlDate').value,t=$('dlTime'),range=$('dlRange');if(day==='range'){t.hidden=true;$('dlStart').value=$('start').value;$('dlEnd').value=$('end').value;range.hidden=false;return;}range.hidden=true;t.hidden=false;t.innerHTML='<option value="">当日最后</option>';t.disabled=!day;if(day)for(const tm of dlState.byDate[day]||[])t.add(new Option(tm,tm.replace(/:/g,'')));};
+$('downloadXlsx').onclick=()=>{const day=$('dlDate').value,tm=$('dlTime').value;if(day==='range'){const s=$('dlStart').value,e=$('dlEnd').value;if(!s||!e){$('error').hidden=false;$('error').textContent='区间下载需先选择完整的起止日期';return;}const span=(new Date(e)-new Date(s))/86400000;if(span<0){$('error').hidden=false;$('error').textContent='区间起点不能晚于终点';return;}if(span>30){$('error').hidden=false;$('error').textContent='区间跨度最长31天，请分段下载';return;}window.location.href=`/broker-data/download/xlsx?start=${s.replace(/-/g,'')}&end=${e.replace(/-/g,'')}`;return;}window.location.href='/broker-data/download/xlsx'+(day?`?${tm?`at=${day}_${tm}`:`date=${day}`}`:'');};
 document.querySelectorAll('#ranges button').forEach(b=>b.onclick=()=>{if(!state.data)return;const end=state.data.snapshot_at?.slice(0,10)||state.data.range.end,dt=new Date(end+'T00:00:00Z');dt.setUTCDate(dt.getUTCDate()-Number(b.dataset.days));$('end').value=end;$('start').value=dt.toISOString().slice(0,10);document.querySelectorAll('#ranges button').forEach(x=>x.classList.toggle('on',x===b));load();});
 for(const id of ['metric','mode','tenor','smooth','transform','shift'])$(id).onchange=renderMain;$('curve').onchange=()=>{setTenors();renderMain();};
 for(const id of ['dimension','structureMetric'])$(id).onchange=renderStructure;
@@ -255,4 +261,5 @@ document.addEventListener('keydown',e=>{if(e.key==='Escape'&&state.draw.mode)set
 window.addEventListener('resize',()=>{Object.values(charts).forEach(c=>c.resize());drawAll();});
 syncColorInputs();
 Promise.all([initMeta(),load(true)]).then(renderMain);
+initDownload();
 })();

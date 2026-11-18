@@ -1,6 +1,7 @@
 ﻿import json
 import gzip
 import hmac
+import io
 import os
 import re
 import shutil
@@ -67,12 +68,15 @@ from bond_detail import build_bond_detail, build_quote_history, search_bonds
 from bond_detail import credit_research
 from bond_detail import meso as credit_meso
 from broker_market import (
+    HISTORY_DIR,
     MARKET_DIR,
     calculate_ofr_movers,
     data_version as bond_picker_data_version,
     dm_accounts,
     ensure_directories as ensure_broker_directories,
+    list_quote_history,
     load_deals,
+    load_json,
     load_emotion_history,
     load_preferences as load_broker_preferences,
     load_snapshot as load_broker_snapshot,
@@ -1307,6 +1311,101 @@ def api_broker_data():
     except OSError:
         app.logger.exception("经纪商数据读取失败")
         return jsonify({"error": "经纪商本地数据暂不可读，请稍后重试"}), 503
+
+
+@app.route("/api/broker-download/history")
+@login_required
+def api_broker_download_history():
+    """历史快照可选时点（按日分组、最新在前），供下载页级联下拉。"""
+    by_date: dict[str, list[str]] = {}
+    for name in list_quote_history():
+        stem = name[:-5] if name.endswith(".json") else name
+        day = f"{stem[:4]}-{stem[4:6]}-{stem[6:8]}"
+        by_date.setdefault(day, []).append(f"{stem[9:11]}:{stem[11:13]}:{stem[13:15]}")
+    dates = sorted(by_date, reverse=True)
+    return jsonify({
+        "dates": dates,
+        "by_date": {day: by_date[day] for day in dates},
+    })
+
+
+@app.route("/broker-data/download/xlsx")
+@login_required
+def broker_data_download_xlsx():
+    """经纪商报价快照导出 Excel：缺省最新，?at=YYYYMMDD_HHMMSS 指定历史时点，?date=YYYYMMDD 取该日最后快照，
+    ?start=YYYYMMDD&end=YYYYMMDD 区间内每日最后快照堆叠导出（跨度上限31天）。"""
+    from broker_market.export_xlsx import build_quote_workbook, build_range_workbook, snapshot_key
+
+    at = (request.args.get("at") or "").strip()
+    day = (request.args.get("date") or "").strip()
+    start = (request.args.get("start") or "").strip()
+    end = (request.args.get("end") or "").strip()
+    if at:
+        stems = {name[:-5] for name in list_quote_history()}
+        if not re.fullmatch(r"\d{8}_\d{6}", at) or at not in stems:
+            return jsonify({"error": f"未找到历史快照 {at}"}), 404
+        payload = load_json(HISTORY_DIR / f"{at}.json", {})
+    elif day:
+        if not re.fullmatch(r"\d{8}", day):
+            return jsonify({"error": "date 参数格式应为 YYYYMMDD"}), 400
+        matches = [name for name in list_quote_history() if name.startswith(day)]
+        if not matches:
+            return jsonify({"error": f"{day} 当日没有历史快照"}), 404
+        payload = load_json(HISTORY_DIR / matches[-1], {})
+    elif start or end:
+        if not start or not end:
+            return jsonify({"error": "区间下载需同时提供 start 与 end（YYYYMMDD）"}), 400
+        if not re.fullmatch(r"\d{8}", start) or not re.fullmatch(r"\d{8}", end):
+            return jsonify({"error": "start/end 参数格式应为 YYYYMMDD"}), 400
+        try:
+            span = (datetime.strptime(end, "%Y%m%d") - datetime.strptime(start, "%Y%m%d")).days
+        except ValueError:
+            return jsonify({"error": "start/end 不是有效日期"}), 400
+        if span < 0:
+            return jsonify({"error": "start 不能晚于 end"}), 400
+        if span > 30:
+            return jsonify({"error": "区间跨度最长31天，请分段下载"}), 400
+        names = [n for n in list_quote_history() if start <= n[:8] <= end]
+        if not names:
+            return jsonify({"error": f"{start}~{end} 区间内没有历史快照"}), 404
+        last_of_day: dict[str, str] = {}
+        for name in names:
+            last_of_day[name[:8]] = name
+        payloads = []
+        for name in last_of_day.values():
+            payload = load_json(HISTORY_DIR / name, {})
+            if payload.get("quotes"):
+                payloads.append(payload)
+        if not payloads:
+            return jsonify({"error": "所选区间快照均无报价数据"}), 404
+        buf = io.BytesIO()
+        build_range_workbook(payloads).save(buf)
+        buf.seek(0)
+        response = send_file(
+            buf,
+            as_attachment=True,
+            download_name=f"经纪商报价区间_{start}_{end}.xlsx",
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+        response.headers["Cache-Control"] = "private, no-store"
+        return response
+    else:
+        payload = load_broker_snapshot()
+
+    if not payload.get("quotes"):
+        return jsonify({"error": "所选快照暂无报价数据"}), 404
+
+    buf = io.BytesIO()
+    build_quote_workbook(payload).save(buf)
+    buf.seek(0)
+    response = send_file(
+        buf,
+        as_attachment=True,
+        download_name=f"经纪商报价_{snapshot_key(payload)}.xlsx",
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+    response.headers["Cache-Control"] = "private, no-store"
+    return response
 
 
 @app.route("/institution-flow")

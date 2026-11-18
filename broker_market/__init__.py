@@ -1,5 +1,6 @@
 from .storage import (
     EMOTION_HISTORY_PATH,
+    HISTORY_DIR,
     MARKET_DIR,
     calculate_ofr_movers,
     calculate_market_emotion,
@@ -7,8 +8,10 @@ from .storage import (
     ensure_directories,
     load_deals,
     load_emotion_history,
+    load_json,
     load_preferences,
     load_snapshot,
+    list_quote_history,
     merge_bond_rows,
     record_market_emotion,
     save_preferences,
@@ -30,9 +33,9 @@ def trigger_update(*args, **kwargs):
     return implementation(*args, **kwargs)
 
 __all__ = [
-    "EMOTION_HISTORY_PATH", "MARKET_DIR", "calculate_market_emotion", "calculate_ofr_movers",
-    "data_version", "ensure_directories", "load_deals", "load_emotion_history",
-    "load_preferences", "load_snapshot", "merge_bond_rows",
-    "record_market_emotion", "public_status", "save_preferences",
-    "start_scheduler", "trigger_update",
+    "EMOTION_HISTORY_PATH", "HISTORY_DIR", "MARKET_DIR", "calculate_market_emotion",
+    "calculate_ofr_movers", "data_version", "ensure_directories", "load_deals",
+    "load_emotion_history", "load_json", "load_preferences", "load_snapshot",
+    "list_quote_history", "merge_bond_rows", "record_market_emotion", "public_status",
+    "save_preferences", "start_scheduler", "trigger_update",
 ]
