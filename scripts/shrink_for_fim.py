@@ -69,13 +69,13 @@ def shrink_office(src: Path, dst: Path) -> Path:
     return dst
 
 
-def shrink_pdf(src: Path, dst: Path, dpi_target: int = 110, quality: int = 60) -> Path:
+def shrink_pdf(src: Path, dst: Path, dpi_threshold: int = 150, dpi_target: int = 100, quality: int = 55) -> Path:
     import pymupdf
 
     doc = pymupdf.open(src)
     try:
         # Document 级 API：重压缩全部图片（1.28 移除了 Page.rewrite_images）
-        doc.rewrite_images(dpi_threshold=96, dpi_target=dpi_target, quality=quality)
+        doc.rewrite_images(dpi_threshold=dpi_threshold, dpi_target=dpi_target, quality=quality)
         doc.subset_fonts()
         doc.save(dst, garbage=4, deflate=True, clean=True)
     finally:
