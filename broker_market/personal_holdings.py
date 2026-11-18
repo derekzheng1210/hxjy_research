@@ -8,6 +8,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import os
 import re
 import secrets
 import sqlite3
@@ -26,7 +27,16 @@ from paths import DATA_ROOT
 
 # Same platform behind both addresses (shared session store); the wired-side
 # one works without WiFi, so it goes first and the WiFi-only one is a fallback.
-UPSTREAMS = ("http://10.6.8.190:8600", "http://10.6.121.24:8600")
+# PERSONAL_HOLDINGS_UPSTREAMS (comma-separated) overrides the list per deployment,
+# e.g. the co-located copy on the company server (http://10.6.60.59:8600).
+UPSTREAMS = tuple(
+    base.strip()
+    for base in os.environ.get(
+        "PERSONAL_HOLDINGS_UPSTREAMS",
+        "http://10.6.8.190:8600,http://10.6.121.24:8600",
+    ).split(",")
+    if base.strip()
+)
 PAGE = "p_hold_bond"
 COOKIE = "secondary_holdings_session"
 SESSION_TTL = 30 * 86400
