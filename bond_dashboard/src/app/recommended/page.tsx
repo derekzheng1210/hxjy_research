@@ -62,6 +62,7 @@ export default function RecommendedPage() {
   const [bonds, setBonds] = useState<RecBond[] | null>(null);
   const [vals, setVals] = useState<Record<string, { cb?: number | null; cs?: number | null }>>({});
   const [error, setError] = useState("");
+  const [search, setSearch] = useState(""); // 主体 / 债券简称包含匹配（不区分大小写）
   const [dateFrom, setDateFrom] = useState("2026-06-15");
   const [dateTo, setDateTo] = useState("2026-08-31");
   // 默认日期跟随数据：加载后自动对齐到推荐数据的最早 ~ 最新日期（用户手动改过则不再覆盖）
@@ -101,10 +102,12 @@ export default function RecommendedPage() {
 
   const filtered = useMemo(() => {
     if (!bonds) return [];
+    const q = search.trim().toLowerCase();
     return bonds
       .filter((b) => b.date >= dateFrom && b.date <= dateTo)
+      .filter((b) => !q || (b.issuer ?? "").toLowerCase().includes(q) || b.name.toLowerCase().includes(q))
       .sort((a, b) => b.date.localeCompare(a.date));
-  }, [bonds, dateFrom, dateTo]);
+  }, [bonds, dateFrom, dateTo, search]);
 
   // 表头排序取值（估值列依赖 vals，用 useMemo 跟随其变化）
   const valueFns = useMemo(
@@ -163,6 +166,13 @@ export default function RecommendedPage() {
         description="每日发行清单中「是否推荐=是」的个券汇总"
       >
         <div className="flex items-center gap-2">
+          <Input
+            type="search"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="搜索主体 / 债券"
+            className="h-9 w-44"
+          />
           <Input
             type="date"
             value={dateFrom}
@@ -243,25 +253,25 @@ export default function RecommendedPage() {
               </div>
 
               {view === "all" ? (
-              <div className="overflow-x-auto rounded-xl border">
-                <Table>
+                <div className="overflow-x-auto rounded-xl border">
+                <Table className="text-[12px] [&_th]:px-1.5 [&_th]:py-1.5 [&_th]:text-[11px] [&_th]:whitespace-nowrap [&_td]:px-1.5 [&_td]:py-1">
                   <TableHeader>
                     <TableRow className="bg-muted/50">
-                      <SortableHead sortKey="date" sort={sort} onSort={onSort} className="min-w-[90px]">个券推荐日期</SortableHead>
-                      <SortableHead sortKey="name" sort={sort} onSort={onSort} className="min-w-[130px]">债券简称</SortableHead>
+                      <SortableHead sortKey="date" sort={sort} onSort={onSort} className="w-[76px]">推荐日期</SortableHead>
+                      <SortableHead sortKey="name" sort={sort} onSort={onSort} className="min-w-[120px]">债券简称</SortableHead>
                       <SortableHead sortKey="bond_type" sort={sort} onSort={onSort}>类型</SortableHead>
                       <SortableHead sortKey="term" sort={sort} onSort={onSort} className="text-center">期限</SortableHead>
-                      <SortableHead sortKey="scale" sort={sort} onSort={onSort} className="text-right">发行规模(亿)</SortableHead>
+                      <SortableHead sortKey="scale" sort={sort} onSort={onSort} className="text-right">规模(亿)</SortableHead>
                       <SortableHead sortKey="coupon" sort={sort} onSort={onSort} className="text-right">票面</SortableHead>
-                      <SortableHead sortKey="cb" sort={sort} onSort={onSort} className="text-right">中债估值</SortableHead>
-                      <SortableHead sortKey="cs" sort={sort} onSort={onSort} className="text-right">中证估值</SortableHead>
-                      <SortableHead sortKey="valBp" sort={sort} onSort={onSort} className="text-right">估值-票面(bp)</SortableHead>
-                      <SortableHead sortKey="sp_bp" sort={sort} onSort={onSort} className="text-right">票面-预测(bp)</SortableHead>
-                      <SortableHead sortKey="yy" sort={sort} onSort={onSort} className="text-center">YY评分</SortableHead>
+                      <SortableHead sortKey="cb" sort={sort} onSort={onSort} className="text-right">中债</SortableHead>
+                      <SortableHead sortKey="cs" sort={sort} onSort={onSort} className="text-right">中证</SortableHead>
+                      <SortableHead sortKey="valBp" sort={sort} onSort={onSort} className="text-right">估-票bp</SortableHead>
+                      <SortableHead sortKey="sp_bp" sort={sort} onSort={onSort} className="text-right">票-预bp</SortableHead>
+                      <SortableHead sortKey="yy" sort={sort} onSort={onSort} className="text-center">YY</SortableHead>
                       <SortableHead sortKey="yyAdj" sort={sort} onSort={onSort} className="text-center">YY调整</SortableHead>
-                      <SortableHead sortKey="pledge" sort={sort} onSort={onSort} className="text-center">质押比</SortableHead>
-                      <SortableHead sortKey="issuer" sort={sort} onSort={onSort} className="min-w-[120px]">发行主体</SortableHead>
-                      <SortableHead sortKey="internalRating" sort={sort} onSort={onSort} className="text-center">主体内评</SortableHead>
+                      <SortableHead sortKey="pledge" sort={sort} onSort={onSort} className="text-center">质押</SortableHead>
+                      <SortableHead sortKey="issuer" sort={sort} onSort={onSort} className="w-[150px]">主体</SortableHead>
+                      <SortableHead sortKey="internalRating" sort={sort} onSort={onSort} className="text-center">内评</SortableHead>
                       <SortableHead sortKey="pay_date" sort={sort} onSort={onSort} className="text-center">缴款日</SortableHead>
                     </TableRow>
                   </TableHeader>
@@ -269,12 +279,12 @@ export default function RecommendedPage() {
                     {sorted.map((b, i) => (
                       <TableRow key={`${b.date}-${b.name}-${i}`} className="hover:bg-accent/50">
                         <TableCell className="py-2 text-[12px] tabular-nums">{b.date}</TableCell>
-                        <TableCell className="py-2">
+                        <TableCell className="min-w-0 max-w-[150px] py-2">
                           <div className="flex items-center gap-1 font-medium">
                             <Star className="h-3 w-3 shrink-0 fill-amber-400 text-amber-400" />
-                            {b.name}
+                            <span className="truncate" title={b.name}>{b.name}</span>
                           </div>
-                          {b.code && <div className="text-[10px] text-muted-foreground">{b.code}</div>}
+                          {b.code && <div className="truncate text-[10px] text-muted-foreground" title={b.code}>{b.code}</div>}
                         </TableCell>
                         <TableCell className="py-2 text-[12px]">{bondTypeShort(b.bond_type)}</TableCell>
                         <TableCell className="py-2 text-center text-[13px] tabular-nums">{b.term || "-"}</TableCell>
@@ -364,13 +374,13 @@ export default function RecommendedPage() {
                         <TableCell className="py-2 text-center text-[12px]">
                           <PledgeBadge pledge={b.pledge} />
                         </TableCell>
-                        <TableCell className="max-w-[180px] py-2">
+                        <TableCell className="max-w-[150px] py-2">
                           {b.issuer ? (
                             <button
                               type="button"
                               onClick={() => { if (b.issuer) drillIssuer(b.issuer); }}
-                              title="查看发行人一级发行分析"
-                              className="line-clamp-2 text-left text-[12px] text-primary/80 hover:text-primary hover:underline"
+                              title={`${b.issuer}（点击查看一级发行分析）`}
+                              className="block w-full truncate text-left text-[12px] text-primary/80 hover:text-primary hover:underline"
                             >
                               {b.issuer}
                             </button>
