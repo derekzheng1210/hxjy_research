@@ -128,7 +128,7 @@ assert(source.includes('id="only630Ok" type="checkbox" checked'));
 assert(source.includes("onlyCredit&&(b.counterpartyLimit===null||b.counterpartyLimit<=0)"));
 assert(source.includes("only630Ok&&b.rating630!=='ok'"));
 assert(source.includes("['onlyCredit','only630Ok'].forEach(id=>document.getElementById(id).checked=true)"));
-assert(source.includes('二级择券Ofr异动债券.csv'));
+assert(source.includes("base:moverView?'二级择券Ofr异动债券'")); // 2026-11-20 起 CSV/Excel 共用 buildExportData，文件名由 base 拼后缀
 assert(source.includes('id="tier2EmotionValue"'));
 assert(source.includes('e.tier2_capital||{}'));
 assert(source.includes('legend-line tier2'));
@@ -203,7 +203,51 @@ assert(holdingTitle({ holding: 0.5, outstanding: null, holdingRatio: null }).inc
 // ---- 列宽重排：新增持仓占比后整表仍能在常规屏内放下（无横向滚动） ----
 const widthMatch = source.match(/min-width:(\d+)px;width:max\(100%,(\d+)px\)/);
 assert(widthMatch, 'table min-width rule missing');
+// 2026-11-20 中债-Bid 列移入持仓视图专属，主表宽度回到 1299
 assert(Number(widthMatch[1]) <= 1300, `table too wide: ${widthMatch[1]}px`);
 assert(source.includes('id="market"'));
 assert(source.includes("['ct','sub','market'].forEach"));
+
+// ---- 中债-Bid 列：(中债估值 − Bid) × 100，与中债-Ofr 同口径（负值=Bid高于估值=便宜） ----
+const fMatch = source.match(/const F=\{[^}]*\}/);
+assert(fMatch, 'F index map missing');
+// const 声明不会从 direct eval 外泄，换 var 使命名进入函数作用域
+eval(fMatch[0].replace('const F=', 'var F='));
+// 顶部已有同语义的 const n，直接复用；toBond 与 moverMap 之间夹着顶层 let BONDS 行，用其作终点
+const toBondStart = source.indexOf('function toBond');
+const toBondEnd = source.indexOf('let BONDS=', toBondStart);
+assert(toBondStart > 0 && toBondEnd > toBondStart, 'missing toBond');
+eval(source.slice(toBondStart, toBondEnd));
+const rawBidRow = [];
+rawBidRow[F.CODE] = '250210.IB';
+rawBidRow[F.NAME] = '25测试MTN001';
+rawBidRow[F.TERM] = 2.5;
+rawBidRow[F.YTM] = 2.5;
+rawBidRow[F.BID] = 2.4;
+rawBidRow[F.OFR] = 2.6;
+rawBidRow[F.VAL_OFR] = -10.0;
+const bondBid = toBond(rawBidRow);
+assert.strictEqual(bondBid.valBid, 10.0); // (2.5-2.4)*100
+assert.strictEqual(bondBid.valOfr, -10.0);
+const rawNoBid = [...rawBidRow];
+rawNoBid[F.BID] = null;
+assert.strictEqual(toBond(rawNoBid).valBid, null); // Bid 缺失不算
+const rawRounding = [...rawBidRow];
+rawRounding[F.BID] = 2.4444;
+assert.strictEqual(toBond(rawRounding).valBid, 5.56); // 保留两位（与服务端 valOfr 同口径）
+// 表头顺序：中债-Bid 位于 中债-Ofr 之前，且仅持仓视图渲染（personal 条件）
+assert(source.includes("(personal?tableHeader('中债-Bid','valBid'"), '中债-Bid must be holdings-only');
+const bidHeaderAt = source.indexOf("tableHeader('中债-Bid','valBid'");
+const ofrHeaderAt = source.indexOf("tableHeader('中债-Ofr','valOfr'");
+assert(bidHeaderAt > 0 && bidHeaderAt < ofrHeaderAt, '中债-Bid must precede 中债-Ofr');
+// 导出：CSV 与 Excel 共用 buildExportData，中债-Bid(BP) 仅持仓视图导出
+assert(source.includes('function buildExportData'), 'buildExportData missing');
+assert(source.includes("'中债-Bid(BP)'"), 'export header missing 中债-Bid(BP)');
+assert(source.includes("...(state.view==='holdings'?[b.valBid]:[]),b.valOfr"), 'export valBid must be holdings-only');
+// 侧栏宽度统一：持仓视图不再压缩侧栏（删掉 holdings-workspace 的 204px/190px 覆盖）
+assert(!source.includes('.holdings-workspace{grid-template-columns'), 'holdings sidebar width override must be gone');
+assert(source.includes('id="exportDrop"'), '导出下拉菜单 missing');
+assert(source.includes('closeExportMenu();exportCSV()'), 'CSV menu item missing');
+assert(source.includes('closeExportMenu();exportXlsx()'), 'Excel menu item missing');
+assert(source.includes('/api/export/table-xlsx'), 'xlsx endpoint wiring missing');
 console.log('secondary bond picker frontend logic: ok');

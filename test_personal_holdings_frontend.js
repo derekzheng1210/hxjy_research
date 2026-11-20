@@ -38,7 +38,7 @@ const tick=()=>new Promise(resolve=>setImmediate(resolve));
   assert.equal(run('state.filtered.length'),2,'include holdings missing from market pool');
   assert(element('tableWrap').innerHTML.includes('持仓量（万）'));
   assert(element('tableWrap').innerHTML.includes('3,000'));
-  assert.equal((element('tableWrap').innerHTML.match(/<th(?:\s|>)/g)||[]).length,21);
+  assert.equal((element('tableWrap').innerHTML.match(/<th(?:\s|>)/g)||[]).length,22); // 2026-11-20 新增中债-Bid 列
   assert(element('tableWrap').innerHTML.includes('width:160px'),'short-name column widened');
   assert(element('tableWrap').innerHTML.includes('width:80px'));
   assert.equal(element('holdingsGate').hidden,true);
@@ -90,7 +90,7 @@ const tick=()=>new Promise(resolve=>setImmediate(resolve));
   assert(element('drop-msFund').innerHTML.includes('基金甲'),'options built from holdings details');
   assert(element('drop-msFund').innerHTML.includes('全部'),'select-all shortcut offered per filter');
   assert.equal(run('state.filtered.length'),2);
-  assert.equal((element('tableWrap').innerHTML.match(/<th(?:\s|>)/g)||[]).length,24,'dimension and deal columns appended at the right');
+  assert.equal((element('tableWrap').innerHTML.match(/<th(?:\s|>)/g)||[]).length,25,'dimension and deal columns appended at the right'); // 2026-11-20 新增中债-Bid 列
   assert(element('tableWrap').innerHTML.includes('资产单元名称'));
   assert(element('tableWrap').innerHTML.includes('dim-cell'),'dimension cells rendered per row');
   assert(element('tableWrap').innerHTML.includes('holdings-wide'),'wider table enables the horizontal scrollbar');
