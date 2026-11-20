@@ -107,6 +107,8 @@ td.code{text-align:left;font-family:"Consolas","Courier New",monospace;font-size
 .col-cyield{width:70px}
 .col-spread{width:72px}
 .col-change{width:68px}
+/* ===== Range mode（自定义区间查询）===== */
+table.range-mode{min-width:1000px}
 </style>
 </head>
 <body>
@@ -130,6 +132,9 @@ td.code{text-align:left;font-family:"Consolas","Courier New",monospace;font-size
     <div class="tab" data-tab="holding" onclick="switchTab('holding')">
       重点债券 <span class="badge" id="badgeHolding">0</span>
     </div>
+    <div class="tab" data-tab="range" onclick="switchTab('range')">
+      区间查询 <span class="badge" id="badgeRange">-</span>
+    </div>
   </div>
 
   <!-- Filter Bar -->
@@ -149,23 +154,31 @@ td.code{text-align:left;font-family:"Consolas","Courier New",monospace;font-size
       <label>搜索</label>
       <input type="text" id="searchInput" placeholder="代码 / 名称">
     </div>
-    <button class="btn btn-primary" onclick="applyFilter()">筛选</button>
+    <div class="filter-group" id="rangeGroup" style="display:none">
+      <label>区间</label>
+      <input type="date" id="rangeStart">
+      <span>~</span>
+      <input type="date" id="rangeEnd">
+      <button class="btn btn-primary" onclick="queryRange()">查询</button>
+    </div>
+    <button class="btn btn-primary" id="btnFilter" onclick="applyFilter()">筛选</button>
     <button class="btn btn-outline" onclick="resetFilter()">重置</button>
     <div style="flex:1"></div>
-    <button class="btn btn-export" onclick="exportCSV()">导出 CSV</button>
+    <button class="btn btn-export" id="btnExport" onclick="exportCSV()">导出 CSV</button>
   </div>
 
   <!-- Stats -->
   <div class="stats">
     <div class="stat-item">显示 <span class="val" id="statShown">0</span> 只</div>
-    <div class="stat-item">日利差走扩>5bp <span class="val red" id="statWiden">0</span></div>
-    <div class="stat-item">日利差收窄>5bp <span class="val green" id="statNarrow">0</span></div>
-    <div class="stat-item">平均利差 <span class="val" id="statAvgSpread">--</span> bp</div>
+    <div class="stat-item" id="rangeDatesItem" style="display:none">实际区间 <span class="val" id="statRangeDates">--</span></div>
+    <div class="stat-item"><span id="labelWiden">日利差走扩&gt;5bp</span> <span class="val red" id="statWiden">0</span></div>
+    <div class="stat-item"><span id="labelNarrow">日利差收窄&gt;5bp</span> <span class="val green" id="statNarrow">0</span></div>
+    <div class="stat-item"><span id="labelAvg">平均利差</span> <span class="val" id="statAvgSpread">--</span> <span id="labelAvgUnit">bp</span></div>
   </div>
 
   <!-- Table -->
   <div class="table-wrap" id="tableWrap">
-    <table>
+    <table id="mainTable">
       <thead id="thead">
         <tr>
           <th class="col-hold"></th>
@@ -185,6 +198,21 @@ td.code{text-align:left;font-family:"Consolas","Courier New",monospace;font-size
           <th class="col-change" data-key="change_weekly" onclick="sortBy('change_weekly')">周变化 <span class="sort-arrow">▼</span></th>
           <th class="col-change" data-key="change_monthly" onclick="sortBy('change_monthly')">月变化 <span class="sort-arrow">▼</span></th>
           <th class="col-change" data-key="change_ytd" onclick="sortBy('change_ytd')">年初至今 <span class="sort-arrow">▼</span></th>
+        </tr>
+      </thead>
+      <thead id="theadRange" style="display:none">
+        <tr>
+          <th class="col-hold"></th>
+          <th class="col-code" data-key="raw_code" onclick="sortBy('raw_code')">证券代码 <span class="sort-arrow">▼</span></th>
+          <th class="col-name" data-key="name" onclick="sortBy('name')">证券名称 <span class="sort-arrow">▼</span></th>
+          <th class="col-rating" data-key="implied_rating" onclick="sortBy('implied_rating')">隐含评级 <span class="sort-arrow">▼</span></th>
+          <th class="col-term" data-key="term" onclick="sortBy('term')">期限(年) <span class="sort-arrow">▼</span></th>
+          <th class="col-curve" data-key="curve_name">曲线</th>
+          <th class="col-spread" data-key="spread_start" onclick="sortBy('spread_start')">期初利差 <span class="sort-arrow">▼</span></th>
+          <th class="col-spread" data-key="spread_end" onclick="sortBy('spread_end')">期末利差 <span class="sort-arrow">▼</span></th>
+          <th class="col-change" data-key="change_bp" onclick="sortBy('change_bp')">区间变化 <span class="sort-arrow">▼</span></th>
+          <th class="col-yield" data-key="yield_start" onclick="sortBy('yield_start')">期初估值 <span class="sort-arrow">▼</span></th>
+          <th class="col-yield" data-key="yield_end" onclick="sortBy('yield_end')">期末估值 <span class="sort-arrow">▼</span></th>
         </tr>
       </thead>
       <tbody id="tbody"></tbody>
@@ -217,6 +245,8 @@ let pageSize = 100;
 let sortKey = 'change_daily';
 let sortAsc = false; // 默认降序（异动优先）
 let ratings = new Set();
+// 区间查询：结果由服务端读 spread_history_cache.json 计算（336MB 不下发浏览器）
+const rangeState = { loading: false, error: '', result: null };
 
 // ===== Init =====
 window.addEventListener('DOMContentLoaded', () => {
@@ -278,8 +308,57 @@ function populateSelect(id, options) {
 function switchTab(tab) {
   currentTab = tab;
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
+  const isRange = tab === 'range';
+  document.getElementById('rangeGroup').style.display = isRange ? '' : 'none';
+  document.getElementById('thead').style.display = isRange ? 'none' : '';
+  document.getElementById('theadRange').style.display = isRange ? '' : 'none';
+  document.getElementById('mainTable').classList.toggle('range-mode', isRange);
+  document.getElementById('rangeDatesItem').style.display = isRange ? '' : 'none';
+  document.getElementById('btnExport').textContent = isRange ? '导出 Excel' : '导出 CSV';
+  document.getElementById('labelWiden').textContent = isRange ? '区间走扩>5bp' : '日利差走扩>5bp';
+  document.getElementById('labelNarrow').textContent = isRange ? '区间收窄>5bp' : '日利差收窄>5bp';
+  document.getElementById('labelAvg').textContent = isRange ? '平均区间变化' : '平均利差';
+  // 每个页签回到自己的默认排序（普通=日变化异动优先，区间=区间变化幅度优先）
+  sortKey = isRange ? 'change_bp' : 'change_daily';
+  sortAsc = false;
+  if (isRange) enterRangeDefaults();
   currentPage = 1;
   applyFilter();
+}
+
+// ===== Range Query（自定义区间）=====
+function enterRangeDefaults() {
+  // 首次进入预填：一月前 ~ 当前（与主表参照口径一致），用户改过后不再覆盖
+  const sEl = document.getElementById('rangeStart'), eEl = document.getElementById('rangeEnd');
+  if (sEl.value && eEl.value) return;
+  const d = (typeof SPREAD_DATA !== 'undefined' && SPREAD_DATA.dates) || {};
+  const iso = ymd => ymd ? `${ymd.slice(0, 4)}-${ymd.slice(4, 6)}-${ymd.slice(6, 8)}` : '';
+  if (!sEl.value && d['一月前']) sEl.value = iso(d['一月前']);
+  if (!eEl.value && d['当前']) eEl.value = iso(d['当前']);
+}
+
+async function queryRange() {
+  const s = document.getElementById('rangeStart').value.replace(/-/g, '');
+  const e = document.getElementById('rangeEnd').value.replace(/-/g, '');
+  if (!s || !e) { rangeState.error = '请选择起止日期'; rangeState.result = null; render(); return; }
+  rangeState.loading = true; rangeState.error = ''; rangeState.result = null;
+  document.getElementById('badgeRange').textContent = '…';
+  render();
+  try {
+    const res = await fetch(`/api/spread-monitor/range?start=${s}&end=${e}`);
+    const j = await res.json();
+    if (!res.ok) throw new Error(j.error || '查询失败');
+    rangeState.result = j;
+    document.getElementById('badgeRange').textContent = j.rows.length;
+    document.getElementById('statRangeDates').textContent = `${j.start_used} ~ ${j.end_used}`;
+  } catch (err) {
+    rangeState.error = err.message || '查询失败';
+    document.getElementById('badgeRange').textContent = '-';
+  } finally {
+    rangeState.loading = false;
+    currentPage = 1;
+    applyFilter();
+  }
 }
 
 // ===== Filter =====
@@ -288,13 +367,15 @@ function applyFilter() {
   const termMin = parseFloat(document.getElementById('termMin').value) || 0;
   const termMax = parseFloat(document.getElementById('termMax').value) || Infinity;
   const search = document.getElementById('searchInput').value.trim().toLowerCase();
+  // 区间页签的数据源是服务端返回的 rows；评级/期限/搜索仍在本地点选过滤
+  const source = currentTab === 'range' ? (rangeState.result ? rangeState.result.rows : []) : allData;
 
-  filteredData = allData.filter(d => {
+  filteredData = source.filter(d => {
     if (currentTab === 'holding' && !d.is_holding) return false;
     if (rating && d.implied_rating !== rating) return false;
-    if (d.term < termMin || d.term > termMax) return false;
+    if (d.term != null && (d.term < termMin || d.term > termMax)) return false;
     if (search) {
-      const s = (d.code + ' ' + d.raw_code + ' ' + d.name).toLowerCase();
+      const s = ((d.code || '') + ' ' + (d.raw_code || '') + ' ' + (d.name || '')).toLowerCase();
       if (!s.includes(search)) return false;
     }
     return true;
@@ -322,8 +403,8 @@ function sortBy(key) {
     sortKey = key;
     sortAsc = false; // 默认降序
   }
-  // 更新 UI
-  document.querySelectorAll('#thead th').forEach(th => {
+  // 更新 UI（两个表头都清高亮，仅当前列点亮）
+  document.querySelectorAll('thead th').forEach(th => {
     th.classList.toggle('sorted', th.dataset.key === key);
     const arrow = th.querySelector('.sort-arrow');
     if (arrow) arrow.textContent = (th.dataset.key === key && sortAsc) ? '▲' : '▼';
@@ -356,31 +437,69 @@ function doSort() {
 // ===== Render =====
 function render() {
   const tbody = document.getElementById('tbody');
+  const isRange = currentTab === 'range';
+  const COLS = isRange ? 11 : 17;
+
+  // 区间页签的加载/错误/未查询占位
+  if (isRange) {
+    if (rangeState.loading) {
+      tbody.innerHTML = `<tr><td colspan="${COLS}"><div class="loading"><div class="spinner"></div>计算区间利差中（服务端首次加载历史缓存约需十几秒，之后即走缓存）...</div></td></tr>`;
+      renderPagination(0, 0, 0);
+      return;
+    }
+    if (rangeState.error) {
+      tbody.innerHTML = `<tr><td colspan="${COLS}" style="padding:30px;text-align:center;color:#e63946">查询失败：${esc(rangeState.error)}</td></tr>`;
+      renderPagination(0, 0, 0);
+      return;
+    }
+    if (!rangeState.result) {
+      tbody.innerHTML = `<tr><td colspan="${COLS}" style="padding:30px;text-align:center;color:#999">选择起止日期后点击【查询】（周末/节假日自动对齐到最近缓存交易日）</td></tr>`;
+      renderPagination(0, 0, 0);
+      return;
+    }
+  }
+
   const total = filteredData.length;
   const start = (currentPage - 1) * pageSize;
   const end = Math.min(start + pageSize, total);
   const pageData = filteredData.slice(start, end);
 
-  // Stats
+  // Stats（区间页签按 change_bp 口径，普通页签按日变化/当前利差）
+  const changeKey = isRange ? 'change_bp' : 'change_daily';
   document.getElementById('statShown').textContent = total;
   let widen = 0, narrow = 0, sumSpread = 0, countSpread = 0;
   filteredData.forEach(d => {
-    if (d.change_daily != null && d.change_daily > 5) widen++;
-    if (d.change_daily != null && d.change_daily < -5) narrow++;
-    if (d.spread_current != null) { sumSpread += d.spread_current; countSpread++; }
+    if (d[changeKey] != null && d[changeKey] > 5) widen++;
+    if (d[changeKey] != null && d[changeKey] < -5) narrow++;
+    const avgVal = isRange ? d[changeKey] : d.spread_current;
+    if (avgVal != null) { sumSpread += avgVal; countSpread++; }
   });
   document.getElementById('statWiden').textContent = widen;
   document.getElementById('statNarrow').textContent = narrow;
-  document.getElementById('statAvgSpread').textContent = countSpread ? (sumSpread / countSpread).toFixed(1) : '--';
+  document.getElementById('statAvgSpread').textContent = countSpread ? (sumSpread / countSpread >= 0 ? '+' : '') + (sumSpread / countSpread).toFixed(1) : '--';
 
   // Table body
   let html = '';
   for (const d of pageData) {
     const holdCls = d.is_holding ? ' class="holding"' : '';
     const holdMark = d.is_holding ? '<span class="hold-marker"></span>' : '';
+    const detailUrl = `/bond-detail?code=${encodeURIComponent(d.code || d.raw_code)}`;
     html += `<tr${holdCls}>`;
     html += `<td>${holdMark}</td>`;
-    const detailUrl = `/bond-detail?code=${encodeURIComponent(d.code || d.raw_code)}`;
+    if (isRange) {
+      html += `<td class="code"><a href="${detailUrl}" title="查看债券详查" style="color:inherit;text-decoration:none">${esc(d.raw_code)}</a></td>`;
+      html += `<td class="name" title="${esc(d.name || '')}"><a href="${detailUrl}" title="查看债券详查" style="color:inherit;text-decoration:none">${esc(d.name || '--')}</a></td>`;
+      html += `<td>${esc(d.implied_rating || '--')}</td>`;
+      html += `<td>${fmtNum(d.term, 2)}</td>`;
+      html += `<td title="${esc(d.curve_name || '')}">${esc(d.curve_name || '--')}</td>`;
+      html += `<td>${fmtSpread(d.spread_start)}</td>`;
+      html += `<td>${fmtSpread(d.spread_end)}</td>`;
+      html += fmtChange(d.change_bp);
+      html += `<td>${fmtNum(d.yield_start, 4)}</td>`;
+      html += `<td>${fmtNum(d.yield_end, 4)}</td>`;
+      html += '</tr>';
+      continue;
+    }
     html += `<td class="code"><a href="${detailUrl}" title="查看债券详查" style="color:inherit;text-decoration:none">${esc(d.raw_code || d.code)}</a></td>`;
     html += `<td class="name" title="${esc(d.name)}"><a href="${detailUrl}" title="查看债券详查" style="color:inherit;text-decoration:none">${esc(d.name)}</a></td>`;
     html += `<td>${esc(d.implied_rating)}</td>`;
@@ -399,7 +518,7 @@ function render() {
     html += fmtChange(d.change_ytd);
     html += '</tr>';
   }
-  tbody.innerHTML = html || '<tr><td colspan="17" style="padding:30px;text-align:center;color:#999">无匹配数据</td></tr>';
+  tbody.innerHTML = html || `<tr><td colspan="${COLS}" style="padding:30px;text-align:center;color:#999">无匹配数据</td></tr>`;
 
   // Pagination
   renderPagination(total, start, end);
@@ -485,6 +604,14 @@ function changePageSize() {
 
 // ===== Export =====
 function exportCSV() {
+  // 区间页签：服务端按当前起止日期计算并导出 xlsx（全量区间结果，不受本页筛选影响）
+  if (currentTab === 'range') {
+    const s = document.getElementById('rangeStart').value.replace(/-/g, '');
+    const e = document.getElementById('rangeEnd').value.replace(/-/g, '');
+    if (!s || !e) { alert('请先选择起止日期并查询'); return; }
+    window.location.href = `/spread-monitor/range/xlsx?start=${s}&end=${e}`;
+    return;
+  }
   const headers = [
     '证券代码','证券名称','隐含评级','期限(年)',
     '估值(%)','对应曲线','曲线收益率(%)',

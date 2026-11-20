@@ -1341,6 +1341,65 @@ def spread_data_js():
     return send_file(SPREAD_JS, mimetype="application/javascript")
 
 
+@app.route("/api/spread-monitor/range")
+@login_required
+def api_spread_monitor_range():
+    """存量债利差监控·自定义区间查询：期初/期末自动回退到 ≤请求日 的最近缓存交易日。"""
+    from spread_range import RangeError, compute_range
+
+    try:
+        result = compute_range((request.args.get("start") or "").strip(),
+                               (request.args.get("end") or "").strip())
+    except RangeError as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify(result)
+
+
+@app.route("/spread-monitor/range/xlsx")
+@login_required
+def spread_monitor_range_xlsx():
+    """区间利差查询导出 xlsx（服务端读 spread_history_cache.json 计算，历史缓存不下发浏览器）。"""
+    from spread_range import RangeError, build_range_workbook, compute_range
+
+    try:
+        result = compute_range((request.args.get("start") or "").strip(),
+                               (request.args.get("end") or "").strip())
+    except RangeError as exc:
+        return jsonify({"error": str(exc)}), 400
+    return send_file(
+        build_range_workbook(result),
+        as_attachment=True,
+        download_name=f"利差区间_{result['start_used']}-{result['end_used']}.xlsx",
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
+@app.route("/api/export/table-xlsx", methods=["POST"])
+@login_required
+def api_export_table_xlsx():
+    """通用表格导出：前端把当前界面筛选后的表头与行 POST 过来装配 xlsx（所见即所得）。"""
+    from table_export import (
+        MAX_HEADERS, MAX_ROWS, build_table_workbook, sanitize_filename, sanitize_sheet_name,
+    )
+
+    payload = request.get_json(silent=True) or {}
+    headers = payload.get("headers")
+    rows = payload.get("rows")
+    if (not isinstance(headers, list) or not headers or len(headers) > MAX_HEADERS
+            or not all(isinstance(h, str) and h.strip() for h in headers)):
+        return jsonify({"error": "表头格式不正确"}), 400
+    if not isinstance(rows, list) or len(rows) > MAX_ROWS:
+        return jsonify({"error": f"导出行数超上限（{MAX_ROWS}）"}), 400
+    filename = sanitize_filename(payload.get("filename") or "导出表格")
+    sheet = sanitize_sheet_name(payload.get("sheet") or "数据")
+    return send_file(
+        build_table_workbook(headers, rows, sheet),
+        as_attachment=True,
+        download_name=filename,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
 @app.route("/broker-data")
 @login_required
 def broker_data():
