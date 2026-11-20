@@ -1,11 +1,17 @@
+import base64
+import io
 import json
 import os
 import re
+import tempfile
+import time
 import unittest
 import uuid
 from pathlib import Path
 from unittest.mock import patch
 
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric import padding as asym_padding, rsa
 from werkzeug.security import generate_password_hash
 
 
@@ -13,6 +19,8 @@ TEST_DATA_ROOT = Path(__file__).resolve().parent / ".test_runtime" / uuid.uuid4(
 os.environ["PORTAL_DATA_ROOT"] = str(TEST_DATA_ROOT)
 os.environ["SECRET_KEY"] = "internal-kb-test-secret"
 os.environ["SITE_PASSWORD"] = "portal-test-password"
+# 测试用小密钥加速首次生成（生产默认 4096，见 auth_crypto._key_bits）
+os.environ["KB_AUTH_KEY_BITS"] = "2048"
 
 from app import app  # noqa: E402
 from internal_knowledge_base import routes  # noqa: E402
@@ -45,6 +53,25 @@ def parse_sse(response):
     return events
 
 
+def seal_credential(client, payload):
+    """模拟前端 KbCrypto.seal：取挑战 → RSA-OAEP 加密 payload+nonce。
+
+    登录/改密接口只接受 {credential} 信封（渗透测试"传输过程信息泄漏"整改），
+    明文密码不再出现在请求体中。
+    """
+    challenge = client.get("/internal-knowledge-base/api/auth-challenge")
+    assert challenge.status_code == 200, challenge.get_data(as_text=True)
+    challenge = challenge.get_json()
+    pub = challenge["publicKey"]
+    public_key = rsa.RSAPublicNumbers(int(pub["e"], 16), int(pub["n"], 16)).public_key()
+    message = json.dumps(dict(payload, nonce=challenge["nonce"]), ensure_ascii=False).encode("utf-8")
+    ciphertext = public_key.encrypt(
+        message,
+        asym_padding.OAEP(mgf=asym_padding.MGF1(algorithm=hashes.SHA256()),
+                          algorithm=hashes.SHA256(), label=None))
+    return {"credential": base64.b64encode(ciphertext).decode("ascii")}
+
+
 class InternalKnowledgeBaseTest(unittest.TestCase):
     def setUp(self):
         app.config.update(TESTING=True)
@@ -74,13 +101,15 @@ class InternalKnowledgeBaseTest(unittest.TestCase):
         response = self.client.get("/internal-knowledge-base/")
         self.assertEqual(response.status_code, 200)
         token = self.csrf()
-        missing_csrf = self.client.post("/internal-knowledge-base/api/login", json={
-            "username": "member", "password": "member-password",
-        })
+        missing_csrf = self.client.post("/internal-knowledge-base/api/login",
+                                        json=seal_credential(self.client, {
+                                            "username": "member", "password": "member-password",
+                                        }))
         self.assertEqual(missing_csrf.status_code, 403)
-        response = self.client.post("/internal-knowledge-base/api/login", json={
-            "username": "member", "password": "member-password",
-        }, headers={"X-CSRF-Token": token})
+        response = self.client.post("/internal-knowledge-base/api/login",
+                                    json=seal_credential(self.client, {
+                                        "username": "member", "password": "member-password",
+                                    }), headers={"X-CSRF-Token": token})
         self.assertEqual(response.status_code, 200)
         with self.client.session_transaction() as session:
             self.assertEqual(session["internal_knowledge_base_user_id"], "member")
@@ -110,22 +139,23 @@ class InternalKnowledgeBaseTest(unittest.TestCase):
         self.assertEqual(portal_admin.status_code, 302)
         token = self.csrf("/internal-knowledge-base/admin")
         response = self.client.post("/internal-knowledge-base/api/admin/login",
-                                    json={"password": "admin-password"},
+                                    json=seal_credential(self.client, {"password": "admin-password"}),
                                     headers={"X-CSRF-Token": token})
         self.assertEqual(response.status_code, 200)
-        changed = self.client.post("/internal-knowledge-base/api/admin/change-password", json={
-            "oldPassword": "admin-password", "newPassword": "new-admin-password",
-            "confirmPassword": "new-admin-password",
-        }, headers={"X-CSRF-Token": token})
+        changed = self.client.post("/internal-knowledge-base/api/admin/change-password",
+                                   json=seal_credential(self.client, {
+                                       "oldPassword": "admin-password", "newPassword": "new-admin-password",
+                                       "confirmPassword": "new-admin-password",
+                                   }), headers={"X-CSRF-Token": token})
         self.assertEqual(changed.status_code, 200)
         self.client.post("/internal-knowledge-base/api/admin/logout",
                          headers={"X-CSRF-Token": token})
         old_login = self.client.post("/internal-knowledge-base/api/admin/login",
-                                     json={"password": "admin-password"},
+                                     json=seal_credential(self.client, {"password": "admin-password"}),
                                      headers={"X-CSRF-Token": token})
         self.assertEqual(old_login.status_code, 401)
         new_login = self.client.post("/internal-knowledge-base/api/admin/login",
-                                     json={"password": "new-admin-password"},
+                                     json=seal_credential(self.client, {"password": "new-admin-password"}),
                                      headers={"X-CSRF-Token": token})
         self.assertEqual(new_login.status_code, 200)
 
@@ -133,7 +163,7 @@ class InternalKnowledgeBaseTest(unittest.TestCase):
         self.portal_session()
         token = self.csrf("/internal-knowledge-base/admin")
         self.client.post("/internal-knowledge-base/api/admin/login",
-                         json={"password": "admin-password"},
+                         json=seal_credential(self.client, {"password": "admin-password"}),
                          headers={"X-CSRF-Token": token})
         key = "a" * 64
         cache_path = Path(PREVIEW_CACHE_DIR, f"{key}.pdf")
@@ -639,7 +669,7 @@ class UserDeletionRetentionTests(unittest.TestCase):
             session["authenticated"] = True
             session["internal_knowledge_base_csrf"] = "test-csrf-token"
         response = client.post("/internal-knowledge-base/api/login",
-                               json={"username": "author", "password": "author-password"},
+                               json=seal_credential(client, {"username": "author", "password": "author-password"}),
                                headers={"X-CSRF-Token": "test-csrf-token"})
         self.assertEqual(response.status_code, 401)
 
@@ -670,48 +700,63 @@ class UserDeletionRetentionTests(unittest.TestCase):
         authors = self.client.get("/internal-knowledge-base/api/report-authors").get_json()
         self.assertNotIn("author", {u["id"] for u in authors["authors"]})
 
-    def test_restore_user_reactivates_login_with_default_password(self):
+    def test_restore_user_reactivates_login_with_random_password(self):
         self._delete_author()
         self._session(superadmin=True)
         response = self.client.post("/internal-knowledge-base/api/admin/users/author/restore",
                                     headers={"X-CSRF-Token": "test-csrf-token"})
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.get_json()["user"]["name"], "离职作者")
+        body = response.get_json()
+        self.assertEqual(body["user"]["name"], "离职作者")
+        # 恢复即生成随机初始密码（不再是统一默认密码）并要求首登改密
+        initial_password = body.get("initialPassword") or ""
+        self.assertGreaterEqual(len(initial_password), 8)
+        self.assertNotEqual(initial_password, "123456")
 
         users = self.client.get("/internal-knowledge-base/api/admin/users").get_json()
         self.assertIn("author", {u["id"] for u in users["users"]})
         self.assertEqual(users["deletedUsers"], [])
 
-        # 恢复后旧密码失效、默认密码 123456 可登录，历史评分仍在
+        # 恢复后旧密码失效；随机初始密码登录进入强制改密，改密成功才建立会话
         client = app.test_client()
         with client.session_transaction() as session:
             session["authenticated"] = True
             session["internal_knowledge_base_csrf"] = "test-csrf-token"
         old_login = client.post("/internal-knowledge-base/api/login",
-                                json={"username": "author", "password": "author-password"},
+                                json=seal_credential(client, {"username": "author", "password": "author-password"}),
                                 headers={"X-CSRF-Token": "test-csrf-token"})
         self.assertEqual(old_login.status_code, 401)
-        new_login = client.post("/internal-knowledge-base/api/login",
-                                json={"username": "author", "password": "123456"},
+        gate = client.post("/internal-knowledge-base/api/login",
+                           json=seal_credential(client, {"username": "author", "password": initial_password}),
+                           headers={"X-CSRF-Token": "test-csrf-token"})
+        self.assertEqual(gate.status_code, 200)
+        self.assertTrue(gate.get_json().get("mustChangePassword"))
+        with client.session_transaction() as session:
+            self.assertNotIn("internal_knowledge_base_user_id", session)
+            self.assertEqual(session.get("internal_knowledge_base_pending_user_id"), "author")
+        completed = client.post("/internal-knowledge-base/api/complete-login-password",
+                                json=seal_credential(client, {"oldPassword": initial_password,
+                                                              "newPassword": "author-new-pass-2026"}),
                                 headers={"X-CSRF-Token": "test-csrf-token"})
-        self.assertEqual(new_login.status_code, 200)
+        self.assertEqual(completed.status_code, 200)
+        with client.session_transaction() as session:
+            self.assertEqual(session.get("internal_knowledge_base_user_id"), "author")
         self.assertEqual(len(store.ratings()), 1)
 
     def test_create_user_rejects_id_of_deleted_account(self):
         self._delete_author()
         self._session(superadmin=True)
         headers = {"X-CSRF-Token": "test-csrf-token"}
+        payload = {"id": "author", "name": "新人", "org": "固收中心", "role": "member"}
         response = self.client.post("/internal-knowledge-base/api/admin/users",
-                                    json={"id": "author", "name": "新人", "org": "固收中心",
-                                          "role": "member"},
+                                    json=seal_credential(self.client, payload),
                                     headers=headers)
         self.assertEqual(response.status_code, 400)
         self.assertIn("已被删除", response.get_json()["error"])
         # 恢复后同一账号回到"账号已存在"分支
         self.client.post("/internal-knowledge-base/api/admin/users/author/restore", headers=headers)
         response = self.client.post("/internal-knowledge-base/api/admin/users",
-                                    json={"id": "author", "name": "新人", "org": "固收中心",
-                                          "role": "member"},
+                                    json=seal_credential(self.client, payload),
                                     headers=headers)
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.get_json()["error"], "账号已存在")
@@ -724,6 +769,342 @@ class UserDeletionRetentionTests(unittest.TestCase):
         row = store.get_report_summary(self.REPORT_AUTHOR, "standard")
         payload = _summary_payload(row, "standard", "author")
         self.assertEqual(payload["generatedByName"], "离职作者")
+
+
+def _make_malicious_pdf(path):
+    """构造带内嵌脚本的 PDF：文档级 JS 名称树 + OpenAction JS + 页面 /AA 启动动作。"""
+    import pymupdf
+    doc = pymupdf.open()
+    page = doc.new_page()
+    js_action = doc.get_new_xref()
+    doc.update_object(js_action, "<< /S /JavaScript /JS (app.alert({cMsg:'pdf-xss'})) >>")
+    doc.xref_set_key(doc.pdf_catalog(), "OpenAction", f"{js_action} 0 R")
+    launch_action = doc.get_new_xref()
+    doc.update_object(launch_action, "<< /S /Launch /F (calc.exe) >>")
+    doc.xref_set_key(page.xref, "AA", f"<< /O {launch_action} 0 R >>")
+    doc.save(str(path))
+    doc.close()
+
+
+def _make_clean_pdf(path):
+    import pymupdf
+    doc = pymupdf.open()
+    page = doc.new_page()
+    page.insert_text((72, 72), "clean report")
+    doc.save(str(path))
+    doc.close()
+
+
+def _pdf_has_active_content(path):
+    import pymupdf
+    doc = pymupdf.open(str(path))
+    try:
+        pattern = re.compile(r"/(JavaScript|JS|Launch)(?![0-9A-Za-z])")
+        for xref in range(1, doc.xref_length()):
+            source = doc.xref_object(xref, compressed=False) or ""
+            if pattern.search(source):
+                return True
+        catalog = doc.xref_object(doc.pdf_catalog(), compressed=False) or ""
+        return bool(pattern.search(catalog))
+    finally:
+        doc.close()
+
+
+class SecurityHardeningTests(unittest.TestCase):
+    """渗透测试整改回归：信封登录、强制改密、随机初始密码、PDF 活跃内容清洗。"""
+
+    LEGACY_USER = "legacy"
+    NORMAL_USER = "normal"
+
+    def setUp(self):
+        app.config.update(TESTING=True)
+        assert_isolated_test_store()
+        with store.transaction() as conn:
+            for table in ("audit_log", "pdf_cache", "report_summaries", "engagement", "ratings",
+                          "reports", "roadshow_schedule", "qa_usage", "qa_history", "users"):
+                conn.execute(f"DELETE FROM {table}")
+        store.add_user({
+            "id": self.LEGACY_USER, "name": "默认密码用户", "org": "固收中心", "role": "member",
+            "password_hash": generate_password_hash("123456"),
+        })
+        store.add_user({
+            "id": self.NORMAL_USER, "name": "正常用户", "org": "固收中心", "role": "member",
+            "password_hash": generate_password_hash("normal-pass-2026"),
+        })
+        store.set_admin_password_hash(generate_password_hash("admin-password"))
+        self.client = app.test_client()
+
+    def _session(self, user_id=None, superadmin=False):
+        with self.client.session_transaction() as session:
+            session["authenticated"] = True
+            session["internal_knowledge_base_csrf"] = "test-csrf-token"
+            if user_id:
+                session["internal_knowledge_base_user_id"] = user_id
+            if superadmin:
+                session["internal_knowledge_base_superadmin"] = True
+
+    def _login(self, client, username, password):
+        return client.post("/internal-knowledge-base/api/login",
+                           json=seal_credential(client, {"username": username, "password": password}),
+                           headers={"X-CSRF-Token": "test-csrf-token"})
+
+    def _admin_login(self, password):
+        return self.client.post("/internal-knowledge-base/api/admin/login",
+                                json=seal_credential(self.client, {"password": password}),
+                                headers={"X-CSRF-Token": "test-csrf-token"})
+
+    # ---- 传输加密：明文关闭、信封成功、篡改与重放拒绝 ----
+
+    def test_plaintext_password_login_rejected(self):
+        self._session()
+        response = self.client.post("/internal-knowledge-base/api/login",
+                                    json={"username": self.NORMAL_USER, "password": "normal-pass-2026"},
+                                    headers={"X-CSRF-Token": "test-csrf-token"})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("加密凭据", response.get_json()["error"])
+
+    def test_envelope_login_success_and_wrong_password(self):
+        self._session()
+        ok = self._login(self.client, self.NORMAL_USER, "normal-pass-2026")
+        self.assertEqual(ok.status_code, 200)
+        with self.client.session_transaction() as session:
+            self.assertEqual(session.get("internal_knowledge_base_user_id"), self.NORMAL_USER)
+        bad = self._login(self.client, self.NORMAL_USER, "wrong-password")
+        self.assertEqual(bad.status_code, 401)
+
+    def test_tampered_credential_and_nonce_replay_rejected(self):
+        self._session()
+        tampered = self.client.post("/internal-knowledge-base/api/login",
+                                    json={"credential": "!!!not-base64!!!"},
+                                    headers={"X-CSRF-Token": "test-csrf-token"})
+        self.assertEqual(tampered.status_code, 400)
+
+        # 同一 nonce 的两个信封：第一个消费成功，第二个（重放）被拒
+        challenge = self.client.get("/internal-knowledge-base/api/auth-challenge").get_json()
+        pub = challenge["publicKey"]
+        public_key = rsa.RSAPublicNumbers(int(pub["e"], 16), int(pub["n"], 16)).public_key()
+        payload = {"username": self.NORMAL_USER, "password": "normal-pass-2026", "nonce": challenge["nonce"]}
+        envelopes = []
+        for _ in range(2):
+            ciphertext = public_key.encrypt(
+                json.dumps(payload).encode("utf-8"),
+                asym_padding.OAEP(mgf=asym_padding.MGF1(algorithm=hashes.SHA256()),
+                                  algorithm=hashes.SHA256(), label=None))
+            envelopes.append({"credential": base64.b64encode(ciphertext).decode("ascii")})
+        first = self.client.post("/internal-knowledge-base/api/login", json=envelopes[0],
+                                 headers={"X-CSRF-Token": "test-csrf-token"})
+        self.assertEqual(first.status_code, 200)
+        replay = self.client.post("/internal-knowledge-base/api/login", json=envelopes[1],
+                                  headers={"X-CSRF-Token": "test-csrf-token"})
+        self.assertEqual(replay.status_code, 400)
+
+    # ---- 强制改密：默认密码再也不能直接换取正式会话 ----
+
+    def test_legacy_default_password_forces_change_gate(self):
+        self._session()
+        gate = self._login(self.client, self.LEGACY_USER, "123456")
+        self.assertEqual(gate.status_code, 200)
+        body = gate.get_json()
+        self.assertTrue(body.get("mustChangePassword"))
+        with self.client.session_transaction() as session:
+            self.assertIsNone(session.get("internal_knowledge_base_user_id"))
+            self.assertEqual(session.get("internal_knowledge_base_pending_user_id"), self.LEGACY_USER)
+        # 默认密码拿不到业务会话
+        self.assertEqual(self.client.get("/internal-knowledge-base/api/me").status_code, 401)
+
+    def test_complete_login_password_flow_and_policy(self):
+        self._session()
+        self._login(self.client, self.LEGACY_USER, "123456")
+
+        def complete(new_password, old_password="123456"):
+            return self.client.post(
+                "/internal-knowledge-base/api/complete-login-password",
+                json=seal_credential(self.client, {"oldPassword": old_password, "newPassword": new_password}),
+                headers={"X-CSRF-Token": "test-csrf-token"})
+
+        self.assertEqual(complete("123456").status_code, 400)          # 仍用默认密码
+        self.assertEqual(complete("1234567").status_code, 400)         # 7 位
+        self.assertEqual(complete("12345678").status_code, 400)        # 纯数字
+        self.assertEqual(complete(self.LEGACY_USER).status_code, 400)  # 与账号相同
+        self.assertEqual(complete("wrong-old", old_password="whatever").status_code, 401)
+        done = complete("fresh-pass-2026")
+        self.assertEqual(done.status_code, 200)
+        with self.client.session_transaction() as session:
+            self.assertEqual(session.get("internal_knowledge_base_user_id"), self.LEGACY_USER)
+            self.assertIsNone(session.get("internal_knowledge_base_pending_user_id"))
+        # 旧默认密码彻底失效，新密码正常登录
+        self.assertEqual(self._login(self.client, self.LEGACY_USER, "123456").status_code, 401)
+        again = self._login(self.client, self.LEGACY_USER, "fresh-pass-2026")
+        self.assertEqual(again.status_code, 200)
+        self.assertFalse(again.get_json().get("mustChangePassword"))
+
+    def test_admin_legacy_default_password_forced_change(self):
+        store.set_admin_password_hash(generate_password_hash("123456"))
+        self._session()
+        gate = self._admin_login("123456")
+        self.assertEqual(gate.status_code, 200)
+        self.assertTrue(gate.get_json().get("mustChangePassword"))
+        with self.client.session_transaction() as session:
+            self.assertIsNone(session.get("internal_knowledge_base_superadmin"))
+            self.assertTrue(session.get("internal_knowledge_base_pending_superadmin"))
+        self.assertEqual(
+            self.client.get("/internal-knowledge-base/api/admin/users").status_code, 401)
+        completed = self.client.post(
+            "/internal-knowledge-base/api/admin/complete-login-password",
+            json=seal_credential(self.client, {"oldPassword": "123456", "newPassword": "admin-pass-2026"}),
+            headers={"X-CSRF-Token": "test-csrf-token"})
+        self.assertEqual(completed.status_code, 200)
+        with self.client.session_transaction() as session:
+            self.assertTrue(session.get("internal_knowledge_base_superadmin"))
+        # 后台新密码可登录
+        self.assertEqual(self._admin_login("admin-pass-2026").status_code, 200)
+
+    # ---- 随机初始密码与建号/重置策略 ----
+
+    def _admin(self):
+        self._session(superadmin=True)
+
+    def test_create_user_without_password_gets_random_initial(self):
+        self._admin()
+        response = self.client.post(
+            "/internal-knowledge-base/api/admin/users",
+            json=seal_credential(self.client, {"id": "newbie", "name": "新同事",
+                                               "org": "固收中心", "role": "member"}),
+            headers={"X-CSRF-Token": "test-csrf-token"})
+        self.assertEqual(response.status_code, 200)
+        body = response.get_json()
+        initial = body.get("initialPassword") or ""
+        self.assertGreaterEqual(len(initial), 8)
+        self.assertNotEqual(initial, "123456")
+        self.assertNotIn(initial, ("12345678", "password"))
+        self.assertTrue(body.get("mustChangePassword"))
+        user = store.get_user("newbie")
+        self.assertIsNotNone(user)
+        self.assertEqual(user["must_change_password"], 1)
+        # 新用户登录即进强制改密门槛
+        self._session()
+        gate = self._login(self.client, "newbie", initial)
+        self.assertEqual(gate.status_code, 200)
+        self.assertTrue(gate.get_json().get("mustChangePassword"))
+
+    def test_create_user_with_weak_password_rejected(self):
+        self._admin()
+        response = self.client.post(
+            "/internal-knowledge-base/api/admin/users",
+            json=seal_credential(self.client, {"id": "newbie", "name": "新同事",
+                                               "org": "固收中心", "role": "member",
+                                               "password": "12345678"}),
+            headers={"X-CSRF-Token": "test-csrf-token"})
+        self.assertEqual(response.status_code, 400)
+
+    def test_reset_password_sets_must_change_flag(self):
+        self._admin()
+        response = self.client.post(
+            f"/internal-knowledge-base/api/admin/users/{self.NORMAL_USER}/reset-password",
+            json=seal_credential(self.client, {"password": "reset-pass-2026"}),
+            headers={"X-CSRF-Token": "test-csrf-token"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(store.get_user(self.NORMAL_USER)["must_change_password"], 1)
+        self._session()
+        gate = self._login(self.client, self.NORMAL_USER, "reset-pass-2026")
+        self.assertTrue(gate.get_json().get("mustChangePassword"))
+
+    # ---- PDF 活跃内容清洗 ----
+
+    def test_sanitize_pdf_strips_active_content(self):
+        import tempfile
+        from internal_knowledge_base import pdf_guard
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "evil.pdf"
+            _make_malicious_pdf(path)
+            self.assertTrue(_pdf_has_active_content(path))
+            result = pdf_guard.sanitize_pdf(str(path))
+            self.assertTrue(result["modified"])
+            self.assertTrue(result["removed"])
+            self.assertFalse(_pdf_has_active_content(path))
+            import pymupdf
+            doc = pymupdf.open(str(path))  # 清洗后仍是合法 PDF
+            self.assertEqual(doc.page_count, 1)
+            doc.close()
+
+    def test_sanitize_pdf_leaves_clean_file_untouched(self):
+        import tempfile
+        from internal_knowledge_base import pdf_guard
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "clean.pdf"
+            _make_clean_pdf(path)
+            before = path.read_bytes()
+            result = pdf_guard.sanitize_pdf(str(path))
+            self.assertFalse(result["modified"])
+            self.assertEqual(path.read_bytes(), before)
+
+    def _upload(self, content, filename):
+        meta = {"reportType": "internal", "category": "other", "theme": "credit",
+                "org": "固收中心", "reportDate": "2026-11-20", "titles": {}}
+        return self.client.post(
+            "/internal-knowledge-base/api/reports",
+            data={"file": (io.BytesIO(content), filename), "meta": json.dumps(meta)},
+            content_type="multipart/form-data",
+            headers={"X-CSRF-Token": "test-csrf-token"})
+
+    def test_upload_sanitizes_malicious_pdf_and_sets_headers(self):
+        self._session(user_id=self.NORMAL_USER)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "evil.pdf"
+            _make_malicious_pdf(path)
+            response = self._upload(path.read_bytes(), "恶意脚本报告.pdf")
+        self.assertEqual(response.status_code, 200)
+        body = response.get_json()
+        self.assertEqual(body["count"], 1)
+        self.assertTrue(body["reports"][0].get("sanitized"))
+        report = store.reports()[0]
+        stored = Path(routes.UPLOAD_DIR) / Path(report["fileUrl"]).name
+        self.assertTrue(stored.exists())
+        self.assertFalse(_pdf_has_active_content(stored))
+        # 在线预览出口带纵深防御响应头
+        inline = self.client.get(f"/internal-knowledge-base/api/reports/{report['id']}/file?inline=1")
+        self.assertEqual(inline.status_code, 200)
+        self.assertIn("sandbox", inline.headers.get("Content-Security-Policy", ""))
+        self.assertEqual(inline.headers.get("X-Content-Type-Options"), "nosniff")
+
+    def test_upload_rejects_unparseable_pdf(self):
+        self._session(user_id=self.NORMAL_USER)
+        response = self._upload(b"this is not a pdf at all", "假报告.pdf")
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("无法安全处理", response.get_json()["error"])
+
+    def test_admin_batch_sanitize_job(self):
+        upload_dir = Path(routes.UPLOAD_DIR)
+        upload_dir.mkdir(parents=True, exist_ok=True)
+        evil = upload_dir / f"batch-evil-{uuid.uuid4().hex[:6]}.pdf"
+        clean = upload_dir / f"batch-clean-{uuid.uuid4().hex[:6]}.pdf"
+        _make_malicious_pdf(evil)
+        _make_clean_pdf(clean)
+        clean_before = clean.read_bytes()
+        try:
+            self._admin()
+            started = self.client.post("/internal-knowledge-base/api/admin/pdf-sanitize",
+                                       headers={"X-CSRF-Token": "test-csrf-token"})
+            self.assertEqual(started.status_code, 200)
+            deadline = time.time() + 60
+            status = {}
+            while time.time() < deadline:
+                status = self.client.get("/internal-knowledge-base/api/admin/pdf-sanitize").get_json()
+                if not status.get("running"):
+                    break
+                time.sleep(0.2)
+            self.assertFalse(status.get("running"))
+            # 目录里可能有其他用例遗留的 PDF，只断言本用例的两个文件被正确处理
+            self.assertGreaterEqual(status.get("total"), 2)
+            self.assertGreaterEqual(status.get("modified"), 1)
+            self.assertFalse(_pdf_has_active_content(evil))
+            self.assertEqual(clean.read_bytes(), clean_before)
+        finally:
+            for path in (evil, clean):
+                try:
+                    path.unlink()
+                except OSError:
+                    pass
 
 
 if __name__ == "__main__":

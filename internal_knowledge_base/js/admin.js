@@ -14,8 +14,15 @@
   const { categories, themes } = window.InternalLibraryData;
 
   // ---- API ----
+  // 登录/改密/建号等携带密码字段的请求一律走 RSA-OAEP 信封（KbCrypto.seal），
+  // 密码明文不出现在网络流量中（渗透测试"传输过程信息泄漏"整改）。
+  async function sealPost(url, payload) {
+    const credential = await KbCrypto.seal(payload);
+    return apiFetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ credential }) }).then(handleJson);
+  }
   const API = {
-    login: (password) => apiFetch('/api/admin/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ password }) }).then(handleJson),
+    login: (password) => sealPost('/api/admin/login', { password }),
+    completeLoginPassword: (oldP, newP) => sealPost('/api/admin/complete-login-password', { oldPassword: oldP, newPassword: newP, confirmPassword: newP }),
     logout: () => apiFetch('/api/admin/logout', { method: 'POST', credentials: 'same-origin' }).then(handleJson),
     status: () => apiFetch('/api/admin/status', { credentials: 'same-origin' }).then(handleJson),
     stats: () => apiFetch('/api/admin/stats', { credentials: 'same-origin' }).then(handleJson),
@@ -26,21 +33,23 @@
     deleteReportPermanently: (id) => apiFetch(`/api/admin/reports/${id}`, { method: 'DELETE', credentials: 'same-origin' }).then(handleJson),
     resetScores: (id) => apiFetch(`/api/admin/reports/${id}/reset-scores`, { method: 'POST', credentials: 'same-origin' }).then(handleJson),
     users: () => apiFetch('/api/admin/users', { credentials: 'same-origin' }).then(handleJson),
-    createUser: (data) => apiFetch('/api/admin/users', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify(data) }).then(handleJson),
+    createUser: (data) => sealPost('/api/admin/users', data),
     updateUser: (id, data) => apiFetch(`/api/admin/users/${id}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify(data) }).then(handleJson),
     deleteUser: (id) => apiFetch(`/api/admin/users/${id}`, { method: 'DELETE', credentials: 'same-origin' }).then(handleJson),
     restoreUser: (id) => apiFetch(`/api/admin/users/${id}/restore`, { method: 'POST', credentials: 'same-origin' }).then(handleJson),
-    resetPassword: (id, password) => apiFetch(`/api/admin/users/${id}/reset-password`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ password }) }).then(handleJson),
+    resetPassword: (id, password) => sealPost(`/api/admin/users/${id}/reset-password`, { password }),
     clearQaHistory: (id) => apiFetch(`/api/admin/users/${id}/clear-qa-history`, { method: 'POST', credentials: 'same-origin' }).then(handleJson),
     reminderConfig: () => apiFetch('/api/admin/reminder-config', { credentials: 'same-origin' }).then(handleJson),
     saveReminderConfig: (data) => apiFetch('/api/admin/reminder-config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify(data) }).then(handleJson),
     knowledgeConfig: () => apiFetch('/api/admin/knowledge-config', { credentials: 'same-origin' }).then(handleJson),
     saveKnowledgeConfig: (data) => apiFetch('/api/admin/knowledge-config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify(data) }).then(handleJson),
-    changePassword: (data) => apiFetch('/api/admin/change-password', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify(data) }).then(handleJson),
+    changePassword: (data) => sealPost('/api/admin/change-password', data),
     pdfCache: () => apiFetch('/api/admin/pdf-cache', { credentials: 'same-origin' }).then(handleJson),
     deletePdfCache: (key) => apiFetch(`/api/admin/pdf-cache/${key}`, { method: 'DELETE', credentials: 'same-origin' }).then(handleJson),
     deleteReportPdfCache: (id) => apiFetch(`/api/admin/reports/${id}/pdf-cache`, { method: 'DELETE', credentials: 'same-origin' }).then(handleJson),
     clearPdfCache: () => apiFetch('/api/admin/pdf-cache', { method: 'DELETE', credentials: 'same-origin' }).then(handleJson),
+    startPdfSanitize: () => apiFetch('/api/admin/pdf-sanitize', { method: 'POST', credentials: 'same-origin' }).then(handleJson),
+    pdfSanitizeStatus: () => apiFetch('/api/admin/pdf-sanitize', { credentials: 'same-origin' }).then(handleJson),
   };
 
   async function handleJson(res) {
@@ -58,7 +67,9 @@
     filters: { query: '', category: '', theme: '', status: 'active' },
     reminderConfig: { period: '', reportCategory: 'deep', rules: [] },
     knowledgeConfig: { memberLimit: 10, leaderLimit: 100 },
-    pdfCache: { items: [], count: 0, totalSizeBytes: 0 }
+    pdfCache: { items: [], count: 0, totalSizeBytes: 0 },
+    pdfSanitize: null,
+    pdfSanitizeTimer: null
   };
 
   const els = {};
@@ -139,11 +150,60 @@
   }
 
   async function doLogin(password) {
-    await API.login(password);
+    const data = await API.login(password);
+    if (data && data.mustChangePassword) {
+      // 后台密码仍是历史默认密码：不放行管理会话，先强制改密
+      showAdminForcedPasswordModal(password);
+      return;
+    }
     els.loginPage.hidden = true;
     els.shell.hidden = false;
     await loadAll();
     renderView();
+  }
+
+  // 后台首登强制改密：改密成功即进入后台
+  function showAdminForcedPasswordModal(currentPassword) {
+    openModal(`<section class="modal-card">
+      ${modalHeader('安全提醒', '修改后台密码')}
+      <form id="adminForcedPwForm">
+        <div class="modal-body">
+          <div class="admin-form-note" style="margin-bottom:12px;">当前后台密码为初始默认密码，存在被冒用风险，请先设置新密码（至少 8 位、字母与数字混合）。</div>
+          <div class="form-field">
+            <label for="afpOld">当前密码</label>
+            <input id="afpOld" name="oldPassword" type="password" autocomplete="current-password" required>
+          </div>
+          <div class="form-field" style="margin-top:16px;">
+            <label for="afpNew">新密码</label>
+            <input id="afpNew" name="newPassword" type="password" autocomplete="new-password" placeholder="至少 8 位，字母与数字混合" minlength="8" required>
+          </div>
+        </div>
+        <div class="modal-footer"><button type="submit" class="btn btn-primary" id="adminForcedPwSubmit">设置新密码并进入</button></div>
+      </form>
+    </section>`);
+    const form = document.getElementById('adminForcedPwForm');
+    if (currentPassword) form.elements.oldPassword.value = currentPassword;
+    form.addEventListener('submit', async event => {
+      event.preventDefault();
+      const data = new FormData(form);
+      const oldPassword = String(data.get('oldPassword'));
+      const newPassword = String(data.get('newPassword'));
+      if (newPassword.length < 8) return notify('新密码至少需要 8 位', 'error');
+      const submit = document.getElementById('adminForcedPwSubmit');
+      submit.disabled = true;
+      try {
+        await API.completeLoginPassword(oldPassword, newPassword);
+        closeModal();
+        notify('后台密码已更新');
+        els.loginPage.hidden = true;
+        els.shell.hidden = false;
+        await loadAll();
+        renderView();
+      } catch (error) {
+        submit.disabled = false;
+        notify(error.message || '设置新密码失败，请重试', 'error');
+      }
+    });
   }
 
   async function doLogout() {
@@ -202,7 +262,15 @@
     if (state.view === 'reports') renderReports();
     else if (state.view === 'users') renderUsers();
     else if (state.view === 'reminders') renderReminderConfig();
-    else if (state.view === 'cache') renderPdfCache();
+    else if (state.view === 'cache') {
+      renderPdfCache();
+      // 进入缓存页时拉一次清洗任务状态；仍在运行则自动续接轮询
+      API.pdfSanitizeStatus().then(job => {
+        state.pdfSanitize = job;
+        if (state.view === 'cache') renderPdfCache();
+        if (job && job.running) pollPdfSanitize();
+      }).catch(() => {});
+    }
     else if (state.view === 'security') renderSecurity();
     else renderOverview();
   }
@@ -217,10 +285,18 @@
 
   function renderPdfCache() {
     const cache = state.pdfCache || { items: [], count: 0, totalSizeBytes: 0 };
+    const job = state.pdfSanitize || {};
+    const jobLine = job.running
+      ? `<div class="admin-form-note" style="margin-top:8px;">清洗进行中：${job.done || 0}/${job.total || 0}，已清洗 ${job.modified || 0} 个…</div>`
+      : (job.summary ? `<div class="admin-form-note" style="margin-top:8px;">上次清洗（${formatDateTime(job.finishedAt)}）：${escapeHTML(job.summary)}</div>` : '<div class="admin-form-note" style="margin-top:8px;">扫描并剥离存量 PDF 内嵌脚本/自动动作（渗透测试 pdf-xss 整改）；新上传的 PDF 已自动清洗。</div>');
     els.viewRoot.innerHTML = `
       <section class="admin-overview-grid">
         <div class="admin-stat-card"><span>缓存文件</span><strong>${cache.count || 0}</strong><small>不会自动过期</small></div>
         <div class="admin-stat-card"><span>占用空间</span><strong>${formatBytes(cache.totalSizeBytes)}</strong><small>PDF永久缓存</small></div>
+      </section>
+      <section class="admin-table-card">
+        <div class="admin-table-toolbar"><div style="font-weight:700;">PDF 安全清洗</div><button class="btn btn-primary" data-action="start-pdf-sanitize" ${job.running ? 'disabled' : ''}>${job.running ? '清洗进行中…' : '扫描并清洗全部 PDF'}</button></div>
+        ${jobLine}
       </section>
       <section class="admin-table-card">
         <div class="admin-table-toolbar"><div style="font-weight:700;">缓存明细</div><button class="btn btn-danger" data-action="clear-pdf-cache" ${cache.count ? '' : 'disabled'}>清空全部缓存</button></div>
@@ -229,6 +305,31 @@
           <tbody>${cache.items?.length ? cache.items.map(item => `<tr><td>${escapeHTML(item.reportTitle)}</td><td>${escapeHTML(item.fileName)}</td><td>${formatDateTime(item.generatedAt)}</td><td>${formatDateTime(item.lastAccessedAt)}</td><td>${formatBytes(item.sizeBytes)}</td><td style="text-align:right;"><button class="table-action danger" data-action="delete-pdf-cache" data-key="${item.cacheKey}">删除</button>${item.reportId ? `<button class="table-action" data-action="delete-report-pdf-cache" data-id="${item.reportId}">删除该报告缓存</button>` : ''}</td></tr>`).join('') : '<tr><td colspan="6"><div class="admin-empty"><strong>暂无PDF缓存</strong>Office文档首次预览后会生成永久缓存。</div></td></tr>'}</tbody>
         </table></div>
       </section>`;
+  }
+
+  async function startPdfSanitize() {
+    try {
+      await API.startPdfSanitize();
+      notify('清洗任务已启动');
+      pollPdfSanitize();
+    } catch (error) {
+      notify(error.message || '启动清洗失败', 'error');
+    }
+  }
+
+  async function pollPdfSanitize() {
+    if (state.pdfSanitizeTimer) clearTimeout(state.pdfSanitizeTimer);
+    try {
+      const job = await API.pdfSanitizeStatus();
+      state.pdfSanitize = job;
+    } catch (_) { /* 状态查询失败静默重试 */ }
+    if (state.view === 'cache') renderPdfCache();
+    if (state.pdfSanitize && state.pdfSanitize.running) {
+      state.pdfSanitizeTimer = setTimeout(pollPdfSanitize, 2000);
+    } else if (state.pdfSanitize && state.pdfSanitize.summary) {
+      notify(state.pdfSanitize.summary);
+      refreshPdfCache().catch(() => {});
+    }
   }
 
   function renderSecurity() {
@@ -567,7 +668,7 @@
       <td>${escapeHTML(u.name)}</td>
       <td>${escapeHTML(u.org)}</td>
       <td><span class="admin-role-tag ${escapeHTML(u.role)}">${escapeHTML(roleLabel(u.role))}</span></td>
-      <td><span class="admin-pw-status ${u.defaultPassword ? 'default' : ''}">${u.defaultPassword ? '默认密码' : '已修改'}</span></td>
+      <td><span class="admin-pw-status ${u.defaultPassword || u.mustChangePassword ? 'default' : ''}">${u.defaultPassword ? '初始密码未改' : (u.mustChangePassword ? '待改密' : '已修改')}</span></td>
       <td>
         <div class="row-actions">
           <button class="btn btn-secondary" data-action="edit-user" data-id="${u.id}">编辑</button>
@@ -592,9 +693,9 @@
             <div class="form-field"><label for="ueName">姓名 <em>*</em></label><input id="ueName" name="name" value="${escapeHTML(u.name)}" required></div>
             <div class="form-field"><label for="ueOrg">部门</label><select id="ueOrg" name="org"><option value="" ${u.org === '' ? 'selected' : ''}>（空置）</option><option value="资产配置部" ${u.org === '资产配置部' ? 'selected' : ''}>资产配置部</option><option value="固收中心" ${u.org === '固收中心' ? 'selected' : ''}>固收中心</option><option value="领导" ${u.org === '领导' ? 'selected' : ''}>领导</option><option value="行政" ${u.org === '行政' ? 'selected' : ''}>行政</option></select></div>
             <div class="form-field"><label for="ueRole">角色</label><select id="ueRole" name="role"><option value="member" ${u.role === 'member' ? 'selected' : ''}>研究人员</option><option value="leader" ${u.role === 'leader' ? 'selected' : ''}>领导</option><option value="admin" ${u.role === 'admin' ? 'selected' : ''}>行政</option></select></div>
-            ${isNew ? `<div class="form-field full"><label for="uePassword">初始密码 <span>留空则默认 123456</span></label><input id="uePassword" name="password" type="password" placeholder="123456"></div>` : ''}
+            ${isNew ? `<div class="form-field full"><label for="uePassword">初始密码 <span>留空则自动生成随机密码</span></label><input id="uePassword" name="password" type="password" placeholder="留空自动生成（至少 8 位、字母数字混合）" minlength="8" autocomplete="new-password"></div>` : ''}
           </div>
-          ${isNew ? '<div class="admin-form-note">账号建议使用姓名全拼（小写、无空格），登录后用户可自行修改密码。</div>' : '<div class="admin-form-note">账号创建后不可修改；如需重设登录密码请使用"重置密码"功能。</div>'}
+          ${isNew ? '<div class="admin-form-note">账号建议使用姓名全拼（小写、无空格）。留空初始密码时将自动生成随机密码并在创建后一次性展示，请转达用户；用户首次登录时需自行设置新密码。</div>' : '<div class="admin-form-note">账号创建后不可修改；如需重设登录密码请使用"重置密码"功能。</div>'}
         </div>
         <div class="modal-footer"><button type="button" class="btn btn-ghost" data-close="modal">取消</button><button type="submit" class="btn btn-primary">${isNew ? '创建用户' : '保存修改'}</button></div>
       </form>
@@ -620,17 +721,50 @@
         fields.id = String(data.get('id')).trim().toLowerCase().replace(/\s+/g, '');
         const pw = String(data.get('password') || '').trim();
         if (pw) fields.password = pw;
-        await API.createUser(fields);
+        const created = await API.createUser(fields);
+        await reloadUsers();
+        closeModal();
+        renderUsers();
+        if (created && created.initialPassword) {
+          // 随机初始密码仅此一次展示，请管理员及时转达用户
+          showInitialPasswordModal(created.user, created.initialPassword);
+        } else {
+          notify('用户已创建');
+        }
       } else {
         await API.updateUser(form.dataset.id, fields);
+        await reloadUsers();
+        closeModal();
+        notify('用户信息已更新');
+        renderUsers();
       }
-      await reloadUsers();
-      closeModal();
-      notify(isNew ? '用户已创建' : '用户信息已更新');
-      renderUsers();
     } catch (error) {
       notify(error.message || '保存失败', 'error');
     }
+  }
+
+  // 随机初始密码一次性展示（新建用户/恢复账号共用）
+  function showInitialPasswordModal(user, password) {
+    openModal(`<section class="modal-card">
+      ${modalHeader('初始密码', user ? user.name : '')}
+      <div class="modal-body">
+        <div class="admin-form-note" style="margin-bottom:12px;">已为 <strong>${escapeHTML(user ? user.id : '')}</strong> 生成随机初始密码，仅此一次展示，请立即转达用户；用户首次登录时需自行设置新密码。</div>
+        <div class="form-field">
+          <label for="ipValue">初始密码</label>
+          <input id="ipValue" class="text-control" readonly value="${escapeHTML(password)}" style="font-family:monospace;font-size:16px;letter-spacing:1px;">
+        </div>
+      </div>
+      <div class="modal-footer"><button type="button" class="btn btn-ghost" data-close="modal">关闭</button><button type="button" class="btn btn-primary" id="ipCopy">复制密码</button></div>
+    </section>`);
+    document.getElementById('ipCopy').addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(password);
+        notify('已复制到剪贴板');
+      } catch (_) {
+        document.getElementById('ipValue').select();
+        notify('请按 Ctrl+C 复制', 'error');
+      }
+    });
   }
 
   function showResetPasswordModal(id) {
@@ -642,9 +776,9 @@
         <div class="modal-body">
           <div class="form-field">
             <label for="rpNew">新密码 <em>*</em></label>
-            <input id="rpNew" name="password" type="password" minlength="6" placeholder="至少 6 位" required autofocus>
+            <input id="rpNew" name="password" type="password" minlength="8" placeholder="至少 8 位，字母与数字混合" required autofocus>
           </div>
-          <div class="admin-form-note">重置后用户需使用新密码登录。常用初始密码为 <strong>123456</strong>。</div>
+          <div class="admin-form-note">重置后用户需使用新密码登录，且首次登录时需再自行设置新密码。</div>
         </div>
         <div class="modal-footer"><button type="button" class="btn btn-ghost" data-close="modal">取消</button><button type="submit" class="btn btn-primary">重置密码</button></div>
       </form>
@@ -699,7 +833,7 @@
     openModal(`<section class="modal-card">
       ${modalHeader('恢复用户', u.name)}
       <div class="modal-body">
-        <div class="detail-permission"><svg viewBox="0 0 24 24" fill="none"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg><div><strong>恢复用户 ${escapeHTML(u.name)}（${escapeHTML(u.id)}）？</strong><p>恢复后该账号可重新登录，其删除期间保留的历史报告与评分记录自动重新关联。登录密码将重置为默认密码 123456，建议提醒用户尽快修改。</p></div></div>
+        <div class="detail-permission"><svg viewBox="0 0 24 24" fill="none"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg><div><strong>恢复用户 ${escapeHTML(u.name)}（${escapeHTML(u.id)}）？</strong><p>恢复后该账号可重新登录，其删除期间保留的历史报告与评分记录自动重新关联。登录密码将重置为随机初始密码（恢复后展示），用户首次登录时需自行设置新密码。</p></div></div>
       </div>
       <div class="modal-footer"><button type="button" class="btn btn-ghost" data-close="modal">取消</button><button type="button" class="btn btn-primary" data-action="confirm-restore-user" data-id="${id}">确认恢复</button></div>
     </section>`);
@@ -707,11 +841,15 @@
 
   async function confirmRestoreUser(id) {
     try {
-      await API.restoreUser(id);
+      const result = await API.restoreUser(id);
       await reloadUsers();
       closeModal();
-      notify('用户已恢复，初始密码为默认密码');
       renderUsers();
+      if (result && result.initialPassword) {
+        showInitialPasswordModal(result.user, result.initialPassword);
+      } else {
+        notify('用户已恢复');
+      }
     } catch (error) {
       notify(error.message || '恢复失败', 'error');
     }
@@ -820,6 +958,9 @@
     }
     else if (action === 'clear-pdf-cache') {
       if (window.confirm('确认清空全部PDF缓存？此操作不可撤销，后续预览将重新生成。')) API.clearPdfCache().then(refreshPdfCache).catch(error => notify(error.message, 'error'));
+    }
+    else if (action === 'start-pdf-sanitize') {
+      if (window.confirm('扫描并清洗全部存量 PDF（剥离内嵌脚本，清洗后预览缓存将重建）？大库可能耗时数分钟。')) startPdfSanitize();
     }
   }
 

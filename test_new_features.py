@@ -4,11 +4,15 @@
 用法（测试实例需已在 5090 端口运行）：
     D:/Python312/python.exe test_new_features.py
 """
+import base64
 import io
 import json
 import re
 import sys
 import urllib.request
+
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric import padding as asym_padding, rsa
 
 BASE = "http://127.0.0.1:5090"
 KB = BASE + "/internal-knowledge-base"
@@ -65,14 +69,47 @@ def portal_login(client):
     client.post_form(BASE + "/login", {"password": "test2026"})
 
 
+def seal_credential(client, payload):
+    """模拟前端 RSA-OAEP 信封：登录接口不再接受明文密码。"""
+    status, raw = client.get(KB + "/api/auth-challenge")
+    challenge = json.loads(raw)
+    pub = challenge["publicKey"]
+    public_key = rsa.RSAPublicNumbers(int(pub["e"], 16), int(pub["n"], 16)).public_key()
+    message = json.dumps(dict(payload, nonce=challenge["nonce"]), ensure_ascii=False).encode("utf-8")
+    ciphertext = public_key.encrypt(
+        message,
+        asym_padding.OAEP(mgf=asym_padding.MGF1(algorithm=hashes.SHA256()),
+                          algorithm=hashes.SHA256(), label=None))
+    return {"credential": base64.b64encode(ciphertext).decode("ascii")}
+
+
+# 本次运行内生效的密码（强制改密后更新，避免二跑仍用旧密码）
+EFFECTIVE_PASSWORD = {"value": PASSWORD}
+
+
 def kb_login(client, username):
     # 先 GET 一次页面：建立 KB session 并取得 CSRF token
     client.csrf = csrf_of(client)
+    password = EFFECTIVE_PASSWORD["value"]
     status, raw = client.request(KB + "/api/login", "POST",
-                                 {"username": username, "password": PASSWORD},
+                                 seal_credential(client, {"username": username, "password": password}),
                                  {"Content-Type": "application/json",
                                   "X-CSRF-Token": client.csrf})
     data = json.loads(raw)
+    if data.get("mustChangePassword"):
+        # 测试实例账号仍在初始密码/被重置状态：完成强制改密再进入。
+        # 旧密码候选：当前生效密码与历史默认密码各试一次。
+        for old_candidate in dict.fromkeys([password, "123456"]):
+            status, raw = client.request(KB + "/api/complete-login-password", "POST",
+                                         seal_credential(client, {"oldPassword": old_candidate,
+                                                                  "newPassword": password + "x"}),
+                                         {"Content-Type": "application/json",
+                                          "X-CSRF-Token": client.csrf})
+            data = json.loads(raw)
+            if data.get("user"):
+                EFFECTIVE_PASSWORD["value"] = password + "x"
+                return data["user"]
+        raise AssertionError(f"KB complete-login failed: {raw}")
     assert data.get("user"), f"KB login failed: {raw}"
     return data["user"]
 

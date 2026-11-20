@@ -312,27 +312,32 @@ class SQLiteStore:
 
     @staticmethod
     def _ensure_users_columns(conn: sqlite3.Connection) -> None:
-        """为 users 表补充软删除标记列（幂等）。
+        """为 users 表补充软删除标记与强制改密标记列（幂等）。
 
         删除用户改为软删除：评分/点赞/浏览等历史记录靠外键关联用户行，
         物理删除会级联清掉这些数据，因此删除只打标记、行保留，姓名可继续解析。
+        must_change_password：密码重置/仍用默认密码的用户登录后必须先改密，
+        未改密前不发放正式会话（渗透测试"密码复用/批量接管"整改）。
         """
         columns = {row["name"] for row in conn.execute("PRAGMA table_info(users)")}
         if not columns:
             return
         if "deleted_at" not in columns:
             conn.execute("ALTER TABLE users ADD COLUMN deleted_at TEXT")
+        if "must_change_password" not in columns:
+            conn.execute("ALTER TABLE users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0")
 
     # Users
     def users(self, include_deleted=False):
-        sql = "SELECT id,name,org,role,password_hash,deleted_at FROM users"
+        sql = "SELECT id,name,org,role,password_hash,deleted_at,must_change_password FROM users"
         if not include_deleted:
             sql += " WHERE deleted_at IS NULL"
         with self.connect() as conn:
             return [dict(row) for row in conn.execute(sql + " ORDER BY id")]
 
     def get_user(self, uid, include_deleted=False):
-        sql = "SELECT id,name,org,role,password_hash,deleted_at FROM users WHERE id=?"
+        sql = ("SELECT id,name,org,role,password_hash,deleted_at,must_change_password "
+               "FROM users WHERE id=?")
         if not include_deleted:
             sql += " AND deleted_at IS NULL"
         with self.connect() as conn:
@@ -355,7 +360,7 @@ class SQLiteStore:
             return False
 
     def update_user(self, uid, fields):
-        allowed = {"name", "org", "role", "password_hash"}
+        allowed = {"name", "org", "role", "password_hash", "must_change_password"}
         clean = {key: value for key, value in fields.items() if key in allowed}
         if clean:
             assignments = ",".join(f"{key}=?" for key in clean)
@@ -682,6 +687,13 @@ class SQLiteStore:
 
     def set_admin_password_hash(self, password_hash):
         self._set_setting("admin_password_hash", password_hash)
+
+    # 登录凭据传输加密：RSA 私钥持久化（见 internal_knowledge_base/auth_crypto.py）
+    def get_auth_setting(self, key, fallback=None):
+        return self._get_setting(key, fallback)
+
+    def set_auth_setting(self, key, value):
+        self._set_setting(key, value)
 
     # Permanent PDF cache index
     def get_pdf_cache(self, cache_key):

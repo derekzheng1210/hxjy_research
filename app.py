@@ -111,11 +111,32 @@ INSTITUTION_FLOW_CACHE = institution_flow_config.RATE_CURVES_CACHE
 MAPPING_FILE = CONFIG_DIR / "映射表.xlsx"
 
 app = Flask(__name__)
-app.secret_key = os.environ.get("SECRET_KEY", "dev-secret-change-before-deploy")
+# 会话密钥（渗透测试加固项）：环境变量优先；未设置时从 config/secret_key.txt
+# 加载，文件不存在则生成强随机密钥并持久化。此前回退到代码内置默认值，
+# 任何拿到源码的人都可离线伪造会话 Cookie。仅文件系统不可写时退回内置默认值。
+_secret_key_file = CONFIG_DIR / "secret_key.txt"
+if os.environ.get("SECRET_KEY"):
+    app.secret_key = os.environ["SECRET_KEY"]
+else:
+    try:
+        app.secret_key = _secret_key_file.read_text(encoding="utf-8").strip() if _secret_key_file.exists() else ""
+        if not app.secret_key:
+            raise ValueError("secret_key.txt 为空")
+    except Exception:
+        import secrets as _secrets
+        app.secret_key = _secrets.token_urlsafe(48)
+        try:
+            _secret_key_file.parent.mkdir(parents=True, exist_ok=True)
+            _secret_key_file.write_text(app.secret_key, encoding="utf-8")
+        except OSError:
+            pass
+# 会话 Cookie 加固：SameSite=Lax 阻断跨站携带、HttpOnly 防 JS 读取（Flask 默认，
+# 显式声明）。HTTPS 部署后可再补 SESSION_COOKIE_SECURE。
+app.config.update(SESSION_COOKIE_SAMESITE="Lax", SESSION_COOKIE_HTTPONLY=True)
 
 # 未显式配置敏感项时在启动日志中提醒，避免默认值被带到公网部署
 for _warn_var, _warn_default in (
-    ("SECRET_KEY", app.secret_key),
+    ("SECRET_KEY", os.environ.get("SECRET_KEY")),
     ("SITE_PASSWORD", os.environ.get("SITE_PASSWORD")),
     ("ADMIN_PASSWORD", os.environ.get("ADMIN_PASSWORD")),
     ("INSTITUTION_FLOW_UPSTREAM", os.environ.get("INSTITUTION_FLOW_UPSTREAM")),
@@ -171,7 +192,37 @@ def site_password():
 
 
 def admin_password():
-    return os.environ.get("ADMIN_PASSWORD", "123456")
+    """门户后台上传密码（渗透测试"密码复用"命中入口：默认 123456）。
+
+    环境变量优先；未设置时从 config/admin_password.txt 加载，文件不存在则
+    生成随机密码并持久化（去掉代码里的弱默认值）。忘记密码时删除该文件
+    重启即可重新生成。
+    """
+    env_password = os.environ.get("ADMIN_PASSWORD")
+    if env_password:
+        return env_password
+    password_file = CONFIG_DIR / "admin_password.txt"
+    try:
+        cached = admin_password._cached
+    except AttributeError:
+        cached = None
+    if cached:
+        return cached
+    try:
+        password = password_file.read_text(encoding="utf-8").strip() if password_file.exists() else ""
+        if not password:
+            raise ValueError("admin_password.txt 为空")
+    except Exception:
+        import secrets as _secrets
+        password = _secrets.token_urlsafe(12)
+        try:
+            password_file.parent.mkdir(parents=True, exist_ok=True)
+            password_file.write_text(password, encoding="utf-8")
+            print(f"[安全加固] 门户后台上传密码未配置，已生成随机密码并保存到 {password_file}")
+        except OSError:
+            pass
+    admin_password._cached = password
+    return password
 
 
 def safe_next_path(value, fallback=None):

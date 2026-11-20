@@ -33,6 +33,7 @@ from openpyxl.utils import get_column_letter
 from paths import (INTERNAL_KNOWLEDGE_BASE_DIR, INTERNAL_KNOWLEDGE_BASE_DB,
                    INTERNAL_KNOWLEDGE_BASE_UPLOADS, INTERNAL_KNOWLEDGE_BASE_PDF_CACHE,
                    INTERNAL_KNOWLEDGE_BASE_TEMP)
+from . import auth_crypto, pdf_guard
 from .storage import SQLiteStore
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -49,7 +50,43 @@ CST = timezone(timedelta(hours=8))
 CONVERTIBLE_EXTS = {".pptx", ".ppt", ".doc", ".docx", ".xls", ".xlsx"}
 ALLOWED_UPLOAD_EXTS = {".pdf", ".ppt", ".pptx", ".doc", ".docx", ".xls", ".xlsx"}
 MAX_UPLOAD_SIZE = 100 * 1024 * 1024
-DEFAULT_USER_PASSWORD = "123456"
+
+# 历史默认密码（渗透测试"密码硬编码/密码复用"整改）：
+# 仅用于识别"仍在使用初始默认密码"的存量账号，登录时强制先改密；
+# 不再作为任何新建/重置/恢复账号的初始密码——新初始密码一律随机生成。
+LEGACY_DEFAULT_PASSWORD = "123456"
+
+# 随机初始密码字符集：去掉易混淆的 0/O/1/l/I，便于管理员口头/文字转达
+_INITIAL_PW_ALPHABET = "23456789abcdefghjkmnpqrstuvwxyz"
+
+
+def generate_initial_password(length=10):
+    return "".join(secrets.choice(_INITIAL_PW_ALPHABET) for _ in range(length))
+
+
+def validate_new_password(new_pw, uid="", old_pw=""):
+    """密码策略（渗透测试整改后收紧）：至少 8 位、非纯数字、不与账号/当前密码/历史默认密码相同。"""
+    new_pw = str(new_pw or "")
+    if len(new_pw) < 8:
+        return "新密码至少需要 8 位"
+    if new_pw.isdigit():
+        return "新密码不能为纯数字，请混合字母与数字"
+    if uid and new_pw == uid:
+        return "新密码不能与账号相同"
+    if new_pw == LEGACY_DEFAULT_PASSWORD:
+        return "新密码不能使用初始默认密码"
+    if old_pw and new_pw == old_pw:
+        return "新密码不能与当前密码相同"
+    return ""
+
+
+# 存量 PDF 清洗后台任务状态（见 /api/admin/pdf-sanitize）
+_pdf_sanitize_lock = threading.Lock()
+_pdf_sanitize_job = {
+    "running": False, "startedAt": "", "finishedAt": "",
+    "total": 0, "done": 0, "modified": 0, "failed": 0,
+    "errors": [], "summary": "",
+}
 
 # 报告主题分类（与前端 js/data.js 中 REPORT_THEMES 保持一致）
 REPORT_THEMES = (
@@ -259,6 +296,8 @@ def _schedule_preview_cleanup(path):
 
 def _send_temporary_pdf(pdf_path, work_dir):
     response = send_file(pdf_path, mimetype="application/pdf", as_attachment=False)
+    response.headers["Content-Security-Policy"] = "sandbox allow-same-origin"
+    response.headers["X-Content-Type-Options"] = "nosniff"
     response.call_on_close(lambda: _remove_preview_artifacts(work_dir, retries=1, retry_delay=0))
     _schedule_preview_cleanup(work_dir)
     return response
@@ -1575,6 +1614,21 @@ def json_error(message, code=400):
     return jsonify({"error": message}), code
 
 
+def _pdf_response(path, download_name=None, inline=True):
+    """在线预览 PDF 的统一出口：叠加 CSP sandbox / nosniff 纵深防御头（pdf-xss 整改）。
+
+    浏览器内置 PDF 查看器对内嵌脚本的执行不完全受页面 CSP 约束，文件层
+    清洗（pdf_guard）是主防线，此处响应头是第二道保险。
+    """
+    kwargs = {"mimetype": "application/pdf", "as_attachment": not inline}
+    if download_name:
+        kwargs["download_name"] = download_name
+    response = send_file(path, **kwargs)
+    response.headers["Content-Security-Policy"] = "sandbox allow-same-origin"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    return response
+
+
 # --------------------------------------------------------------------------- #
 # 静态文件 & 入口路由
 # --------------------------------------------------------------------------- #
@@ -1622,21 +1676,103 @@ def static_files(path):
 # --------------------------------------------------------------------------- #
 # 普通用户认证 API
 # --------------------------------------------------------------------------- #
+@app.route("/api/auth-challenge", methods=["GET"])
+def api_auth_challenge():
+    """登录/改密信封的一次性挑战：nonce + RSA 公钥（见 auth_crypto.py）。"""
+    try:
+        auth_crypto.ensure_key(store)
+    except Exception:
+        current_app.logger.exception("登录加密通道初始化失败")
+        return json_error("安全通道初始化失败，请稍后重试", 503)
+    return jsonify({
+        "nonce": auth_crypto.issue_nonce(session),
+        "expiresInSeconds": auth_crypto.NONCE_TTL_SECONDS,
+        "publicKey": auth_crypto.public_key_hex(),
+        "alg": "RSA-OAEP-256",
+    })
+
+
+def _open_credential(data):
+    """解开封装密码字段的 RSA 信封并消费一次性 nonce。
+
+    返回 (payload, None) 或 (None, error_response)。密码字段从此不再以
+    明文出现在请求体中（渗透测试"传输过程信息泄漏"整改）。
+    """
+    credential = str((data or {}).get("credential", ""))
+    if not credential:
+        return None, json_error("缺少加密凭据，请刷新页面后重试", 400)
+    try:
+        auth_crypto.ensure_key(store)
+        payload = auth_crypto.decrypt_credential(credential)
+    except ValueError:
+        return None, json_error("凭据解密失败，请刷新页面后重试", 400)
+    except Exception:
+        current_app.logger.exception("登录信封解密异常")
+        return None, json_error("凭据解密失败，请刷新页面后重试", 400)
+    nonce = str(payload.get("nonce", ""))
+    if not nonce or not auth_crypto.consume_nonce(session, nonce):
+        return None, json_error("请求已超时或已提交，请重新输入后重试", 400)
+    return payload, None
+
+
+def _password_needs_change(user, presented_password=""):
+    """命中历史默认密码或带有强制改密标记时，登录不放行正式会话。"""
+    if user.get("must_change_password"):
+        return True
+    return bool(presented_password) and presented_password == LEGACY_DEFAULT_PASSWORD
+
+
 @app.route("/api/login", methods=["POST"])
 def api_login():
     data = request.get_json(silent=True) or {}
-    username = data.get("username", "")
-    password = data.get("password", "")
+    payload, error = _open_credential(data)
+    if error:
+        return error
+    username = str(payload.get("username", ""))[:64]
+    password = str(payload.get("password", ""))[:128]
     user = store.find_user_by_login(username)
     if not user or not check_password_hash(user.get("password_hash", ""), password):
         return json_error("账号或密码不正确", 401)
+    if _password_needs_change(user, password):
+        # 仍在使用初始默认密码（或被管理员重置过）：不发放正式会话，
+        # 前端直接进入强制改密流程，改密成功后才会建立会话。
+        session["internal_knowledge_base_pending_user_id"] = user["id"]
+        return jsonify({"mustChangePassword": True, "user": public_user(user)})
+    session.pop("internal_knowledge_base_pending_user_id", None)
     session["internal_knowledge_base_user_id"] = user["id"]
     return jsonify({"user": public_user(user)})
+
+
+@app.route("/api/complete-login-password", methods=["POST"])
+def api_complete_login_password():
+    """强制改密流程的提交端：校验旧密码（默认密码）→ 设置新密码 → 建立会话。"""
+    data = request.get_json(silent=True) or {}
+    payload, error = _open_credential(data)
+    if error:
+        return error
+    pending_id = session.get("internal_knowledge_base_pending_user_id")
+    user = store.get_user(pending_id) if pending_id else None
+    old_password = str(payload.get("oldPassword", ""))[:128]
+    new_password = str(payload.get("newPassword", ""))[:128]
+    confirm_password = str(payload.get("confirmPassword", ""))[:128]
+    if not user or not check_password_hash(user.get("password_hash", ""), old_password):
+        return json_error("当前密码不正确，请重新登录", 401)
+    if confirm_password and new_password != confirm_password:
+        return json_error("两次输入的新密码不一致", 400)
+    invalid = validate_new_password(new_password, uid=user["id"], old_pw=old_password)
+    if invalid:
+        return json_error(invalid, 400)
+    store.update_user(user["id"], {"password_hash": generate_password_hash(new_password),
+                                   "must_change_password": 0})
+    session.pop("internal_knowledge_base_pending_user_id", None)
+    session["internal_knowledge_base_user_id"] = user["id"]
+    return jsonify({"user": public_user(store.get_user(user["id"]))})
 
 
 @app.route("/api/logout", methods=["POST"])
 def api_logout():
     session.pop("internal_knowledge_base_user_id", None)
+    session.pop("internal_knowledge_base_pending_user_id", None)
     return jsonify({"ok": True})
 
 
@@ -1654,15 +1790,18 @@ def api_change_password():
     if not user:
         return json_error("未登录", 401)
     data = request.get_json(silent=True) or {}
-    old_pw = data.get("oldPassword", "")
-    new_pw = data.get("newPassword", "")
+    payload, error = _open_credential(data)
+    if error:
+        return error
+    old_pw = str(payload.get("oldPassword", ""))[:128]
+    new_pw = str(payload.get("newPassword", ""))[:128]
     if not check_password_hash(user.get("password_hash", ""), old_pw):
         return json_error("当前密码不正确", 400)
-    if len(new_pw) < 6:
-        return json_error("新密码至少需要 6 位", 400)
-    if new_pw == old_pw:
-        return json_error("新密码不能与当前密码相同", 400)
-    store.update_user(user["id"], {"password_hash": generate_password_hash(new_pw)})
+    invalid = validate_new_password(new_pw, uid=user["id"], old_pw=old_pw)
+    if invalid:
+        return json_error(invalid, 400)
+    store.update_user(user["id"], {"password_hash": generate_password_hash(new_pw),
+                                   "must_change_password": 0})
     return jsonify({"ok": True})
 
 
@@ -1864,6 +2003,27 @@ def api_reports_upload(report_scope=None):
         save_path = os.path.join(UPLOAD_DIR, save_name)
         f.save(save_path)
 
+        # PDF 活跃内容清洗（pdf-xss 整改）：入库前剥离内嵌 JavaScript 与自动
+        # 执行动作；无法安全解析的 PDF 直接拒绝。文件内容可能变化，展示用
+        # 大小按清洗后的实际文件重算（查重哈希仍按上传原始字节，保持同文件
+        # 重复上传的拦截语义不变）。
+        sanitized = False
+        if ext == ".pdf":
+            try:
+                sanitize_result = pdf_guard.sanitize_pdf(save_path)
+                sanitized = bool(sanitize_result["modified"])
+                if sanitized:
+                    current_app.logger.warning(
+                        "上传 PDF 已清洗内嵌脚本 %s: %s", original,
+                        "; ".join(sanitize_result["removed"][:10]))
+                    size = os.path.getsize(save_path)
+            except pdf_guard.PdfGuardError as exc:
+                try:
+                    os.remove(save_path)
+                except OSError:
+                    pass
+                return json_error(f"文件 {original} 无法安全处理：{exc}", 400)
+
         title = (titles.get(original) or "").strip() or os.path.splitext(original)[0]
         # 一键上传未携带关联时，按报告信息自动匹配路演安排（失败留空，不阻断上传）
         if report_type == "roadshow" and not roadshow_schedule_id:
@@ -1914,7 +2074,8 @@ def api_reports_upload(report_scope=None):
 
     if not created:
         return json_error("没有有效的文件被上传", 400)
-    return jsonify({"reports": [public_report(r) for r in created], "count": len(created)})
+    return jsonify({"reports": [dict(public_report(r), sanitized=sanitized) for r in created],
+                    "count": len(created)})
 
 
 @app.route("/api/reports/ai-complete", methods=["POST"])
@@ -2093,7 +2254,9 @@ def api_report_file(rid):
         return json_error("文件不存在", 404)
     # inline=1 供 iframe 在线查看流式加载，不触发下载；默认仍为附件下载
     inline = request.args.get("inline") == "1"
-    return send_file(full, as_attachment=not inline,
+    if inline:
+        return _pdf_response(full, download_name=report.get("fileName") or os.path.basename(full))
+    return send_file(full, as_attachment=True,
                      download_name=report.get("fileName") or os.path.basename(full))
 
 
@@ -3475,14 +3638,14 @@ def api_preview():
 
             ext = os.path.splitext(file_path)[1].lower()
             if ext == ".pdf":
-                return send_file(file_path, mimetype="application/pdf")
+                return _pdf_response(file_path)
             if ext not in CONVERTIBLE_EXTS:
                 return json_error(f"不支持的格式: {ext}", 400)
 
             # 永久缓存命中时直接复用。
             cached_pdf = _get_cached_pdf(file_path)
             if cached_pdf:
-                return send_file(cached_pdf, mimetype="application/pdf")
+                return _pdf_response(cached_pdf)
 
             work_dir = _make_preview_work_dir()
             try:
@@ -3492,7 +3655,7 @@ def api_preview():
                 if cached_pdf:
                     # 源 PDF 已 move 到缓存目录，直接发送缓存文件；清理临时工作目录
                     _remove_preview_artifacts(work_dir, retries=1, retry_delay=0)
-                    return send_file(cached_pdf, mimetype="application/pdf")
+                    return _pdf_response(cached_pdf)
                 # 落盘失败则回退到一次性发送
                 return _send_temporary_pdf(pdf_path, work_dir)
             except Exception:
@@ -3507,8 +3670,17 @@ def api_preview():
             original_name = uploaded.filename or "upload"
             ext = os.path.splitext(original_name)[1].lower()
             if ext == ".pdf":
-                return send_file(uploaded.stream, mimetype="application/pdf",
-                                 as_attachment=False)
+                # 上传前预览的 PDF 同样过清洗（渗透复现路径之一：
+                # "上传新报告"弹窗内预览恶意 PDF 触发脚本）
+                work_dir = _make_preview_work_dir()
+                tmp_path = os.path.join(work_dir, "source.pdf")
+                uploaded.save(tmp_path)
+                try:
+                    pdf_guard.sanitize_pdf(tmp_path)
+                except pdf_guard.PdfGuardError as exc:
+                    _remove_preview_artifacts(work_dir, retries=1, retry_delay=0)
+                    return json_error(f"文件无法安全处理：{exc}", 400)
+                return _send_temporary_pdf(tmp_path, work_dir)
             if ext not in CONVERTIBLE_EXTS:
                 return json_error(f"不支持的格式: {ext}", 400)
 
@@ -3522,14 +3694,14 @@ def api_preview():
                 cached_pdf = _get_cached_pdf(source_path)
                 if cached_pdf:
                     _remove_preview_artifacts(work_dir, retries=1, retry_delay=0)
-                    return send_file(cached_pdf, mimetype="application/pdf")
+                    return _pdf_response(cached_pdf)
             pdf_path = convert_to_pdf(tmp_path, work_dir)
             if report and report_file_path(report):
                 source_path = report_file_path(report)
                 cached_pdf = _store_cached_pdf(pdf_path, source_path, report_id)
                 if cached_pdf:
                     _remove_preview_artifacts(work_dir, retries=1, retry_delay=0)
-                    return send_file(cached_pdf, mimetype="application/pdf")
+                    return _pdf_response(cached_pdf)
             return _send_temporary_pdf(pdf_path, work_dir)
 
     except subprocess.TimeoutExpired:
@@ -3548,12 +3720,46 @@ def api_preview():
 @app.route("/api/admin/login", methods=["POST"])
 def api_admin_login():
     data = request.get_json(silent=True) or {}
-    password = data.get("password", "")
+    payload, error = _open_credential(data)
+    if error:
+        return error
+    password = str(payload.get("password", ""))[:128]
     password_hash = store.admin_password_hash()
     if not password_hash:
         return json_error("后台管理员密码尚未初始化，请先执行账号迁移", 503)
     if not check_password_hash(password_hash, password):
         return json_error("后台密码不正确", 401)
+    if password == LEGACY_DEFAULT_PASSWORD:
+        # 后台密码仍是历史默认密码：不放行管理会话，强制先改密
+        session["internal_knowledge_base_pending_superadmin"] = True
+        return jsonify({"ok": False, "mustChangePassword": True})
+    session.pop("internal_knowledge_base_pending_superadmin", None)
+    session["internal_knowledge_base_superadmin"] = True
+    return jsonify({"ok": True})
+
+
+@app.route("/api/admin/complete-login-password", methods=["POST"])
+def api_admin_complete_login_password():
+    """后台密码仍为历史默认密码时的强制改密端点，改密成功即建立管理会话。"""
+    data = request.get_json(silent=True) or {}
+    payload, error = _open_credential(data)
+    if error:
+        return error
+    if not session.get("internal_knowledge_base_pending_superadmin"):
+        return json_error("请先登录后台", 401)
+    old_password = str(payload.get("oldPassword", ""))[:128]
+    new_password = str(payload.get("newPassword", ""))[:128]
+    confirm_password = str(payload.get("confirmPassword", ""))[:128]
+    current_hash = store.admin_password_hash() or ""
+    if not check_password_hash(current_hash, old_password):
+        return json_error("当前密码不正确", 401)
+    if confirm_password and new_password != confirm_password:
+        return json_error("两次输入的新密码不一致", 400)
+    invalid = validate_new_password(new_password, uid="admin", old_pw=old_password)
+    if invalid:
+        return json_error(invalid, 400)
+    store.set_admin_password_hash(generate_password_hash(new_password))
+    session.pop("internal_knowledge_base_pending_superadmin", None)
     session["internal_knowledge_base_superadmin"] = True
     return jsonify({"ok": True})
 
@@ -3561,6 +3767,7 @@ def api_admin_login():
 @app.route("/api/admin/logout", methods=["POST"])
 def api_admin_logout():
     session.pop("internal_knowledge_base_superadmin", None)
+    session.pop("internal_knowledge_base_pending_superadmin", None)
     return jsonify({"ok": True})
 
 
@@ -3618,18 +3825,20 @@ def api_admin_change_password():
     if not require_admin():
         return json_error("未登录后台", 401)
     data = request.get_json(silent=True) or {}
-    old_password = str(data.get("oldPassword", ""))
-    new_password = str(data.get("newPassword", ""))
-    confirm_password = str(data.get("confirmPassword", ""))
+    payload, error = _open_credential(data)
+    if error:
+        return error
+    old_password = str(payload.get("oldPassword", ""))[:128]
+    new_password = str(payload.get("newPassword", ""))[:128]
+    confirm_password = str(payload.get("confirmPassword", ""))[:128]
     current_hash = store.admin_password_hash() or ""
     if not check_password_hash(current_hash, old_password):
         return json_error("当前管理员密码不正确", 400)
-    if len(new_password) < 8:
-        return json_error("新密码至少需要8位", 400)
-    if new_password != confirm_password:
+    if confirm_password and new_password != confirm_password:
         return json_error("两次输入的新密码不一致", 400)
-    if new_password == old_password:
-        return json_error("新密码不能与当前密码相同", 400)
+    invalid = validate_new_password(new_password, uid="admin", old_pw=old_password)
+    if invalid:
+        return json_error(invalid, 400)
     store.set_admin_password_hash(generate_password_hash(new_password))
     return jsonify({"ok": True})
 
@@ -3745,7 +3954,9 @@ def api_admin_users():
     for u in store.users(include_deleted=True):
         item = {
             "id": u["id"], "name": u["name"], "org": u["org"], "role": u["role"],
-            "defaultPassword": check_password_hash(u.get("password_hash", ""), DEFAULT_USER_PASSWORD),
+            # 仅管理员可见的存量治理标记：是否仍在使用历史默认密码/待改密
+            "defaultPassword": check_password_hash(u.get("password_hash", ""), LEGACY_DEFAULT_PASSWORD),
+            "mustChangePassword": bool(u.get("must_change_password")),
         }
         if u.get("deleted_at"):
             item["deletedAt"] = u["deleted_at"]
@@ -3761,11 +3972,24 @@ def api_admin_user_create():
     if not require_admin():
         return json_error("未登录后台", 401)
     data = request.get_json(silent=True) or {}
-    uid = (data.get("id") or "").strip().lower().replace(" ", "")
-    name = (data.get("name") or "").strip()
-    org = (data.get("org") or "").strip()
-    role = (data.get("role") or "").strip()
-    password = (data.get("password") or "").strip() or DEFAULT_USER_PASSWORD
+    payload, error = _open_credential(data)
+    if error:
+        return error
+    uid = str(payload.get("id", "")).strip().lower().replace(" ", "")[:64]
+    name = str(payload.get("name", "")).strip()[:64]
+    org = str(payload.get("org", "")).strip()
+    role = str(payload.get("role", "")).strip()
+    password = str(payload.get("password", "")).strip()[:128]
+    generated = False
+    if password:
+        invalid = validate_new_password(password, uid=uid)
+        if invalid:
+            return json_error(f"初始密码不符合要求：{invalid}", 400)
+    else:
+        # 不再使用统一默认密码（密码复用整改）：留空即随机生成，
+        # 仅在本响应中一次性返回，由管理员转达用户。
+        password = generate_initial_password()
+        generated = True
     if not uid or not name:
         return json_error("账号和姓名必填", 400)
     if not re.match(r"^[a-z0-9_.-]+$", uid):
@@ -3783,7 +4007,11 @@ def api_admin_user_create():
     user = {"id": uid, "name": name, "org": org, "role": role,
             "password_hash": generate_password_hash(password)}
     store.add_user(user)
-    return jsonify({"ok": True, "user": public_user(user)})
+    store.update_user(uid, {"must_change_password": 1})
+    response = {"ok": True, "user": public_user(store.get_user(uid)), "mustChangePassword": True}
+    if generated:
+        response["initialPassword"] = password
+    return jsonify(response)
 
 
 @app.route("/api/admin/users/<uid>", methods=["POST", "PUT"])
@@ -3822,7 +4050,7 @@ def api_admin_user_delete(uid):
 @app.route("/api/admin/users/<uid>/restore", methods=["POST"])
 def api_admin_user_restore(uid):
     """恢复已删除用户。历史数据本就保留，恢复只是重新允许登录；
-    密码同时重置为默认密码，避免删除前的旧密码悄然生效。"""
+    密码同时重置为随机初始密码（不再用统一默认密码），并要求首登改密。"""
     if not require_admin():
         return json_error("未登录后台", 401)
     existing = store.get_user(uid, include_deleted=True)
@@ -3830,8 +4058,11 @@ def api_admin_user_restore(uid):
         return json_error("用户不存在", 404)
     if not existing.get("deleted_at"):
         return json_error("该用户未被删除", 400)
-    store.restore_user(uid, generate_password_hash(DEFAULT_USER_PASSWORD))
-    return jsonify({"ok": True, "user": public_user(store.get_user(uid, include_deleted=True))})
+    initial_password = generate_initial_password()
+    store.restore_user(uid, generate_password_hash(initial_password))
+    store.update_user(uid, {"must_change_password": 1})
+    return jsonify({"ok": True, "user": public_user(store.get_user(uid, include_deleted=True)),
+                    "initialPassword": initial_password, "mustChangePassword": True})
 
 
 @app.route("/api/admin/users/<uid>/reset-password", methods=["POST"])
@@ -3842,13 +4073,95 @@ def api_admin_user_reset_password(uid):
     if not user:
         return json_error("用户不存在", 404)
     data = request.get_json(silent=True) or {}
-    password = (data.get("password") or "").strip()
+    payload, error = _open_credential(data)
+    if error:
+        return error
+    password = str(payload.get("password", "")).strip()[:128]
     if not password:
         return json_error("请输入新密码", 400)
-    if len(password) < 6:
-        return json_error("密码至少 6 位", 400)
-    store.update_user(uid, {"password_hash": generate_password_hash(password)})
+    invalid = validate_new_password(password, uid=uid)
+    if invalid:
+        return json_error(invalid, 400)
+    # 管理员重置后用户首登仍需自行改密，避免管理员设置的密码长期流通
+    store.update_user(uid, {"password_hash": generate_password_hash(password),
+                            "must_change_password": 1})
     return jsonify({"ok": True})
+
+
+@app.route("/api/admin/pdf-sanitize", methods=["POST", "GET"])
+def api_admin_pdf_sanitize():
+    """存量 PDF 活跃内容批量清洗（pdf-xss 整改）。
+
+    POST 启动后台任务（重复启动 409），GET 查询进度/结果。任务遍历上传
+    目录全部 PDF，剥离内嵌脚本后原地重写，完成后清空永久预览缓存
+    （源文件变化会使缓存键失效，直接全量重建最省心）。
+    """
+    if not require_admin():
+        return json_error("未登录后台", 401)
+    if request.method == "GET":
+        with _pdf_sanitize_lock:
+            state = dict(_pdf_sanitize_job)
+            state["errors"] = list(_pdf_sanitize_job["errors"][:50])
+        return jsonify(state)
+    with _pdf_sanitize_lock:
+        if _pdf_sanitize_job["running"]:
+            return json_error("清洗任务正在进行中，请稍后查询进度", 409)
+        _pdf_sanitize_job.update(
+            running=True, startedAt=_now_iso(), finishedAt="", total=0, done=0,
+            modified=0, failed=0, errors=[], summary="")
+    # 后台线程无请求上下文，捕获 app 对象供线程内日志使用
+    flask_app = current_app._get_current_object()
+    thread = threading.Thread(target=_run_pdf_sanitize_job, args=(flask_app,),
+                              daemon=True, name="kb-pdf-sanitize")
+    thread.start()
+    return jsonify({"ok": True, "started": True})
+
+
+def _run_pdf_sanitize_job(flask_app):
+    try:
+        with flask_app.app_context():
+            pdf_paths = sorted(Path(UPLOAD_DIR).rglob("*.pdf")) if os.path.isdir(UPLOAD_DIR) else []
+            modified = failed = 0
+            errors = []
+            with _pdf_sanitize_lock:
+                _pdf_sanitize_job["total"] = len(pdf_paths)
+            for path in pdf_paths:
+                try:
+                    result = pdf_guard.sanitize_pdf(str(path))
+                    if result["modified"]:
+                        modified += 1
+                        current_app.logger.warning(
+                            "存量 PDF 已清洗内嵌脚本 %s: %s", path.name,
+                            "; ".join(result["removed"][:10]))
+                except pdf_guard.PdfGuardError as exc:
+                    failed += 1
+                    errors.append({"file": path.name, "error": str(exc)[:200]})
+                except Exception as exc:
+                    failed += 1
+                    errors.append({"file": path.name, "error": f"清洗异常: {exc}"[:200]})
+                with _pdf_sanitize_lock:
+                    _pdf_sanitize_job["done"] += 1
+                    _pdf_sanitize_job["modified"] = modified
+                    _pdf_sanitize_job["failed"] = failed
+                    _pdf_sanitize_job["errors"] = errors
+            # 源文件可能已变化：清空全部预览缓存，后续预览按新内容重建
+            deleted_caches = 0
+            try:
+                deleted_caches = _delete_cache_files(store.clear_pdf_caches())
+            except Exception:
+                current_app.logger.exception("清洗后清理预览缓存失败")
+            summary = (f"扫描 {len(pdf_paths)} 个 PDF，清洗 {modified} 个，失败 {failed} 个；"
+                       f"已清空 {deleted_caches} 个预览缓存文件")
+            with _pdf_sanitize_lock:
+                _pdf_sanitize_job.update(
+                    running=False, finishedAt=_now_iso(), summary=summary)
+    except Exception as exc:
+        with flask_app.app_context():
+            flask_app.logger.exception("存量 PDF 清洗任务异常终止")
+        with _pdf_sanitize_lock:
+            _pdf_sanitize_job.update(
+                running=False, finishedAt=_now_iso(),
+                summary=f"任务异常终止: {exc}"[:300])
 
 
 @app.route("/api/admin/users/<uid>/clear-qa-history", methods=["POST"])
@@ -3946,3 +4259,7 @@ def api_admin_stats():
         "byTheme": {t: sum(1 for r in reports if r.get("theme") == t)
                     for t in REPORT_THEMES},
     })
+
+
+# 登录加密通道：进程启动即在后台预生成/加载 RSA 私钥，避免首个登录用户等待
+auth_crypto.start_background_init(store)

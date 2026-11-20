@@ -15,10 +15,21 @@
 
   // 全部业务数据走服务端 API；localStorage 仅存少量 UI 偏好（如 AI 摘要版本记忆），不存业务数据
   const API = {
-    login: (u, p) => apiFetch('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ username: u, password: p }) }).then(handleJson),
+    // 登录/改密一律走 RSA-OAEP 信封（KbCrypto.seal）：密码明文不出现在网络流量中
+    login: async (u, p) => {
+      const credential = await KbCrypto.seal({ username: u, password: p });
+      return apiFetch('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ credential }) }).then(handleJson);
+    },
+    completeLoginPassword: async (oldP, newP) => {
+      const credential = await KbCrypto.seal({ oldPassword: oldP, newPassword: newP, confirmPassword: newP });
+      return apiFetch('/api/complete-login-password', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ credential }) }).then(handleJson);
+    },
     logout: () => apiFetch('/api/logout', { method: 'POST', credentials: 'same-origin' }).then(handleJson),
     me: () => apiFetch('/api/me', { credentials: 'same-origin' }).then(handleJson),
-    changePassword: (oldP, newP) => apiFetch('/api/change-password', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ oldPassword: oldP, newPassword: newP }) }).then(handleJson),
+    changePassword: async (oldP, newP) => {
+      const credential = await KbCrypto.seal({ oldPassword: oldP, newPassword: newP });
+      return apiFetch('/api/change-password', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ credential }) }).then(handleJson);
+    },
     reports: () => apiFetch('/api/reports', { credentials: 'same-origin' }).then(handleJson),
     ratings: () => apiFetch('/api/ratings', { credentials: 'same-origin' }).then(handleJson),
     submitRating: (data) => apiFetch('/api/ratings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify(data) }).then(handleJson),
@@ -2906,7 +2917,7 @@
           </div>
           <div class="form-field" style="margin-top: 16px;">
             <label for="newPassword">新密码</label>
-            <input id="newPassword" name="newPassword" type="password" autocomplete="new-password" placeholder="请输入新密码（至少 6 位）" minlength="6" required>
+            <input id="newPassword" name="newPassword" type="password" autocomplete="new-password" placeholder="至少 8 位，字母与数字混合" minlength="8" required>
           </div>
           <div class="form-field" style="margin-top: 16px;">
             <label for="confirmPassword">确认新密码</label>
@@ -2923,6 +2934,50 @@
     form.addEventListener('submit', submitPasswordChange);
   }
 
+  // 首次登录/密码被重置后的强制改密弹窗：不可取消，改密成功才进入系统
+  function showForcedPasswordModal(user, currentPassword) {
+    openModal(`<section class="modal-card">
+      ${modalHeader('首次登录', user ? user.name : '')}
+      <form id="forcedPasswordForm">
+        <div class="modal-body">
+          <div class="admin-form-note" style="margin-bottom:12px;">当前密码仍为初始密码，为保障账号安全，请先设置新密码（至少 8 位、字母与数字混合）。</div>
+          <div class="form-field">
+            <label for="fpOld">当前密码（初始密码）</label>
+            <input id="fpOld" name="oldPassword" type="password" autocomplete="current-password" required>
+          </div>
+          <div class="form-field" style="margin-top: 16px;">
+            <label for="fpNew">新密码</label>
+            <input id="fpNew" name="newPassword" type="password" autocomplete="new-password" placeholder="至少 8 位，字母与数字混合" minlength="8" required>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="submit" class="btn btn-primary" id="forcedPasswordSubmit">设置新密码并进入</button>
+        </div>
+      </form>
+    </section>`);
+    const form = document.getElementById('forcedPasswordForm');
+    if (currentPassword) form.elements.oldPassword.value = currentPassword;
+    form.addEventListener('submit', async event => {
+      event.preventDefault();
+      const data = new FormData(form);
+      const oldPassword = String(data.get('oldPassword'));
+      const newPassword = String(data.get('newPassword'));
+      if (newPassword.length < 8) return notify('新密码至少需要 8 位', 'error');
+      if (newPassword === oldPassword) return notify('新密码不能与当前密码相同', 'error');
+      const submit = document.getElementById('forcedPasswordSubmit');
+      submit.disabled = true;
+      try {
+        const result = await API.completeLoginPassword(oldPassword, newPassword);
+        closeModal();
+        notify('密码已更新，欢迎使用');
+        login(result.user);
+      } catch (error) {
+        submit.disabled = false;
+        notify(error.message || '设置新密码失败，请重试', 'error');
+      }
+    });
+  }
+
   async function submitPasswordChange(event) {
     event.preventDefault();
     const form = event.currentTarget;
@@ -2930,7 +2985,8 @@
     const oldPassword = String(data.get('oldPassword'));
     const newPassword = String(data.get('newPassword'));
     const confirmPassword = String(data.get('confirmPassword'));
-    if (newPassword.length < 6) return notify('新密码至少需要 6 位', 'error');
+    if (newPassword.length < 8) return notify('新密码至少需要 8 位', 'error');
+    if (!/[a-zA-Z]/.test(newPassword) || !/[0-9]/.test(newPassword)) return notify('新密码需同时包含字母与数字', 'error');
     if (newPassword !== confirmPassword) return notify('两次输入的新密码不一致', 'error');
     if (newPassword === oldPassword) return notify('新密码不能与当前密码相同', 'error');
     const submit = document.getElementById('passwordSubmit');
@@ -3694,9 +3750,14 @@
       setLoginError('');
       try {
         const data = await API.login(els.loginUsername.value, els.loginPassword.value);
+        if (data.mustChangePassword) {
+          // 仍在使用初始密码（或被管理员重置过）：不放行正式会话，先强制改密
+          showForcedPasswordModal(data.user, els.loginPassword.value);
+          return;
+        }
         await login(data.user);
       } catch (error) {
-        setLoginError(error.message || '账号或密码不正确，请检查姓名全拼与初始密码。');
+        setLoginError(error.message || '账号或密码不正确');
         els.loginPassword.focus();
       }
     });

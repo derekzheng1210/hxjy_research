@@ -76,33 +76,46 @@ def upload(client, content: bytes, filename: str):
 import io  # noqa: E402
 
 
+def make_pdf_bytes(text):
+    """生成真实 PDF（上传链路已对 PDF 做内容级解析校验，伪 PDF 会被拒绝）。"""
+    import io
+
+    import pymupdf
+    doc = pymupdf.open()
+    page = doc.new_page()
+    page.insert_text((72, 72), text)
+    buffer = io.BytesIO()
+    doc.save(buffer)
+    doc.close()
+    return buffer.getvalue()
+
+
 def main():
     client = make_client()
 
-    content_a = b"KB duplicate detection test content A " + os.urandom(32)
-    content_a2 = b"KB duplicate detection test content A " + os.urandom(32)  # 同名不同内容
-    pdf_header = b"%PDF-1.4\n"
+    content_a = make_pdf_bytes(f"KB duplicate detection A {uuid.uuid4().hex}")
+    content_a2 = make_pdf_bytes(f"KB duplicate detection A2 {uuid.uuid4().hex}")  # 同名不同内容
 
     # 1. 首次上传成功
-    resp = upload(client, pdf_header + content_a, "测试报告A.pdf")
+    resp = upload(client, content_a, "测试报告A.pdf")
     check("首次上传返回 200", resp.status_code == 200, f"got {resp.status_code}: {resp.data[:200]}")
     body = resp.get_json()
     check("首次上传返回报告", bool(body.get("reports")))
 
     # 2. 相同内容 + 相同文件名 → 拦截
-    resp = upload(client, pdf_header + content_a, "测试报告A.pdf")
+    resp = upload(client, content_a, "测试报告A.pdf")
     check("相同内容相同文件名被拦截(400)", resp.status_code == 400)
     msg = (resp.get_json() or {}).get("error", "")
     check("拦截信息包含原报告标题", "测试报告A" in msg, msg)
 
     # 3. 相同内容 + 不同文件名 → 依然拦截（内容级查重，不只看文件名）
-    resp = upload(client, pdf_header + content_a, "换个名字的相同文件.pdf")
+    resp = upload(client, content_a, "换个名字的相同文件.pdf")
     check("相同内容不同文件名被拦截(400)", resp.status_code == 400)
     msg = (resp.get_json() or {}).get("error", "")
     check("拦截信息说明内容相同", "完全相同" in msg, msg)
 
     # 4. 不同内容 + 相同文件名 → 放行
-    resp = upload(client, pdf_header + content_a2, "测试报告A.pdf")
+    resp = upload(client, content_a2, "测试报告A.pdf")
     check("不同内容相同文件名放行(200)", resp.status_code == 200,
           f"got {resp.status_code}: {resp.data[:200]}")
 
@@ -114,7 +127,7 @@ def main():
     # 6. 历史报告（无哈希）懒回填路径：手工删掉哈希后再次上传同内容仍能拦截
     first = next(r for r in reports if r.get("fileName") == "测试报告A.pdf" and "换个" not in r.get("fileName", ""))
     routes.store.update_report(first["id"], {"fileSha256": ""})
-    resp = upload(client, pdf_header + content_a, "再次尝试上传旧内容.pdf")
+    resp = upload(client, content_a, "再次尝试上传旧内容.pdf")
     check("历史报告懒回填后仍拦截(400)", resp.status_code == 400)
     backfilled = routes.store.get_report(first["id"], include_deleted=True).get("fileSha256")
     check("历史报告哈希已回填", bool(backfilled))

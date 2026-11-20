@@ -2,6 +2,7 @@
 """2026-08 功能更新回归测试：
 路演安排表 / 月报打分关闭 / 外部报告上传人 / 内部报告点赞展示。
 """
+import base64
 import io
 import json
 import os
@@ -10,15 +11,31 @@ import unittest
 import uuid
 from pathlib import Path
 
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric import padding as asym_padding, rsa
 from werkzeug.security import generate_password_hash
 
 TEST_DATA_ROOT = Path(__file__).resolve().parent / ".test_runtime" / uuid.uuid4().hex
 os.environ["PORTAL_DATA_ROOT"] = str(TEST_DATA_ROOT)
 os.environ["SECRET_KEY"] = "internal-kb-test-secret"
 os.environ["SITE_PASSWORD"] = "portal-test-password"
+os.environ["KB_AUTH_KEY_BITS"] = "2048"
 
 from app import app  # noqa: E402
 from internal_knowledge_base.routes import store, public_report  # noqa: E402
+
+
+def seal_credential(client, payload):
+    """模拟前端 RSA-OAEP 信封（登录/改密接口不再接受明文密码）。"""
+    challenge = client.get("/internal-knowledge-base/api/auth-challenge").get_json()
+    pub = challenge["publicKey"]
+    public_key = rsa.RSAPublicNumbers(int(pub["e"], 16), int(pub["n"], 16)).public_key()
+    message = json.dumps(dict(payload, nonce=challenge["nonce"]), ensure_ascii=False).encode("utf-8")
+    ciphertext = public_key.encrypt(
+        message,
+        asym_padding.OAEP(mgf=asym_padding.MGF1(algorithm=hashes.SHA256()),
+                          algorithm=hashes.SHA256(), label=None))
+    return {"credential": base64.b64encode(ciphertext).decode("ascii")}
 
 
 def assert_isolated_test_store():
@@ -49,6 +66,18 @@ class Updates2026Test(unittest.TestCase):
         with self.client.session_transaction() as session:
             session["authenticated"] = True
 
+    @staticmethod
+    def _make_pdf(text):
+        """生成真实 PDF（上传链路已对 PDF 做内容级解析校验，伪 PDF 会被拒绝）。"""
+        import pymupdf
+        doc = pymupdf.open()
+        page = doc.new_page()
+        page.insert_text((72, 72), text)
+        buffer = io.BytesIO()
+        doc.save(buffer)
+        doc.close()
+        return buffer.getvalue()
+
     def csrf(self):
         self.portal_session()
         response = self.client.get("/internal-knowledge-base/")
@@ -58,9 +87,10 @@ class Updates2026Test(unittest.TestCase):
 
     def login_member(self):
         token = self.csrf()
-        response = self.client.post("/internal-knowledge-base/api/login", json={
-            "username": "member", "password": "member-password",
-        }, headers={"X-CSRF-Token": token})
+        response = self.client.post("/internal-knowledge-base/api/login",
+                                    json=seal_credential(self.client, {
+                                        "username": "member", "password": "member-password",
+                                    }), headers={"X-CSRF-Token": token})
         self.assertEqual(response.status_code, 200)
         return token
 
@@ -167,9 +197,10 @@ class Updates2026Test(unittest.TestCase):
                         "role": "member",
                         "password_hash": generate_password_hash("other-password")})
         token2 = self.csrf()
-        self.client.post("/internal-knowledge-base/api/login", json={
-            "username": "other", "password": "other-password",
-        }, headers={"X-CSRF-Token": token2})
+        self.client.post("/internal-knowledge-base/api/login",
+                         json=seal_credential(self.client, {
+                             "username": "other", "password": "other-password",
+                         }), headers={"X-CSRF-Token": token2})
         forbidden = self.client.delete(
             f"/internal-knowledge-base/api/roadshow-schedule/{item_id}",
             headers={"X-CSRF-Token": token2})
@@ -177,9 +208,10 @@ class Updates2026Test(unittest.TestCase):
 
         # 创建人本人可删除
         token3 = self.csrf()
-        self.client.post("/internal-knowledge-base/api/login", json={
-            "username": "member", "password": "member-password",
-        }, headers={"X-CSRF-Token": token3})
+        self.client.post("/internal-knowledge-base/api/login",
+                         json=seal_credential(self.client, {
+                             "username": "member", "password": "member-password",
+                         }), headers={"X-CSRF-Token": token3})
         deleted = self.client.delete(
             f"/internal-knowledge-base/api/roadshow-schedule/{item_id}",
             headers={"X-CSRF-Token": token3})
@@ -227,7 +259,7 @@ class Updates2026Test(unittest.TestCase):
         }, ensure_ascii=False)
         data = {
             "meta": io.BytesIO(meta.encode("utf-8")),
-            "file": (io.BytesIO(b"%PDF-1.4\n%%EOF"), "roadshow.pdf"),
+            "file": (io.BytesIO(self._make_pdf("路演纪要")), "roadshow.pdf"),
         }
         upload = self.client.post("/internal-knowledge-base/api/reports/roadshow",
                                   data=data, content_type="multipart/form-data",

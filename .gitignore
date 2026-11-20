@@ -40,3 +40,6 @@ portal_cookies.txt
 # .env 备份（含密钥）与运维输出，不入库
 .env.bak_*
 .nssm_out.txt
+# 自动生成/持久化的密钥与后台密码（渗透测试加固），严禁入库
+config/secret_key.txt
+config/admin_password.txt
